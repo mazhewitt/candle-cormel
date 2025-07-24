@@ -1,0 +1,41 @@
+[package]
+name = "candle-coreml"
+version = "0.1.0"
+edition = "2021"
+description = "CoreML inference engine for Candle tensors - standalone crate providing Apple CoreML integration"
+repository = "https://github.com/your-username/candle-coreml"
+keywords = ["machine-learning", "coreml", "candle", "apple", "inference"]
+categories = ["science", "api-bindings"]
+license = "MIT OR Apache-2.0"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+
+[dependencies]
+# Published Candle crates from crates.io
+candle-core = "0.9.1"
+candle-transformers = "0.9.1" 
+candle-nn = "0.9.1"
+
+# Other dependencies
+tokenizers = "0.20.3"
+anyhow = "1.0"
+hf-hub = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+clap = { version = "4.0", features = ["derive"] }
+
+[dev-dependencies]
+clap = { version = "4.0", features = ["derive"] }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6.1", optional = true }
+objc2-foundation = { version = "0.3.1", optional = true }
+objc2-core-ml = { version = "0.3.1", optional = true }
+block2 = { version = "0.6.1", optional = true }
+
+[workspace]
+# Empty workspace table to prevent being part of parent workspace
+
+[features]
+default = ["coreml"]
+coreml = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:block2"]
