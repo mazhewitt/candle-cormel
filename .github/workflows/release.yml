@@ -12,7 +12,7 @@ jobs:
   publish:
     name: Publish to crates.io
     runs-on: ubuntu-latest
-    if: github.repository_owner == 'mazdahewitt' # Replace with your GitHub username
+    if: github.repository_owner == 'mazhewitt'
     
     steps:
     - uses: actions/checkout@v4
