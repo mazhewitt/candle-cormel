@@ -1,14 +1,15 @@
-# BERT CoreML Inference - Complete Worked Example
+# ANE-Optimized DistilBERT Sentiment Analysis - Complete Worked Example
 
-This guide demonstrates a complete end-to-end BERT inference pipeline using `candle-coreml`, from model acquisition to inference execution.
+This guide demonstrates a complete end-to-end sentiment analysis pipeline using `candle-coreml` with Apple's ANE-optimized DistilBERT model that actually runs on the Apple Neural Engine.
 
 ## 🎯 What You'll Build
 
-A BERT fill-mask inference system that:
-- Downloads or uses local CoreML models
+A DistilBERT sentiment analysis system that:
+- Uses Apple's ANE-optimized model for true Neural Engine acceleration
+- Downloads or uses local CoreML models (.mlpackage format)
 - Handles automatic model compilation
-- Performs efficient on-device inference
-- Returns top-k token predictions
+- Performs efficient on-device sentiment classification
+- Returns confidence scores for positive/negative sentiment
 
 ## 📋 Prerequisites
 
@@ -31,34 +32,38 @@ anyhow = "1.0"         # Error handling
 
 ## 🤖 Step 2: Model Acquisition
 
-### Option A: Use HuggingFace Hub (Recommended)
+### Option A: Use Apple's ANE-Optimized Model (Recommended)
 
-The example automatically downloads optimized CoreML models:
+The example automatically downloads Apple's ANE-optimized DistilBERT:
 
 ```rust
 use hf_hub::{api::sync::Api, Repo, RepoType};
 
-// Download Apple's optimized BERT CoreML model
-let repo = Repo::with_revision("apple/coremltools-models".to_string(), RepoType::Model, "main".to_string());
+// Download Apple's ANE-optimized DistilBERT model
+let repo = Repo::with_revision("apple/ane-distilbert-base-uncased-finetuned-sst-2-english".to_string(), RepoType::Model, "main".to_string());
 let api = Api::new()?;
-let model_file = api.repo(repo).get("text/bert-base-uncased/bert-base-uncased.mlpackage")?;
+let model_file = api.repo(repo).get("DistilBERT_fp16.mlpackage")?;
 ```
 
-### Option B: Convert Your Own Model
+**⚡ This model is specifically optimized to run on Apple's Neural Engine!**
 
-If you have a PyTorch BERT model, convert it using Apple's CoreML Tools:
+### Option B: Convert Your Own Model (Advanced)
+
+If you want to convert your own model for ANE optimization, use Apple's ml-ane-transformers:
 
 ```python
-# Python conversion script
+# Follow Apple's ANE optimization guide
+# GitHub: https://github.com/apple/ml-ane-transformers
+
 import coremltools as ct
-from transformers import BertForMaskedLM
+from ane_transformers.distilbert import distilbert_base_uncased_finetuned_sst_2_english
 import torch
 
-# Load your model
-model = BertForMaskedLM.from_pretrained("bert-base-uncased")
+# Load ANE-optimized architecture
+model = distilbert_base_uncased_finetuned_sst_2_english()
 model.eval()
 
-# Create example input
+# Create example input (fixed sequence length for ANE optimization)
 batch_size, seq_len = 1, 128
 input_ids = torch.randint(0, 30522, (batch_size, seq_len))
 attention_mask = torch.ones((batch_size, seq_len))
@@ -66,18 +71,22 @@ attention_mask = torch.ones((batch_size, seq_len))
 # Trace the model
 traced_model = torch.jit.trace(model, (input_ids, attention_mask))
 
-# Convert to CoreML
+# Convert to CoreML with ANE-specific optimizations
 coreml_model = ct.convert(
     traced_model,
     inputs=[
         ct.TensorType(name="input_ids", shape=(batch_size, seq_len)),
         ct.TensorType(name="attention_mask", shape=(batch_size, seq_len))
-    ]
+    ],
+    compute_precision=ct.precision.FLOAT16,  # Required for ANE
+    compute_units=ct.ComputeUnit.ALL  # Let CoreML choose best backend
 )
 
 # Save
-coreml_model.save("bert-base-uncased.mlpackage")
+coreml_model.save("DistilBERT_fp16.mlpackage")
 ```
+
+**⚠️ Note**: Standard BERT models won't run on ANE - you need Apple's specialized architecture!
 
 ## ⚙️ Step 3: Core Implementation
 
@@ -86,46 +95,60 @@ use candle_core::{Device, Tensor};
 use candle_coreml::{Config as CoreMLConfig, CoreMLModel};
 use anyhow::Result;
 
-fn run_bert_inference() -> Result<()> {
-    // 1. Configure the model
+fn run_sentiment_analysis() -> Result<()> {
+    // 1. Configure the ANE-optimized DistilBERT model
     let config = CoreMLConfig {
         input_names: vec!["input_ids".to_string(), "attention_mask".to_string()],
-        output_name: "token_scores".to_string(),
+        output_name: "logits".to_string(), // Sentiment classification outputs
         max_sequence_length: 128,
-        vocab_size: 30522, // BERT vocabulary size
-        model_type: "bert-base-uncased".to_string(),
+        vocab_size: 30522, // DistilBERT vocabulary size
+        model_type: "ane-distilbert-base-uncased-finetuned-sst-2-english".to_string(),
     };
     
     // 2. Load the CoreML model
-    let model = CoreMLModel::load_from_file("bert-base-uncased.mlmodelc", &config)?;
+    let model = CoreMLModel::load_from_file("DistilBERT_fp16.mlpackage", &config)?;
     
     // 3. Prepare input tensors
     let device = Device::Cpu; // or Device::Metal(0) for Metal backend
     
-    // Example: "Paris is the [MASK] of France"
-    let input_ids = vec![2023, 2003, 1996, 103, 1997, 2605]; // Tokenized input
-    let attention_mask = vec![1, 1, 1, 1, 1, 1]; // All tokens are real
+    // Example: "The Neural Engine is really fast!"
+    // In production, use proper DistilBERT tokenizer
+    let input_ids = vec![101, 1996, 15756, 3194, 2003, 2428, 3435, 999, 102]; // Tokenized input
+    let attention_mask = vec![1, 1, 1, 1, 1, 1, 1, 1, 1]; // All tokens are real
     
     let input_ids_tensor = Tensor::from_vec(
         input_ids, 
-        (1, 6), 
+        (1, 9), 
         &device
     )?;
     
     let attention_mask_tensor = Tensor::from_vec(
         attention_mask, 
-        (1, 6), 
+        (1, 9), 
         &device
     )?;
     
-    // 4. Run inference
+    // 4. Run inference (ANE acceleration happens automatically!)
     let output = model.forward(&[&input_ids_tensor, &attention_mask_tensor])?;
     
-    // 5. Process results
-    let predictions = extract_top_predictions(&output, mask_position: 3, top_k: 5)?;
-    
-    for (i, (token_id, score)) in predictions.iter().enumerate() {
-        println!("{}. Token {}: {:.4}", i + 1, token_id, score);
+    // 5. Process sentiment results
+    if let Ok(output_data) = output.to_vec2::<f32>() {
+        let logits = &output_data[0];
+        let negative_score = logits[0];
+        let positive_score = logits[1];
+        
+        // Apply softmax to get probabilities
+        let exp_neg = negative_score.exp();
+        let exp_pos = positive_score.exp();
+        let sum = exp_neg + exp_pos;
+        
+        let negative_prob = exp_neg / sum;
+        let positive_prob = exp_pos / sum;
+        
+        let sentiment = if positive_prob > negative_prob { "POSITIVE" } else { "NEGATIVE" };
+        let confidence = positive_prob.max(negative_prob);
+        
+        println!("Sentiment: {} ({:.1}% confidence)", sentiment, confidence * 100.0);
     }
     
     Ok(())

@@ -42,3 +42,23 @@ block2 = { version = "0.6.1", optional = true }
 [features]
 default = ["coreml"]
 coreml = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:block2"]
+
+[[example]]
+name = "bert_inference"
+path = "examples/basic/bert_inference.rs"
+required-features = ["coreml"]
+
+[[example]]
+name = "embeddings"
+path = "examples/advanced/embeddings.rs"
+required-features = ["coreml"]
+
+[[example]]
+name = "bert_comparison"
+path = "examples/benchmarks/bert_comparison.rs"
+required-features = ["coreml"]
+
+[[example]]
+name = "tensor_conversion"
+path = "examples/benchmarks/tensor_conversion.rs"
+required-features = ["coreml"]
