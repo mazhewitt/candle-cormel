@@ -1,12 +1,12 @@
 [package]
 name = "candle-coreml"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
-description = "CoreML inference engine for Candle tensors - provides Apple CoreML integration for efficient on-device inference on macOS/iOS"
+description = "CoreML inference engine for Candle tensors - provides Apple CoreML/ANE integration with real tokenization, safety fixes, and model calibration awareness"
 repository = "https://github.com/mazhewitt/candle-cormel"
 homepage = "https://github.com/mazhewitt/candle-cormel"
 documentation = "https://docs.rs/candle-coreml"
-keywords = ["machine-learning", "coreml", "candle", "apple", "inference"]
+keywords = ["machine-learning", "coreml", "candle", "apple-neural-engine", "sentiment-analysis"]
 categories = ["science", "api-bindings"]
 license = "MIT OR Apache-2.0"
 authors = ["candle-coreml contributors"]
