@@ -78,11 +78,56 @@ This crate follows the **inference engine** pattern rather than treating CoreML 
 | Error Handling | Generic | Candle error types |
 | Device Support | Generic | CPU/Metal validation |
 
+## 🔥 Complete Worked Example
+
+**👉 [BERT CoreML Inference - Step-by-Step Guide](https://github.com/mazhewitt/candle-cormel/blob/main/examples/WORKED_EXAMPLE.md)**
+
+A comprehensive tutorial covering:
+- Model download and compilation
+- End-to-end inference pipeline  
+- Performance optimization tips
+- ANE vs GPU vs CPU comparison
+- Production deployment guidance
+
+## ⚠️ When to Use CoreML (Important!)
+
+### ✅ Use CoreML When:
+- You have **CoreML-specific models** (`.mlpackage`/`.mlmodelc` files)
+- You want **Apple Neural Engine (ANE)** acceleration for supported models
+- You need Apple's automatic **hardware selection** (ANE → GPU → CPU)
+- You're deploying specifically on **Apple platforms**
+
+### ❌ Don't Use CoreML When:
+- You can achieve the same performance with **Metal/CPU backends**
+- Your model **isn't optimized** for Apple hardware  
+- You need **cross-platform compatibility**
+- You're **just starting** with Candle (try CPU/Metal first)
+
+### 🧠 Apple Neural Engine (ANE) Reality Check
+
+**Not all models run on the ANE!** Apple's Neural Engine has strict requirements:
+
+- **Supported Operations**: Only a subset of ML operations are ANE-optimized
+- **Model Architecture**: Models must be specifically designed/optimized for ANE  
+- **Data Types**: Primarily supports certain quantized formats
+- **Model Size**: Large models may fall back to GPU/CPU
+
+**Recommendation**: Use Apple's pre-optimized models (like their optimized BERT) for guaranteed ANE acceleration, or stick with Metal/CPU backends for general use.
+
+### 📊 Performance Hierarchy
+
+```
+ANE (fastest, most efficient) > GPU/Metal (fast) > CPU (most compatible)
+```
+
+Apple automatically chooses the best available backend, but your model must be ANE-compatible to benefit from the fastest option.
+
 ## Examples
 
 See the `examples/` directory for:
-- **Basic inference** - Simple model loading and inference
-- **Benchmarks** - Performance comparisons
+- **[WORKED_EXAMPLE.md](examples/WORKED_EXAMPLE.md)** - Complete BERT inference tutorial
+- **Basic inference** - Simple model loading and inference  
+- **Benchmarks** - Performance comparisons vs Metal/CPU
 - **Advanced usage** - Complex model configurations
 
 ## Platform Support
