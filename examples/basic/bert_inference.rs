@@ -5,10 +5,22 @@
 //!
 //! Features:
 //! - Uses Apple's ANE-optimized DistilBERT model
-//! - True Apple Neural Engine acceleration
+//! - True Apple Neural Engine acceleration  
+//! - Real tokenization with DistilBERT tokenizer
 //! - Sentiment classification (positive/negative)
+//! - Automatic model compilation with nested structure handling
 //! - Error handling with helpful messages
 //! - Works with both .mlpackage and .mlmodelc files
+//!
+//! ## CoreML Compilation Notes
+//! 
+//! Apple's `coremlc` compiler creates a nested directory structure:
+//! ```
+//! compiled_models/
+//! └── DistilBERT_fp16.mlmodelc/
+//!     └── DistilBERT_fp16.mlmodelc  <- Actual loadable model
+//! ```
+//! This nested structure is normal CoreML behavior, not an error.
 //!
 //! Usage:
 //! ```bash
@@ -176,7 +188,15 @@ fn download_additional_model_files(api: &hf_hub::api::sync::ApiRepo, verbose: bo
 }
 
 /// Compile .mlpackage to .mlmodelc if needed
-fn compile_model_if_needed(model_path: PathBuf) -> Result<PathBuf> {
+/// 
+/// Note: CoreML compilation creates a nested directory structure:
+/// ```
+/// compiled_models/
+/// └── DistilBERT_fp16.mlmodelc/
+///     └── DistilBERT_fp16.mlmodelc  <- Actual compiled model
+/// ```
+/// This nested structure is a normal feature of Apple's coremlc compiler.
+fn compile_model_if_needed(model_path: PathBuf, verbose: bool) -> Result<PathBuf> {
     if model_path.exists() && model_path.extension().and_then(|s| s.to_str()) == Some("mlpackage") {
         let cache_dir = model_path.parent()
             .ok_or_else(|| E::msg("Cannot determine parent directory for model compilation cache"))?
@@ -204,36 +224,27 @@ fn compile_model_if_needed(model_path: PathBuf) -> Result<PathBuf> {
             } else {
                 println!("✅ CoreML model compiled successfully");
                 
-                // Check for nested compiled model structure
-                let possible_paths = [
-                    compiled_model_path.join("DistilBERT_fp16.mlmodelc"),
-                    compiled_model_path.clone(),
-                ];
-                
-                for path in &possible_paths {
-                    if path.exists() {
-                        return Ok(path.clone());
+                // Check for nested compiled model structure (normal CoreML behavior)
+                let nested_path = compiled_model_path.join("DistilBERT_fp16.mlmodelc");
+                if nested_path.exists() {
+                    if verbose {
+                        println!("📁 Using nested compiled model structure: {}", nested_path.display());
                     }
+                    Ok(nested_path)
+                } else {
+                    Ok(compiled_model_path)
                 }
-                
-                Ok(compiled_model_path)
             }
         } else {
             println!("✅ Using cached compiled model");
             
-            // Check for nested compiled model structure
-            let possible_paths = [
-                compiled_model_path.join("DistilBERT_fp16.mlmodelc"),
-                compiled_model_path.clone(),
-            ];
-            
-            for path in &possible_paths {
-                if path.exists() {
-                    return Ok(path.clone());
-                }
+            // Check for nested compiled model structure (normal CoreML behavior)
+            let nested_path = compiled_model_path.join("DistilBERT_fp16.mlmodelc");
+            if nested_path.exists() {
+                Ok(nested_path)
+            } else {
+                Ok(compiled_model_path)
             }
-            
-            Ok(compiled_model_path)
         }
     } else {
         Ok(model_path)
@@ -250,7 +261,7 @@ fn determine_model_path(args: &Args) -> Result<PathBuf> {
         download_model_from_hub(args)?
     };
     
-    compile_model_if_needed(model_path)
+    compile_model_if_needed(model_path, args.verbose)
 }
 
 #[derive(Parser, Debug)]
