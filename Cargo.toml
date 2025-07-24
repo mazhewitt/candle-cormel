@@ -2,12 +2,15 @@
 name = "candle-coreml"
 version = "0.1.0"
 edition = "2021"
-description = "CoreML inference engine for Candle tensors - standalone crate providing Apple CoreML integration"
-repository = "https://github.com/your-username/candle-coreml"
+description = "CoreML inference engine for Candle tensors - provides Apple CoreML integration for efficient on-device inference on macOS/iOS"
+repository = "https://github.com/username/candle-coreml"
+homepage = "https://github.com/username/candle-coreml"
+documentation = "https://docs.rs/candle-coreml"
 keywords = ["machine-learning", "coreml", "candle", "apple", "inference"]
 categories = ["science", "api-bindings"]
 license = "MIT OR Apache-2.0"
-authors = ["Your Name <your.email@example.com>"]
+authors = ["candle-coreml contributors"]
+exclude = ["target/", "examples/models/", ".git/", "*.mlmodelc", "*.mlpackage"]
 readme = "README.md"
 
 [dependencies]
