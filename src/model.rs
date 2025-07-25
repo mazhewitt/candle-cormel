@@ -51,10 +51,99 @@ impl Config {
     }
 }
 
+/// Opaque wrapper around Core ML's `MLState` for stateful inference.
+/// 
+/// This provides persistent state management for autoregressive models,
+/// enabling efficient KV-cache reuse across token generation steps.
+/// 
+/// # Thread Safety
+/// 
+/// Each `CoreMLState` instance must be used by only one thread at a time.
+/// Concurrent predictions using the same state object result in undefined behavior.
+/// 
+/// # Example
+/// 
+/// ```rust,no_run
+/// use candle_core::{Device, Tensor};
+/// use candle_coreml::{CoreMLModel, Config};
+/// 
+/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+/// let model = CoreMLModel::load("model.mlmodelc")?;
+/// let device = Device::Cpu;
+/// 
+/// // Create state for efficient autoregressive generation
+/// let mut state = model.make_state()?;
+/// 
+/// // Generate tokens sequentially with persistent KV-cache
+/// for i in 0..10 {
+///     let input = Tensor::ones((1, 1), candle_core::DType::I64, &device)?;
+///     let output = model.predict_with_state(&[&input], &mut state)?;
+///     // Process output...
+/// }
+/// # Ok(())
+/// # }
+/// ```
+#[cfg(target_os = "macos")]
+pub struct CoreMLState {
+    inner: Retained<MLState>,
+}
+
+#[cfg(not(target_os = "macos"))]
+pub struct CoreMLState {
+    _phantom: std::marker::PhantomData<()>,
+}
+
+impl std::fmt::Debug for CoreMLState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CoreMLState")
+            .finish_non_exhaustive()
+    }
+}
+
+#[cfg(target_os = "macos")]
+impl CoreMLState {
+    /// Create a new state object for the given CoreML model.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `model` - Reference to the MLModel to create state for
+    /// 
+    /// # Returns
+    /// 
+    /// A new `CoreMLState` instance, or an error if state creation fails.
+    /// For stateless models, this returns an empty state object that can
+    /// still be used with stateful prediction methods.
+    pub(crate) fn new(model: &Retained<MLModel>) -> Result<Self, CandleError> {
+        autoreleasepool(|_| {
+            let state = unsafe { model.newState() };
+            Ok(CoreMLState { inner: state })
+        })
+    }
+    
+    /// Get a reference to the underlying MLState for CoreML operations.
+    pub(crate) fn inner(&self) -> &MLState {
+        &self.inner
+    }
+    
+    /// Get a mutable reference to the underlying MLState for CoreML operations.
+    pub(crate) fn inner_mut(&mut self) -> &mut Retained<MLState> {
+        &mut self.inner
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+impl CoreMLState {
+    pub(crate) fn new(_model: &()) -> Result<Self, CandleError> {
+        Err(CandleError::Msg(
+            "CoreML state is only available on macOS".to_string(),
+        ))
+    }
+}
+
 #[cfg(target_os = "macos")]
 use objc2::rc::{autoreleasepool, Retained};
 #[cfg(target_os = "macos")]
-use objc2_core_ml::{MLModel, MLMultiArray, MLDictionaryFeatureProvider, MLFeatureProvider};
+use objc2_core_ml::{MLModel, MLMultiArray, MLDictionaryFeatureProvider, MLFeatureProvider, MLState};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSString, NSURL};
 #[cfg(target_os = "macos")]
@@ -186,6 +275,129 @@ impl CoreMLModel {
     /// Get the model configuration
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// Create a fresh state object for this model.
+    /// 
+    /// This enables efficient autoregressive generation by maintaining
+    /// persistent KV-cache across multiple prediction calls.
+    /// 
+    /// # Returns
+    /// 
+    /// A new `CoreMLState` instance that can be used with `predict_with_state()`.
+    /// For stateless models, this returns an empty state object that can still
+    /// be used with stateful prediction methods (resulting in stateless behavior).
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,no_run
+    /// use candle_core::{Device, Tensor};
+    /// use candle_coreml::{CoreMLModel, Config};
+    /// 
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = CoreMLModel::load("model.mlmodelc")?;
+    /// 
+    /// // Create state for efficient token generation
+    /// let mut state = model.make_state()?;
+    /// 
+    /// // Use state with predict_with_state() for streaming inference
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn make_state(&self) -> Result<CoreMLState, CandleError> {
+        #[cfg(target_os = "macos")]
+        {
+            CoreMLState::new(&self.inner)
+        }
+        
+        #[cfg(not(target_os = "macos"))]
+        {
+            CoreMLState::new(&())
+        }
+    }
+
+    /// Run forward pass through the model with persistent state.
+    /// 
+    /// This method enables efficient autoregressive generation by maintaining
+    /// KV-cache state across multiple prediction calls. Unlike the stateless
+    /// `forward()` method, this preserves computation state between calls.
+    /// 
+    /// # Arguments
+    /// 
+    /// * `inputs` - Slice of tensors corresponding to input_names in config order
+    /// * `state` - Mutable reference to the model state (will be updated)
+    /// 
+    /// # Returns
+    /// 
+    /// Output tensor on the same device as the input tensors.
+    /// 
+    /// # Device Compatibility
+    /// 
+    /// Accepts tensors from CPU or Metal devices, rejects CUDA tensors.
+    /// 
+    /// # Example
+    /// 
+    /// ```rust,no_run
+    /// use candle_core::{Device, Tensor};
+    /// use candle_coreml::{CoreMLModel, Config};
+    /// 
+    /// # fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// let model = CoreMLModel::load("model.mlmodelc")?;
+    /// let device = Device::Cpu;
+    /// 
+    /// let mut state = model.make_state()?;
+    /// 
+    /// // Generate tokens with persistent KV-cache
+    /// for i in 0..10 {
+    ///     let input = Tensor::ones((1, 1), candle_core::DType::I64, &device)?;
+    ///     let output = model.predict_with_state(&[&input], &mut state)?;
+    ///     println!("Token {}: {:?}", i, output);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn predict_with_state(
+        &self,
+        inputs: &[&Tensor],
+        state: &mut CoreMLState,
+    ) -> Result<Tensor, CandleError> {
+        // Validate we have the expected number of inputs
+        if inputs.len() != self.config.input_names.len() {
+            return Err(CandleError::Msg(format!(
+                "Expected {} inputs, got {}. Input names: {:?}",
+                self.config.input_names.len(),
+                inputs.len(),
+                self.config.input_names
+            )));
+        }
+
+        // Validate all input devices are compatible - accept CPU/Metal, reject CUDA
+        for (i, input) in inputs.iter().enumerate() {
+            match input.device() {
+                Device::Cpu | Device::Metal(_) => {
+                    // Valid devices for CoreML
+                }
+                Device::Cuda(_) => {
+                    return Err(CandleError::Msg(format!(
+                        "CoreML models do not support CUDA tensors. Input {} '{}' is on CUDA device. Please move tensor to CPU or Metal device first.",
+                        i, self.config.input_names[i]
+                    )));
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.predict_with_state_impl(inputs, state)
+        }
+        
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = (inputs, state);
+            Err(CandleError::Msg(
+                "CoreML is only available on macOS".to_string(),
+            ))
+        }
     }
 
     #[cfg(target_os = "macos")]
@@ -361,6 +573,48 @@ impl CoreMLModel {
             self.inner
                 .predictionFromFeatures_error(protocol_provider)
                 .map_err(|e| CandleError::Msg(format!("CoreML prediction error: {:?}", e)))
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn predict_with_state_impl(
+        &self,
+        inputs: &[&Tensor],
+        state: &mut CoreMLState,
+    ) -> Result<Tensor, CandleError> {
+        autoreleasepool(|_| {
+            // Convert all Candle tensors to MLMultiArrays (reuse existing logic)
+            let mut ml_arrays = Vec::with_capacity(inputs.len());
+            for input in inputs {
+                let ml_array = self.tensor_to_mlmultiarray(input)?;
+                ml_arrays.push(ml_array);
+            }
+            
+            // Create feature provider with all named inputs (reuse existing logic)
+            let provider = self.create_multi_feature_provider(&self.config.input_names, &ml_arrays)?;
+            
+            // Run stateful prediction
+            let prediction = self.run_prediction_with_state(&provider, state)?;
+            
+            // Extract output with configured output name (use first input device for output)
+            let output_tensor = self.extract_output(&prediction, &self.config.output_name, inputs[0].device())?;
+            
+            Ok(output_tensor)
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn run_prediction_with_state(
+        &self,
+        provider: &MLDictionaryFeatureProvider,
+        state: &mut CoreMLState,
+    ) -> Result<Retained<ProtocolObject<dyn MLFeatureProvider>>, CandleError> {
+        autoreleasepool(|_| unsafe {
+            let protocol_provider = ProtocolObject::from_ref(provider);
+
+            self.inner
+                .predictionFromFeatures_usingState_error(protocol_provider, state.inner())
+                .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {:?}", e)))
         })
     }
 

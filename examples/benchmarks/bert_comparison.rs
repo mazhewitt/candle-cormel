@@ -14,13 +14,13 @@
 //! Usage:
 //! ```bash
 //! # Run full benchmark suite
-//! cargo run --example bert_comparison --features coreml
+//! cargo run --example bert_comparison
 //! 
 //! # Test specific sequence length
-//! cargo run --example bert_comparison --features coreml -- --sequence-lengths "128"
+//! cargo run --example bert_comparison -- --sequence-lengths "128"
 //! 
 //! # Quick test with fewer iterations
-//! cargo run --example bert_comparison --features coreml -- --warmup 1 --iterations 3
+//! cargo run --example bert_comparison -- --warmup 1 --iterations 3
 //! ```
 
 use anyhow::{Error as E, Result};
@@ -158,7 +158,7 @@ fn benchmark_candle_bert(device: &Device, args: &Args, seq_len: usize) -> Result
     })
 }
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn benchmark_coreml_bert(args: &Args, seq_len: usize) -> Result<BenchmarkResult> {
     use candle_coreml::{Config as CoreMLConfig, CoreMLModel};
     
@@ -462,7 +462,7 @@ fn main() -> Result<()> {
         }
         
         // Test CoreML (macOS only)
-        #[cfg(all(target_os = "macos", feature = "coreml"))]
+        #[cfg(target_os = "macos")]
         {
             match benchmark_coreml_bert(&args, seq_len) {
                 Ok(result) => {
@@ -477,7 +477,7 @@ fn main() -> Result<()> {
             }
         }
         
-        #[cfg(not(all(target_os = "macos", feature = "coreml")))]
+        #[cfg(not(target_os = "macos"))]
         {
             if args.verbose {
                 println!("ℹ️  CoreML not available (requires macOS and 'coreml' feature)");

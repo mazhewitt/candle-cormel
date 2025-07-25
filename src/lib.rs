@@ -1,6 +1,6 @@
 pub mod model;
 
-pub use model::{CoreMLModel, CoreMLModelBuilder, Config};
+pub use model::{CoreMLModel, CoreMLModelBuilder, CoreMLState, Config};
 
 use std::path::PathBuf;
 

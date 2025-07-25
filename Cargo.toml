@@ -31,34 +31,29 @@ clap = { version = "4.0", features = ["derive"] }
 clap = { version = "4.0", features = ["derive"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-objc2 = { version = "0.6.1", optional = true }
-objc2-foundation = { version = "0.3.1", optional = true }
-objc2-core-ml = { version = "0.3.1", optional = true }
-block2 = { version = "0.6.1", optional = true }
+objc2 = "0.6.1"
+objc2-foundation = "0.3.1"
+objc2-core-ml = "0.3.1"
+block2 = "0.6.1"
 
 [workspace]
 # Empty workspace table to prevent being part of parent workspace
 
 [features]
-default = ["coreml"]
-coreml = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-core-ml", "dep:block2"]
+default = []
 
 [[example]]
 name = "bert_inference"
 path = "examples/basic/bert_inference.rs"
-required-features = ["coreml"]
 
 [[example]]
 name = "embeddings"
 path = "examples/advanced/embeddings.rs"
-required-features = ["coreml"]
 
 [[example]]
 name = "bert_comparison"
 path = "examples/benchmarks/bert_comparison.rs"
-required-features = ["coreml"]
 
 [[example]]
 name = "tensor_conversion"
 path = "examples/benchmarks/tensor_conversion.rs"
-required-features = ["coreml"]

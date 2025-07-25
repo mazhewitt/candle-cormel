@@ -21,7 +21,7 @@ examples/
 ### Prerequisites
 
 - **macOS**: CoreML is only available on macOS
-- **Candle with CoreML**: Build with `--features coreml`
+- **Candle with CoreML**: Always available on macOS
 - **Model Files**: CoreML models (`.mlmodelc` or `.mlpackage`)
 
 ### 🔰 Basic Examples
@@ -33,16 +33,16 @@ examples/
 
 ```bash
 # Use local test models (recommended for first run)
-cargo run --example bert_inference --features coreml
+cargo run --example bert_inference
 
 # Custom text input with local models
-cargo run --example bert_inference --features coreml -- --text "The weather is [MASK] today"
+cargo run --example bert_inference -- --text "The weather is [MASK] today"
 
 # Use specific model file
-cargo run --example bert_inference --features coreml -- --model-path /path/to/bert.mlmodelc
+cargo run --example bert_inference -- --model-path /path/to/bert.mlmodelc
 
 # Try automatic download (may fail if repo doesn't exist)
-cargo run --example bert_inference --features coreml -- --model-id "apple/coreml-bert-base-uncased"
+cargo run --example bert_inference -- --model-id "apple/coreml-bert-base-uncased"
 ```
 
 ### 📊 Benchmark Examples
@@ -54,16 +54,16 @@ cargo run --example bert_inference --features coreml -- --model-id "apple/coreml
 
 ```bash
 # Full benchmark suite
-cargo run --example bert_comparison --features coreml
+cargo run --example bert_comparison
 
 # Quick test
-cargo run --example bert_comparison --features coreml -- --warmup 1 --iterations 3
+cargo run --example bert_comparison -- --warmup 1 --iterations 3
 
 # Test specific sequence lengths
-cargo run --example bert_comparison --features coreml -- --sequence-lengths "128,256"
+cargo run --example bert_comparison -- --sequence-lengths "128,256"
 
 # Use local models instead of downloading
-cargo run --example bert_comparison --features coreml -- --local-models
+cargo run --example bert_comparison -- --local-models
 ```
 
 **Sample Output**:
@@ -89,7 +89,7 @@ cargo run --example bert_comparison --features coreml -- --local-models
 **Key concepts**: Conversion costs, memory efficiency, data type handling
 
 ```bash
-cargo run --example tensor_conversion --features coreml
+cargo run --example tensor_conversion
 ```
 
 ### 🎓 Advanced Examples
@@ -101,19 +101,19 @@ cargo run --example tensor_conversion --features coreml
 
 ```bash
 # Generate embeddings for custom sentences (now works out of the box!)
-cargo run --example embeddings --features coreml -- --sentences "Hello world" "How are you?"
+cargo run --example embeddings -- --sentences "Hello world" "How are you?"
 
 # Compare different backends
-cargo run --example embeddings --features coreml -- --compare-backends
+cargo run --example embeddings -- --compare-backends
 
 # Process file of sentences
-cargo run --example embeddings --features coreml -- --batch-file sentences.txt
+cargo run --example embeddings -- --batch-file sentences.txt
 
 # Show similarity matrix
-cargo run --example embeddings --features coreml -- --similarity-matrix
+cargo run --example embeddings -- --similarity-matrix
 
 # Save embeddings to file
-cargo run --example embeddings --features coreml -- --output embeddings.csv
+cargo run --example embeddings -- --output embeddings.csv
 ```
 
 
@@ -138,7 +138,7 @@ The examples include BERT test models in `bert-model-test/` directory:
 # candle-coreml/bert-model-test/coreml/fill-mask/bert-compiled.mlmodelc/
 
 # Run BERT inference example
-cargo run --example bert_inference --features coreml
+cargo run --example bert_inference
 ```
 
 #### Option 2: Set Custom Model Path
@@ -151,14 +151,14 @@ export COREML_MODEL_PATH=/path/to/your/model.mlmodelc
 export COREML_BERT_MODEL=/path/to/your/bert.mlmodelc
 
 # Or use command line argument
-cargo run --example bert_inference --features coreml -- --model-path /path/to/model.mlmodelc
+cargo run --example bert_inference -- --model-path /path/to/model.mlmodelc
 ```
 
 #### Option 3: Download from HuggingFace
 
 ```bash
 # Some examples automatically download models
-cargo run --example bert_comparison --features coreml  # Downloads google-bert/bert-base-uncased
+cargo run --example bert_comparison  # Downloads google-bert/bert-base-uncased
 ```
 
 ## 🔧 Common Issues & Solutions
@@ -170,7 +170,7 @@ cargo run --example bert_comparison --features coreml  # Downloads google-bert/b
 
 ```bash
 # Check current platform
-cargo run --example hello_coreml --features coreml
+cargo run --example hello_coreml
 ```
 
 ### "Model file not found"
@@ -223,18 +223,18 @@ let device = Device::new_cuda(0)?;  // Will be rejected by CoreML
 
 ### 1. **Start Here** - Basic Understanding
 ```bash
-cargo run --example hello_coreml --features coreml
-cargo run --example bert_inference --features coreml
+cargo run --example hello_coreml
+cargo run --example bert_inference
 ```
 
 ### 2. **Performance Analysis**
 ```bash
-cargo run --example bert_comparison --features coreml
+cargo run --example bert_comparison
 ```
 
 ### 3. **Advanced Applications**
 ```bash
-cargo run --example embeddings --features coreml
+cargo run --example embeddings
 ```
 
 ### 4. **Customization**
@@ -297,21 +297,21 @@ assert_eq!(output.device(), input.device());
 //!
 //! Usage:
 //! ```bash
-//! cargo run --example example_name --features coreml
+//! cargo run --example example_name
 //! ```
 
 use anyhow::Result;
 use candle_core::{Device, Tensor};
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn run_example() -> Result<()> {
     // CoreML-specific implementation
     Ok(())
 }
 
-#[cfg(not(all(target_os = "macos", feature = "coreml")))]
+#[cfg(not(target_os = "macos"))]
 fn run_example() -> Result<()> {
-    println!("❌ This example requires macOS and 'coreml' feature");
+    println!("❌ This example requires macOS");
     Ok(())
 }
 
@@ -334,7 +334,7 @@ For issues not covered here:
 1. **Check Logs**: Run with `RUST_LOG=debug` for detailed output
 2. **Validate Model**: Use `model_validation.rs` example
 3. **Platform Check**: Ensure you're on macOS with CoreML support
-4. **Feature Flag**: Verify `--features coreml` is included in build command
+4. **Platform**: Verify you are running on macOS (CoreML is macOS-only)
 5. **File Issues**: Check our [GitHub Issues](https://github.com/huggingface/candle/issues) for known problems
 
 ---

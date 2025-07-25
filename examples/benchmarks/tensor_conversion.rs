@@ -30,7 +30,7 @@ impl ConversionResult {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn benchmark_tensor_conversion(shape: &[usize], iterations: usize) -> Result<ConversionResult> {
     let device = Device::Cpu;
     let elements = shape.iter().product::<usize>();
@@ -74,7 +74,7 @@ fn benchmark_tensor_conversion(shape: &[usize], iterations: usize) -> Result<Con
     })
 }
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn create_ml_array_from_tensor(tensor: &Tensor) -> Result<objc2::rc::Retained<objc2_core_ml::MLMultiArray>> {
     use objc2_core_ml::{MLMultiArray, MLMultiArrayDataType};
     use objc2_foundation::{NSArray, NSNumber};
@@ -132,7 +132,7 @@ fn create_ml_array_from_tensor(tensor: &Tensor) -> Result<objc2::rc::Retained<ob
     Ok(ml_array)
 }
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn extract_tensor_from_ml_array(
     ml_array: &objc2_core_ml::MLMultiArray, 
     shape: &[usize], 
@@ -163,7 +163,7 @@ fn extract_tensor_from_ml_array(
     Tensor::from_vec(buf, shape, device).map_err(|e| anyhow::anyhow!("Failed to create tensor: {}", e))
 }
 
-#[cfg(not(all(target_os = "macos", feature = "coreml")))]
+#[cfg(not(target_os = "macos"))]
 fn benchmark_tensor_conversion(_shape: &[usize], _iterations: usize) -> Result<ConversionResult> {
     Err(anyhow::anyhow!("CoreML benchmarks only available on macOS"))
 }

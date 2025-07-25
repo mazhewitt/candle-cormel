@@ -161,16 +161,16 @@ The repository includes a complete working example:
 
 ```bash
 # Basic inference with sample text
-cargo run --example bert_inference --features coreml
+cargo run --example bert_inference
 
 # Custom text (use [MASK] for the token to predict)
-cargo run --example bert_inference --features coreml -- --text "The weather today is [MASK]"
+cargo run --example bert_inference -- --text "The weather today is [MASK]"
 
 # Use your own model
-cargo run --example bert_inference --features coreml -- --model-path "/path/to/your/model.mlmodelc"
+cargo run --example bert_inference -- --model-path "/path/to/your/model.mlmodelc"
 
 # Download from specific HuggingFace repository
-cargo run --example bert_inference --features coreml -- --model-id "apple/coremltools-models"
+cargo run --example bert_inference -- --model-id "apple/coremltools-models"
 ```
 
 ## 🧠 Understanding CoreML Performance

@@ -40,16 +40,16 @@
 //! Usage:
 //! ```bash
 //! # Basic usage - analyzes sentiment of default text
-//! cargo run --example bert_inference --features coreml
+//! cargo run --example bert_inference
 //! 
 //! # Custom text for sentiment analysis
-//! cargo run --example bert_inference --features coreml -- --text "I hate this movie!"
+//! cargo run --example bert_inference -- --text "I hate this movie!"
 //! 
 //! # Show detailed confidence scores
-//! cargo run --example bert_inference --features coreml -- --show-scores
+//! cargo run --example bert_inference -- --show-scores
 //! 
 //! # Use specific ANE-optimized model path
-//! cargo run --example bert_inference --features coreml -- --model-path "/path/to/DistilBERT_fp16.mlpackage"
+//! cargo run --example bert_inference -- --model-path "/path/to/DistilBERT_fp16.mlpackage"
 //! ```
 
 use anyhow::{Error as E, Result};
@@ -315,7 +315,7 @@ struct Args {
     verbose: bool,
 }
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn run_coreml_inference(args: &Args) -> Result<()> {
     use candle_coreml::{Config as CoreMLConfig, CoreMLModel};
     
@@ -506,12 +506,12 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
     Ok(())
 }
 
-#[cfg(not(all(target_os = "macos", feature = "coreml")))]
+#[cfg(not(target_os = "macos"))]
 fn run_coreml_inference(_args: &Args) -> Result<()> {
     println!("❌ CoreML inference is only available on macOS with the 'coreml' feature enabled.");
     println!("\n💡 To use CoreML:");
     println!("   • Run on macOS");
-    println!("   • Build with: cargo run --example bert_inference --features coreml");
+    println!("   • Build with: cargo run --example bert_inference");
     Ok(())
 }
 
@@ -528,7 +528,7 @@ fn print_help() {
     println!("  • Candle built with 'coreml' feature");
     println!();
     println!("🚀 Quick Start:");
-    println!("  1. cargo run --example bert_inference --features coreml");
+    println!("  1. cargo run --example bert_inference");
     println!("  2. Try different text: --text \"I love this product!\"");
     println!("  3. Show confidence: --show-scores");
     println!("  4. Use local model: --model-path \"/path/to/DistilBERT_fp16.mlpackage\"");

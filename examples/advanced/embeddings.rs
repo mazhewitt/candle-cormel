@@ -10,13 +10,13 @@
 //! Usage:
 //! ```bash
 //! # Generate embeddings for sentences
-//! cargo run --example embeddings --features coreml -- --sentences "Hello world" "How are you?"
+//! cargo run --example embeddings -- --sentences "Hello world" "How are you?"
 //! 
 //! # Compare backends
-//! cargo run --example embeddings --features coreml -- --compare-backends
+//! cargo run --example embeddings -- --compare-backends
 //! 
 //! # Batch processing
-//! cargo run --example embeddings --features coreml -- --batch-file sentences.txt
+//! cargo run --example embeddings -- --batch-file sentences.txt
 //! ```
 
 use anyhow::{Error as E, Result};
@@ -96,7 +96,7 @@ impl EmbeddingResult {
     }
 }
 
-#[cfg(all(target_os = "macos", feature = "coreml"))]
+#[cfg(target_os = "macos")]
 fn generate_coreml_embeddings(sentences: &[String], args: &Args) -> Result<Vec<EmbeddingResult>> {
     use candle_coreml::{Config as CoreMLConfig, CoreMLModel};
     
@@ -361,7 +361,7 @@ fn compare_backends(sentences: &[String], args: &Args) -> Result<()> {
     let mut all_results = Vec::new();
     
     // CoreML results
-    #[cfg(all(target_os = "macos", feature = "coreml"))]
+    #[cfg(target_os = "macos")]
     {
         match generate_coreml_embeddings(sentences, args) {
             Ok(results) => all_results.extend(results),
@@ -476,10 +476,10 @@ fn main() -> Result<()> {
         compare_backends(&all_sentences, &args)?;
     } else {
         // Generate embeddings with CoreML
-        #[cfg(all(target_os = "macos", feature = "coreml"))]
+        #[cfg(target_os = "macos")]
         let results = generate_coreml_embeddings(&all_sentences, &args)?;
         
-        #[cfg(not(all(target_os = "macos", feature = "coreml")))]
+        #[cfg(not(target_os = "macos"))]
         let results = generate_candle_embeddings(&all_sentences, &Device::Cpu, &args)?;
         
         // Print results

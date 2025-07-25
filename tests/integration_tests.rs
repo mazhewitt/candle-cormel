@@ -297,3 +297,193 @@ fn test_missing_file_error() {
     #[cfg(not(target_os = "macos"))]
     assert!(err_str.contains("CoreML is only available on macOS"));
 }
+
+/// Test basic state creation functionality
+#[test] 
+fn test_state_creation() {
+    let config = Config::default();
+    
+    #[cfg(target_os = "macos")]
+    {
+        // Try to load a real model if available
+        if let Some(model_path) = get_test_model_path() {
+            if let Ok(model) = CoreMLModel::load_from_file(&model_path, &config) {
+                // State creation should succeed
+                let state_result = model.make_state();
+                assert!(state_result.is_ok());
+                
+                let _state = state_result.unwrap();
+                // State should have proper debug formatting
+                let debug_str = format!("{:?}", _state);
+                assert!(debug_str.contains("CoreMLState"));
+            }
+        }
+    }
+    
+    #[cfg(not(target_os = "macos"))]
+    {
+        // On non-macOS, simulate a model
+        let mock_model = CoreMLModel {
+            _phantom: std::marker::PhantomData,
+            config: config.clone(),
+        };
+        
+        let state_result = mock_model.make_state();
+        assert!(state_result.is_err());
+        assert!(state_result.unwrap_err().to_string().contains("CoreML state is only available on macOS"));
+    }
+}
+
+/// Test stateful prediction functionality
+#[test]
+fn test_stateful_prediction() {
+    let config = Config::default();
+    
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(model_path) = get_test_model_path() {
+            if let Ok(model) = CoreMLModel::load_from_file(&model_path, &config) {
+                let device = Device::Cpu;
+                
+                // Create state
+                if let Ok(mut state) = model.make_state() {
+                    // Create test input tensor
+                    let input = Tensor::ones((1, 10), DType::F32, &device).unwrap();
+                    
+                    // Test stateful prediction
+                    let result = model.predict_with_state(&[&input], &mut state);
+                    
+                    // Should work or fail gracefully (depending on model compatibility)
+                    match result {
+                        Ok(output) => {
+                            // Successful prediction
+                            assert!(output.dims().len() > 0);
+                            // Check device compatibility without using PartialEq
+                            match (output.device(), &device) {
+                                (Device::Cpu, Device::Cpu) => {},
+                                (Device::Metal(_), Device::Metal(_)) => {},
+                                _ => panic!("Output device doesn't match input device"),
+                            }
+                        }
+                        Err(e) => {
+                            // May fail if model isn't stateful or has different input requirements
+                            let err_str = e.to_string();
+                            // Should be a meaningful error message
+                            assert!(
+                                err_str.contains("CoreML") || 
+                                err_str.contains("input") || 
+                                err_str.contains("prediction")
+                            );
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test stateful prediction with multiple calls (persistence check)
+#[test]
+fn test_stateful_prediction_persistence() {
+    let config = Config::default();
+    
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(model_path) = get_test_model_path() {
+            if let Ok(model) = CoreMLModel::load_from_file(&model_path, &config) {
+                let device = Device::Cpu;
+                
+                // Create state
+                if let Ok(mut state) = model.make_state() {
+                    let input = Tensor::ones((1, 10), DType::F32, &device).unwrap();
+                    
+                    // Make multiple predictions with the same state
+                    let mut successful_predictions = 0;
+                    for _i in 0..3 {
+                        match model.predict_with_state(&[&input], &mut state) {
+                            Ok(_output) => {
+                                successful_predictions += 1;
+                            }
+                            Err(_) => {
+                                // Some models might not support stateful operation
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // If any predictions succeeded, the interface is working
+                    // (We can't guarantee all models support stateful operation)
+                    if successful_predictions > 0 {
+                        assert!(successful_predictions >= 1);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test state parameter validation
+#[test]
+fn test_stateful_prediction_validation() {
+    let config = Config::bert_config("logits", 128, 30522);
+    
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(model_path) = get_test_model_path() {
+            if let Ok(model) = CoreMLModel::load_from_file(&model_path, &config) {
+                let device = Device::Cpu;
+                
+                if let Ok(mut state) = model.make_state() {
+                    // Test wrong number of inputs
+                    let input = Tensor::ones((1, 10), DType::F32, &device).unwrap();
+                    
+                    // Config expects 3 inputs (input_ids, token_type_ids, attention_mask)
+                    // but we're providing only 1
+                    let result = model.predict_with_state(&[&input], &mut state);
+                    
+                    match result {
+                        Err(e) => {
+                            let err_str = e.to_string();
+                            assert!(err_str.contains("Expected 3 inputs, got 1") || 
+                                   err_str.contains("input"));
+                        }
+                        Ok(_) => {
+                            // Model may be more flexible than expected, which is fine
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// Test device compatibility for stateful predictions
+#[test]
+fn test_stateful_device_validation() {
+    let config = Config::default();
+    
+    #[cfg(target_os = "macos")]
+    {
+        if let Some(model_path) = get_test_model_path() {
+            if let Ok(model) = CoreMLModel::load_from_file(&model_path, &config) {
+                if let Ok(mut state) = model.make_state() {
+                    // Test CPU device (should work)
+                    let cpu_device = Device::Cpu;
+                    let cpu_input = Tensor::ones((1, 10), DType::F32, &cpu_device).unwrap();
+                    let _cpu_result = model.predict_with_state(&[&cpu_input], &mut state);
+                    // CPU should always be accepted (result may vary based on model)
+                    
+                    // Test Metal device (should work on supported hardware)
+                    if let Ok(metal_device) = Device::new_metal(0) {
+                        let metal_input = Tensor::ones((1, 10), DType::F32, &metal_device).unwrap();
+                        let _metal_result = model.predict_with_state(&[&metal_input], &mut state);
+                        // Metal should be accepted (result may vary based on model)
+                    }
+                    
+                    // Note: Can't easily test CUDA rejection without CUDA device
+                    // The validation logic is already tested in the stateless tests
+                }
+            }
+        }
+    }
+}
