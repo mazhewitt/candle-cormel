@@ -1,0 +1,138 @@
+# Qwen 0.6B CoreML ANE Demonstration
+
+This directory contains examples showcasing our candle-coreml inference engine integration patterns with Anemll's ANE-optimized models.
+
+## ✅ Status: Multi-Component Architecture Implemented
+
+We've successfully implemented the full Anemll multi-component architecture! Our candle-coreml crate now supports:
+
+- **Multi-Component Models**: Separate loading of embeddings, FFN, and LM head models
+- **Pipeline Orchestration**: Proper data flow between model components
+- **Causal Masking**: Correct transformer-style attention masking
+- **Streaming Generation**: Token-by-token generation with component coordination
+
+## 🎯 Complete Implementation
+
+Our candle-coreml crate provides comprehensive support for Anemll's architecture:
+
+### Core Features Implemented
+- ✅ **Multi-Component Loading**: Separate model files (embeddings, FFN, LM head)
+- ✅ **Pipeline Orchestration**: Proper data flow between components
+- ✅ **Causal Masking**: Transformer-style attention patterns
+- ✅ **HuggingFace Integration**: Auto-download of all model components
+- ✅ **Streaming Generation**: Token-by-token output coordination
+- ✅ **Temperature Sampling**: Configurable generation parameters
+- ✅ **Comprehensive Testing**: Full pipeline validation
+
+### Example Structure
+```
+examples/qwen/
+├── qwen_chat.rs              # Single-model interface (for reference)
+├── qwen_multi_component.rs   # 🌟 Full multi-component implementation
+├── qwen_benchmark.rs         # Performance comparison framework  
+└── README.md                 # This documentation
+```
+
+## 🔧 Usage Examples
+
+### Integration Patterns Demo (Working Now!)
+```bash
+# 🌟 Demo of multi-component integration patterns (WORKS IMMEDIATELY)
+cargo run --example qwen_demo_patterns
+
+# With verbose output to see detailed component flow
+cargo run --example qwen_demo_patterns -- --verbose
+```
+
+### Multi-Component Qwen Chat (With Real Models)
+```bash
+# 🔧 Full Anemll multi-component implementation (requires model download)
+cargo run --example qwen_multi_component
+
+# With verbose logging to see component interactions
+cargo run --example qwen_multi_component -- --verbose --temperature 0.8
+
+# Help and options
+cargo run --example qwen_multi_component -- --help
+```
+
+*Note: The multi-component chat requires downloading large model files. If you encounter download issues, use the patterns demo above to see the integration approach.*
+
+### Single-Model Interface (Reference)
+```bash
+# Shows integration patterns for single models
+cargo run --example qwen_chat --help
+
+# Performance benchmarking framework
+cargo run --example qwen_benchmark --help
+```
+
+## 🎯 Multi-Component Architecture Details
+
+Our implementation follows the Anemll pattern exactly:
+
+### Component Pipeline
+1. **Embeddings Model** (`qwen_embeddings.mlmodelc`)
+   - Input: Token IDs [batch, seq_len]
+   - Output: Hidden states [batch, seq_len, hidden_dim]
+
+2. **FFN Model** (`qwen_FFN_PF_lut6_chunk_01of01.mlmodelc`)
+   - Input: Hidden states + causal mask
+   - Output: Processed hidden states [batch, seq_len, hidden_dim]
+
+3. **LM Head Model** (`qwen_lm_head_lut6.mlmodelc`)
+   - Input: Last position hidden state [batch, 1, hidden_dim]
+   - Output: Token logits [batch, 1, vocab_size]
+
+### Key Features
+- **Causal Masking**: Proper transformer attention patterns
+- **State Management**: Hidden states flow between components
+- **Memory Efficient**: Components can be loaded/unloaded as needed
+- **ANE Optimized**: Each component targets Apple Neural Engine
+
+## 💡 Architecture Insights
+
+The Anemll approach demonstrates advanced CoreML usage:
+- **Memory Optimization**: Chunking reduces peak memory usage
+- **ANE Targeting**: Specific optimizations for Apple Neural Engine
+- **Flexible Deployment**: Modular components for different use cases
+
+## 🔍 Model File Mapping
+
+Based on the Anemll repository structure, the actual model files are:
+
+### Available Model Files
+- `qwen_embeddings.mlmodelc` - Token embeddings 
+- `qwen_FFN_PF_lut6_chunk_01of01.mlmodelc` - Feed-forward network
+- `qwen_lm_head.mlmodelc` or `qwen_lm_head_lut6.mlmodelc` - Language model head
+
+*Note: Our implementation attempts to download these files. If specific files aren't available, the examples will show appropriate error messages with suggestions for alternative approaches.*
+
+## 🎨 Integration Patterns Demonstrated
+
+Our examples showcase key integration patterns applicable to any multi-component CoreML model:
+
+### Core Patterns
+- **Multi-Component Loading**: Load separate model files with different configurations
+- **Pipeline Orchestration**: Coordinate data flow between model components
+- **State Management**: Handle hidden states and intermediate representations
+- **Causal Masking**: Implement transformer attention patterns in CoreML
+- **HuggingFace Integration**: Download complex model architectures automatically
+- **Error Handling**: Graceful fallbacks when model files aren't available
+
+### Performance Patterns  
+- **Component Timing**: Profile each pipeline stage independently
+- **Memory Management**: Load/unload components as needed
+- **ANE Optimization**: Ensure each component targets Apple Neural Engine
+- **Batch Processing**: Handle variable sequence lengths efficiently
+
+## 💡 Implementation Insights
+
+This implementation demonstrates several advanced CoreML integration techniques:
+
+1. **Multi-Model Coordination**: Unlike single-model approaches, this shows how to orchestrate multiple CoreML models in a pipeline
+2. **Dynamic Configuration**: Each model component has its own configuration and requirements
+3. **State Flow Management**: Hidden states flow between components with proper shape handling
+4. **Error Recovery**: Robust handling of missing files or incompatible model versions
+
+These patterns provide a foundation for integrating any complex, multi-component ANE-optimized model with Candle.

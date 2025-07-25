@@ -129,6 +129,35 @@ See the `examples/` directory for:
 - **Basic inference** - Simple model loading and inference  
 - **Benchmarks** - Performance comparisons vs Metal/CPU
 - **Advanced usage** - Complex model configurations
+- **🦙 Qwen Chat** - Real-world ANE-accelerated chat with Qwen 0.6B
+
+### 🚀 New: Qwen 0.6B Multi-Component ANE Implementation
+
+Complete implementation of Anemll's multi-component architecture:
+
+```bash
+# 🌟 Integration patterns demo (WORKS IMMEDIATELY)
+cargo run --example qwen_demo_patterns
+
+# Multi-component Qwen chat with real models 
+cargo run --example qwen_multi_component
+
+# Performance benchmarks and single-model examples
+cargo run --example qwen_benchmark
+cargo run --example qwen_chat
+```
+
+Features:
+- **✅ Multi-Component Architecture**: Separate embeddings, FFN, and LM head models
+- **✅ Pipeline Orchestration**: Proper data flow between model components  
+- **✅ True ANE acceleration** using Anemll's optimized model components
+- **✅ Causal Masking**: Correct transformer-style attention patterns
+- **✅ HuggingFace integration** with automatic component download
+- **✅ Comprehensive testing** of full pipeline
+
+This demonstrates how to integrate complex, multi-file CoreML models with Candle, providing a foundation for advanced ANE-optimized architectures.
+
+See [examples/qwen/README.md](examples/qwen/README.md) for detailed documentation.
 
 ## Platform Support
 

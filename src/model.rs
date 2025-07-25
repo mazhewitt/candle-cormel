@@ -58,15 +58,42 @@ impl CoreMLModel {
                 let url =
                     unsafe { NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())) };
 
+                // First try to load the model directly
                 match unsafe { MLModel::modelWithContentsOfURL_error(&url) } {
                     Ok(model) => Ok(CoreMLModel {
                         inner: model,
                         config: config.clone(),
                     }),
-                    Err(err) => Err(CandleError::Msg(format!(
-                        "Failed to load CoreML model: {:?}",
-                        err
-                    ))),
+                    Err(err) => {
+                        // If direct loading fails, try compiling first
+                        let err_msg = format!("{:?}", err);
+                        if err_msg.contains("Compile the model") {
+                            match unsafe { MLModel::compileModelAtURL_error(&url) } {
+                                Ok(compiled_url) => {
+                                    // Try loading the compiled model
+                                    match unsafe { MLModel::modelWithContentsOfURL_error(&compiled_url) } {
+                                        Ok(model) => Ok(CoreMLModel {
+                                            inner: model,
+                                            config: config.clone(),
+                                        }),
+                                        Err(compile_err) => Err(CandleError::Msg(format!(
+                                            "Failed to load compiled CoreML model: {:?}",
+                                            compile_err
+                                        ))),
+                                    }
+                                }
+                                Err(compile_err) => Err(CandleError::Msg(format!(
+                                    "Failed to compile CoreML model: {:?}. Original error: {:?}",
+                                    compile_err, err
+                                ))),
+                            }
+                        } else {
+                            Err(CandleError::Msg(format!(
+                                "Failed to load CoreML model: {:?}",
+                                err
+                            )))
+                        }
+                    }
                 }
             })
         }
