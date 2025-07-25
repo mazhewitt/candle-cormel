@@ -1,152 +1,17 @@
-//! CoreML model wrapper for Candle
-//!
-//! This module provides a high-level interface for CoreML models that integrates
-//! with Candle's tensor system.
+//! Core CoreML model implementation
 
+use crate::config::Config;
+use crate::conversion::{create_multi_feature_provider, extract_output, tensor_to_mlmultiarray};
+use crate::state::CoreMLState;
 use candle_core::{Device, Error as CandleError, Tensor};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-/// Configuration for CoreML models
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Config {
-    /// Input tensor names in order (e.g., ["input_ids", "token_type_ids", "attention_mask"])
-    pub input_names: Vec<String>,
-    /// Output tensor name (e.g., "logits")
-    pub output_name: String,
-    /// Maximum sequence length
-    pub max_sequence_length: usize,
-    /// Vocabulary size
-    pub vocab_size: usize,
-    /// Model architecture name
-    pub model_type: String,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            input_names: vec!["input_ids".to_string()],
-            output_name: "logits".to_string(),
-            max_sequence_length: 128,
-            vocab_size: 32000,
-            model_type: "coreml".to_string(),
-        }
-    }
-}
-
-impl Config {
-    /// Create BERT-style config with input_ids, token_type_ids, and attention_mask
-    pub fn bert_config(output_name: &str, max_seq_len: usize, vocab_size: usize) -> Self {
-        Self {
-            input_names: vec![
-                "input_ids".to_string(),
-                "token_type_ids".to_string(),
-                "attention_mask".to_string(),
-            ],
-            output_name: output_name.to_string(),
-            max_sequence_length: max_seq_len,
-            vocab_size,
-            model_type: "bert".to_string(),
-        }
-    }
-}
-
-/// Opaque wrapper around Core ML's `MLState` for stateful inference.
-///
-/// This provides persistent state management for autoregressive models,
-/// enabling efficient KV-cache reuse across token generation steps.
-///
-/// # Thread Safety
-///
-/// Each `CoreMLState` instance must be used by only one thread at a time.
-/// Concurrent predictions using the same state object result in undefined behavior.
-///
-/// # Example
-///
-/// ```rust,no_run
-/// use candle_core::{Device, Tensor};
-/// use candle_coreml::{CoreMLModel, Config};
-///
-/// # fn example() -> Result<(), Box<dyn std::error::Error>> {
-/// let model = CoreMLModel::load("model.mlmodelc")?;
-/// let device = Device::Cpu;
-///
-/// // Create state for efficient autoregressive generation
-/// let mut state = model.make_state()?;
-///
-/// // Generate tokens sequentially with persistent KV-cache
-/// for i in 0..10 {
-///     let input = Tensor::ones((1, 1), candle_core::DType::I64, &device)?;
-///     let output = model.predict_with_state(&[&input], &mut state)?;
-///     // Process output...
-/// }
-/// # Ok(())
-/// # }
-/// ```
-#[cfg(target_os = "macos")]
-pub struct CoreMLState {
-    inner: Retained<MLState>,
-}
-
-#[cfg(not(target_os = "macos"))]
-pub struct CoreMLState {
-    _phantom: std::marker::PhantomData<()>,
-}
-
-impl std::fmt::Debug for CoreMLState {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("CoreMLState").finish_non_exhaustive()
-    }
-}
-
-#[cfg(target_os = "macos")]
-impl CoreMLState {
-    /// Create a new state object for the given CoreML model.
-    ///
-    /// # Arguments
-    ///
-    /// * `model` - Reference to the MLModel to create state for
-    ///
-    /// # Returns
-    ///
-    /// A new `CoreMLState` instance, or an error if state creation fails.
-    /// For stateless models, this returns an empty state object that can
-    /// still be used with stateful prediction methods.
-    pub(crate) fn new(model: &Retained<MLModel>) -> Result<Self, CandleError> {
-        autoreleasepool(|_| {
-            let state = unsafe { model.newState() };
-            Ok(CoreMLState { inner: state })
-        })
-    }
-
-    /// Get a reference to the underlying MLState for CoreML operations.
-    pub(crate) fn inner(&self) -> &MLState {
-        &self.inner
-    }
-
-}
-
-#[cfg(not(target_os = "macos"))]
-impl CoreMLState {
-    pub(crate) fn new(_model: &()) -> Result<Self, CandleError> {
-        Err(CandleError::Msg(
-            "CoreML state is only available on macOS".to_string(),
-        ))
-    }
-}
-
-#[cfg(target_os = "macos")]
-use block2::StackBlock;
 #[cfg(target_os = "macos")]
 use objc2::rc::{autoreleasepool, Retained};
 #[cfg(target_os = "macos")]
 use objc2::runtime::ProtocolObject;
 #[cfg(target_os = "macos")]
-use objc2::AnyThread;
-#[cfg(target_os = "macos")]
-use objc2_core_ml::{
-    MLDictionaryFeatureProvider, MLFeatureProvider, MLModel, MLMultiArray, MLState,
-};
+use objc2_core_ml::{MLDictionaryFeatureProvider, MLFeatureProvider, MLModel};
 #[cfg(target_os = "macos")]
 use objc2_foundation::{NSString, NSURL};
 
@@ -402,170 +267,20 @@ impl CoreMLModel {
             // Convert all Candle tensors to MLMultiArrays
             let mut ml_arrays = Vec::with_capacity(inputs.len());
             for input in inputs {
-                let ml_array = self.tensor_to_mlmultiarray(input)?;
+                let ml_array = tensor_to_mlmultiarray(input)?;
                 ml_arrays.push(ml_array);
             }
 
             // Create feature provider with all named inputs
-            let provider =
-                self.create_multi_feature_provider(&self.config.input_names, &ml_arrays)?;
+            let provider = create_multi_feature_provider(&self.config.input_names, &ml_arrays)?;
 
             // Run prediction
             let prediction = self.run_prediction(&provider)?;
 
             // Extract output with configured output name (use first input device for output)
-            let output_tensor =
-                self.extract_output(&prediction, &self.config.output_name, inputs[0].device())?;
+            let output_tensor = extract_output(&prediction, &self.config.output_name, inputs[0].device())?;
 
             Ok(output_tensor)
-        })
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn tensor_to_mlmultiarray(
-        &self,
-        tensor: &Tensor,
-    ) -> Result<Retained<MLMultiArray>, CandleError> {
-        use candle_core::DType;
-        use objc2_core_ml::MLMultiArrayDataType;
-        use objc2_foundation::{NSArray, NSNumber};
-
-        let contiguous_tensor = if tensor.is_contiguous() {
-            tensor.clone()
-        } else {
-            tensor.contiguous()?
-        };
-
-        let element_count = tensor.elem_count();
-        let dims = tensor.dims();
-        let mut shape = Vec::with_capacity(dims.len());
-        for &dim in dims {
-            shape.push(NSNumber::new_usize(dim));
-        }
-        let shape_nsarray = NSArray::from_retained_slice(&shape);
-
-        // Choose MLMultiArrayDataType based on tensor dtype
-        let (ml_data_type, element_size) = match tensor.dtype() {
-            DType::F32 => (MLMultiArrayDataType::Float32, std::mem::size_of::<f32>()),
-            DType::I64 => (MLMultiArrayDataType::Int32, std::mem::size_of::<i32>()), // Convert I64 to Int32
-            _ => return Err(CandleError::Msg(format!(
-                "Unsupported tensor dtype {:?} for CoreML conversion. Only F32 and I64 tensors are supported.",
-                tensor.dtype()
-            ))),
-        };
-
-        let multi_array_result = unsafe {
-            MLMultiArray::initWithShape_dataType_error(
-                MLMultiArray::alloc(),
-                &shape_nsarray,
-                ml_data_type,
-            )
-        };
-
-        match multi_array_result {
-            Ok(ml_array) => {
-                use std::sync::atomic::{AtomicBool, Ordering};
-                let copied = AtomicBool::new(false);
-
-                let flattened_tensor = contiguous_tensor.flatten_all()?;
-
-                // Handle different data types
-                match tensor.dtype() {
-                    DType::F32 => {
-                        let data_vec = flattened_tensor.to_vec1::<f32>()?;
-                        unsafe {
-                            ml_array.getMutableBytesWithHandler(&StackBlock::new(
-                                |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
-                                    let dst = ptr.as_ptr() as *mut f32;
-                                    let src = data_vec.as_ptr();
-                                    let copy_elements =
-                                        element_count.min(len as usize / element_size);
-
-                                    if copy_elements > 0
-                                        && len as usize >= copy_elements * element_size
-                                    {
-                                        std::ptr::copy_nonoverlapping(src, dst, copy_elements);
-                                        copied.store(true, Ordering::Relaxed);
-                                    }
-                                },
-                            ));
-                        }
-                    }
-                    DType::I64 => {
-                        // Convert I64 to I32 for CoreML
-                        let data_vec = flattened_tensor.to_vec1::<i64>()?;
-                        let i32_data: Vec<i32> = data_vec.into_iter().map(|x| x as i32).collect();
-
-                        unsafe {
-                            ml_array.getMutableBytesWithHandler(&StackBlock::new(
-                                |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
-                                    let dst = ptr.as_ptr() as *mut i32;
-                                    let src = i32_data.as_ptr();
-                                    let copy_elements =
-                                        element_count.min(len as usize / element_size);
-
-                                    if copy_elements > 0
-                                        && len as usize >= copy_elements * element_size
-                                    {
-                                        std::ptr::copy_nonoverlapping(src, dst, copy_elements);
-                                        copied.store(true, Ordering::Relaxed);
-                                    }
-                                },
-                            ));
-                        }
-                    }
-                    _ => unreachable!(), // Already handled above
-                }
-
-                if copied.load(Ordering::Relaxed) {
-                    Ok(ml_array)
-                } else {
-                    Err(CandleError::Msg(
-                        "Failed to copy data to MLMultiArray".to_string(),
-                    ))
-                }
-            }
-            Err(err) => Err(CandleError::Msg(format!(
-                "Failed to create MLMultiArray: {:?}",
-                err
-            ))),
-        }
-    }
-
-    #[cfg(target_os = "macos")]
-    fn create_multi_feature_provider(
-        &self,
-        input_names: &[String],
-        input_arrays: &[Retained<MLMultiArray>],
-    ) -> Result<Retained<MLDictionaryFeatureProvider>, CandleError> {
-        use objc2::runtime::AnyObject;
-        use objc2_core_ml::MLFeatureValue;
-        use objc2_foundation::{NSDictionary, NSString};
-
-        autoreleasepool(|_| {
-            let mut keys = Vec::with_capacity(input_names.len());
-            let mut values: Vec<Retained<MLFeatureValue>> = Vec::with_capacity(input_arrays.len());
-
-            for (name, array) in input_names.iter().zip(input_arrays.iter()) {
-                let key = NSString::from_str(name);
-                let value = unsafe { MLFeatureValue::featureValueWithMultiArray(array) };
-                keys.push(key);
-                values.push(value);
-            }
-
-            let key_refs: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
-            let value_refs: Vec<&AnyObject> =
-                values.iter().map(|v| v.as_ref() as &AnyObject).collect();
-            let dict: Retained<NSDictionary<NSString, AnyObject>> =
-                NSDictionary::from_slices::<NSString>(&key_refs, &value_refs);
-
-            unsafe {
-                MLDictionaryFeatureProvider::initWithDictionary_error(
-                    MLDictionaryFeatureProvider::alloc(),
-                    dict.as_ref(),
-                )
-            }
-            .map_err(|e| CandleError::Msg(format!("CoreML initWithDictionary_error: {:?}", e)))
         })
     }
 
@@ -593,20 +308,18 @@ impl CoreMLModel {
             // Convert all Candle tensors to MLMultiArrays (reuse existing logic)
             let mut ml_arrays = Vec::with_capacity(inputs.len());
             for input in inputs {
-                let ml_array = self.tensor_to_mlmultiarray(input)?;
+                let ml_array = tensor_to_mlmultiarray(input)?;
                 ml_arrays.push(ml_array);
             }
 
             // Create feature provider with all named inputs (reuse existing logic)
-            let provider =
-                self.create_multi_feature_provider(&self.config.input_names, &ml_arrays)?;
+            let provider = create_multi_feature_provider(&self.config.input_names, &ml_arrays)?;
 
             // Run stateful prediction
             let prediction = self.run_prediction_with_state(&provider, state)?;
 
             // Extract output with configured output name (use first input device for output)
-            let output_tensor =
-                self.extract_output(&prediction, &self.config.output_name, inputs[0].device())?;
+            let output_tensor = extract_output(&prediction, &self.config.output_name, inputs[0].device())?;
 
             Ok(output_tensor)
         })
@@ -625,137 +338,6 @@ impl CoreMLModel {
                 .predictionFromFeatures_usingState_error(protocol_provider, state.inner())
                 .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {:?}", e)))
         })
-    }
-
-    #[cfg(target_os = "macos")]
-    pub fn extract_output(
-        &self,
-        prediction: &ProtocolObject<dyn MLFeatureProvider>,
-        output_name: &str,
-        input_device: &Device,
-    ) -> Result<Tensor, CandleError> {
-        autoreleasepool(|_| unsafe {
-            let name = NSString::from_str(output_name);
-            let value = prediction
-                .featureValueForName(&name)
-                .ok_or_else(|| CandleError::Msg(format!("Output '{}' not found", output_name)))?;
-
-            let marray = value.multiArrayValue().ok_or_else(|| {
-                CandleError::Msg(format!("Output '{}' is not MLMultiArray", output_name))
-            })?;
-
-            let count = marray.count() as usize;
-            let mut buf = vec![0.0f32; count];
-
-            use std::cell::RefCell;
-            let buf_cell = RefCell::new(&mut buf);
-
-            marray.getBytesWithHandler(&StackBlock::new(
-                |ptr: std::ptr::NonNull<std::ffi::c_void>, len: isize| {
-                    let src = ptr.as_ptr() as *const f32;
-                    let copy_elements = count.min(len as usize / std::mem::size_of::<f32>());
-                    if copy_elements > 0
-                        && len as usize >= copy_elements * std::mem::size_of::<f32>()
-                    {
-                        if let Ok(mut buf_ref) = buf_cell.try_borrow_mut() {
-                            std::ptr::copy_nonoverlapping(src, buf_ref.as_mut_ptr(), copy_elements);
-                        }
-                    }
-                },
-            ));
-
-            // Get shape from MLMultiArray
-            let shape_nsarray = marray.shape();
-            let shape_count = shape_nsarray.count();
-            let mut shape = Vec::with_capacity(shape_count);
-
-            for i in 0..shape_count {
-                let dim_number = shape_nsarray.objectAtIndex(i);
-                let dim_value = dim_number.integerValue() as usize;
-                shape.push(dim_value);
-            }
-
-            // Create tensor with the same device as input
-            Tensor::from_vec(buf, shape, input_device)
-                .map_err(|e| CandleError::Msg(format!("Failed to create output tensor: {}", e)))
-        })
-    }
-}
-
-/// Builder for CoreML models
-///
-/// This provides an interface for loading CoreML models with configuration
-/// management and device selection.
-pub struct CoreMLModelBuilder {
-    config: Config,
-    model_filename: PathBuf,
-}
-
-impl CoreMLModelBuilder {
-    /// Create a new builder with the specified model path and config
-    pub fn new<P: AsRef<Path>>(model_path: P, config: Config) -> Self {
-        Self {
-            config,
-            model_filename: model_path.as_ref().to_path_buf(),
-        }
-    }
-
-    /// Load a CoreML model from HuggingFace or local files
-    pub fn load_from_hub(
-        model_id: &str,
-        model_filename: Option<&str>,
-        config_filename: Option<&str>,
-    ) -> Result<Self, CandleError> {
-        use crate::get_local_or_remote_file;
-        use hf_hub::{api::sync::Api, Repo, RepoType};
-
-        let api =
-            Api::new().map_err(|e| CandleError::Msg(format!("Failed to create HF API: {}", e)))?;
-        let repo = api.repo(Repo::with_revision(
-            model_id.to_string(),
-            RepoType::Model,
-            "main".to_string(),
-        ));
-
-        // Load config
-        let config_path = match config_filename {
-            Some(filename) => get_local_or_remote_file(filename, &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get config file: {}", e)))?,
-            None => get_local_or_remote_file("config.json", &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get config.json: {}", e)))?,
-        };
-
-        let config_str = std::fs::read_to_string(config_path)
-            .map_err(|e| CandleError::Msg(format!("Failed to read config file: {}", e)))?;
-        let config: Config = serde_json::from_str(&config_str)
-            .map_err(|e| CandleError::Msg(format!("Failed to parse config: {}", e)))?;
-
-        // Get model file
-        let model_path = match model_filename {
-            Some(filename) => get_local_or_remote_file(filename, &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get model file: {}", e)))?,
-            None => {
-                // Try common CoreML model filenames
-                for filename in &["model.mlmodelc", "model.mlpackage"] {
-                    if let Ok(path) = get_local_or_remote_file(filename, &repo) {
-                        return Ok(Self::new(path, config));
-                    }
-                }
-                return Err(CandleError::Msg("No CoreML model file found".to_string()));
-            }
-        };
-
-        Ok(Self::new(model_path, config))
-    }
-
-    /// Build the CoreML model
-    pub fn build_model(&self) -> Result<CoreMLModel, CandleError> {
-        CoreMLModel::load_from_file(&self.model_filename, &self.config)
-    }
-
-    /// Get the config
-    pub fn config(&self) -> &Config {
-        &self.config
     }
 }
 

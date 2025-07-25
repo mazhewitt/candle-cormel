@@ -1,6 +1,13 @@
+pub mod config;
+pub mod conversion;
+pub mod state;
+pub mod builder;
 pub mod model;
 
-pub use model::{Config, CoreMLModel, CoreMLModelBuilder, CoreMLState};
+pub use config::Config;
+pub use model::CoreMLModel;
+pub use builder::CoreMLModelBuilder;
+pub use state::CoreMLState;
 
 use std::path::PathBuf;
 
