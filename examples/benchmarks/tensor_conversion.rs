@@ -1,5 +1,5 @@
 //! Tensor Conversion Overhead Benchmark
-//! 
+//!
 //! Measures the actual cost of converting between Candle tensors and CoreML MLMultiArray
 //! using the real conversion functions from the candle-coreml crate.
 //! This helps developers understand the overhead of CoreML integration.
@@ -19,11 +19,12 @@ struct ConversionResult {
 
 impl ConversionResult {
     fn print(&self) {
-        println!("{:<12} {:<10} {:<12} {:<12} {:<12} {:<8}",
+        println!(
+            "{:<12} {:<10} {:<12} {:<12} {:<12} {:<8}",
             self.tensor_size,
             format!("{:.1}M", self.elements as f64 / 1_000_000.0),
             format!("{:.2?}", self.tensor_to_ml_time),
-            format!("{:.2?}", self.ml_to_tensor_time), 
+            format!("{:.2?}", self.ml_to_tensor_time),
             format!("{:.2?}", self.round_trip_time),
             format!("{:.1}", self.memory_mb)
         );
@@ -35,13 +36,13 @@ fn benchmark_tensor_conversion(shape: &[usize], iterations: usize) -> Result<Con
     let device = Device::Cpu;
     let elements = shape.iter().product::<usize>();
     let memory_mb = (elements * std::mem::size_of::<f32>()) as f64 / (1024.0 * 1024.0);
-    
+
     // Create test tensor with F32 dtype
     let tensor = Tensor::randn(0.0f32, 1.0f32, shape, &device)?;
-    
+
     let mut tensor_to_ml_times = Vec::new();
     let mut ml_to_tensor_times = Vec::new();
-    
+
     // We'll measure the core conversion logic without needing a real model
     // by implementing the same steps as the CoreML model methods
     for _ in 0..iterations {
@@ -50,20 +51,22 @@ fn benchmark_tensor_conversion(shape: &[usize], iterations: usize) -> Result<Con
         let _ml_array = create_ml_array_from_tensor(&tensor)?;
         let tensor_to_ml_time = start.elapsed();
         tensor_to_ml_times.push(tensor_to_ml_time);
-        
-        // Measure MLMultiArray → Tensor conversion  
+
+        // Measure MLMultiArray → Tensor conversion
         let start = Instant::now();
         let ml_array = create_ml_array_from_tensor(&tensor)?;
         let _output_tensor = extract_tensor_from_ml_array(&ml_array, shape, &device)?;
         let ml_to_tensor_time = start.elapsed();
         ml_to_tensor_times.push(ml_to_tensor_time);
     }
-    
+
     // Calculate average times
-    let avg_tensor_to_ml = tensor_to_ml_times.iter().sum::<Duration>() / tensor_to_ml_times.len() as u32;
-    let avg_ml_to_tensor = ml_to_tensor_times.iter().sum::<Duration>() / ml_to_tensor_times.len() as u32;
+    let avg_tensor_to_ml =
+        tensor_to_ml_times.iter().sum::<Duration>() / tensor_to_ml_times.len() as u32;
+    let avg_ml_to_tensor =
+        ml_to_tensor_times.iter().sum::<Duration>() / ml_to_tensor_times.len() as u32;
     let round_trip = avg_tensor_to_ml + avg_ml_to_tensor;
-    
+
     Ok(ConversionResult {
         tensor_size: format!("{:?}", shape),
         elements,
@@ -75,12 +78,14 @@ fn benchmark_tensor_conversion(shape: &[usize], iterations: usize) -> Result<Con
 }
 
 #[cfg(target_os = "macos")]
-fn create_ml_array_from_tensor(tensor: &Tensor) -> Result<objc2::rc::Retained<objc2_core_ml::MLMultiArray>> {
+fn create_ml_array_from_tensor(
+    tensor: &Tensor,
+) -> Result<objc2::rc::Retained<objc2_core_ml::MLMultiArray>> {
+    use candle_core::DType;
+    use objc2::AnyThread;
     use objc2_core_ml::{MLMultiArray, MLMultiArrayDataType};
     use objc2_foundation::{NSArray, NSNumber};
-    use objc2::AnyThread;
-    use candle_core::DType;
-    
+
     let contiguous_tensor = if tensor.is_contiguous() {
         tensor.clone()
     } else {
@@ -128,25 +133,25 @@ fn create_ml_array_from_tensor(tensor: &Tensor) -> Result<objc2::rc::Retained<ob
             },
         ));
     }
-    
+
     Ok(ml_array)
 }
 
 #[cfg(target_os = "macos")]
 fn extract_tensor_from_ml_array(
-    ml_array: &objc2_core_ml::MLMultiArray, 
-    shape: &[usize], 
-    device: &Device
+    ml_array: &objc2_core_ml::MLMultiArray,
+    shape: &[usize],
+    device: &Device,
 ) -> Result<Tensor> {
     use block2::StackBlock;
     use std::cell::RefCell;
-    
+
     let elements = shape.iter().product::<usize>();
     let mut buf = vec![0.0f32; elements];
-    
+
     unsafe {
         let buf_cell = RefCell::new(&mut buf);
-        
+
         ml_array.getBytesWithHandler(&StackBlock::new(
             |ptr: std::ptr::NonNull<std::ffi::c_void>, len: isize| {
                 let src = ptr.as_ptr() as *const f32;
@@ -159,8 +164,9 @@ fn extract_tensor_from_ml_array(
             },
         ));
     }
-    
-    Tensor::from_vec(buf, shape, device).map_err(|e| anyhow::anyhow!("Failed to create tensor: {}", e))
+
+    Tensor::from_vec(buf, shape, device)
+        .map_err(|e| anyhow::anyhow!("Failed to create tensor: {}", e))
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -171,20 +177,20 @@ fn benchmark_tensor_conversion(_shape: &[usize], _iterations: usize) -> Result<C
 fn benchmark_pure_candle_operations(shape: &[usize], iterations: usize) -> Result<Duration> {
     let device = Device::Cpu;
     let tensor = Tensor::randn(0.0f32, 1.0f32, shape, &device)?;
-    
+
     let mut times = Vec::new();
-    
+
     for _ in 0..iterations {
         let start = Instant::now();
-        
+
         // Simulate the same operations as conversion: clone, flatten, to_vec, from_vec
         let flattened = tensor.flatten_all()?;
         let data: Vec<f32> = flattened.to_vec1()?;
         let _reconstructed = Tensor::from_vec(data, shape, &device)?;
-        
+
         times.push(start.elapsed());
     }
-    
+
     Ok(times.iter().sum::<Duration>() / times.len() as u32)
 }
 
@@ -192,25 +198,27 @@ fn main() -> Result<()> {
     println!("Tensor Conversion Overhead Benchmark");
     println!("=====================================");
     println!("Measuring the cost of Candle ↔ CoreML tensor conversion\n");
-    
+
     let test_shapes = vec![
-        vec![64],           // 64 elements (256 bytes)
-        vec![256, 256],     // 65K elements (256 KB) 
-        vec![512, 512],     // 262K elements (1 MB)
-        vec![1024, 1024],   // 1M elements (4 MB)
-        vec![2048, 1024],   // 2M elements (8 MB) 
+        vec![64],             // 64 elements (256 bytes)
+        vec![256, 256],       // 65K elements (256 KB)
+        vec![512, 512],       // 262K elements (1 MB)
+        vec![1024, 1024],     // 1M elements (4 MB)
+        vec![2048, 1024],     // 2M elements (8 MB)
         vec![1, 3, 512, 512], // Image-like: 786K elements (3 MB)
-        vec![32, 128, 768], // BERT-like: 3M elements (12 MB)
+        vec![32, 128, 768],   // BERT-like: 3M elements (12 MB)
     ];
-    
+
     let iterations = 10;
-    
-    println!("{:<12} {:<10} {:<12} {:<12} {:<12} {:<8}", 
-        "Shape", "Elements", "→ MLArray", "← Tensor", "Round Trip", "Memory");
+
+    println!(
+        "{:<12} {:<10} {:<12} {:<12} {:<12} {:<8}",
+        "Shape", "Elements", "→ MLArray", "← Tensor", "Round Trip", "Memory"
+    );
     println!("{:-<70}", "");
-    
+
     let mut results = Vec::new();
-    
+
     for shape in &test_shapes {
         match benchmark_tensor_conversion(shape, iterations) {
             Ok(result) => {
@@ -218,14 +226,19 @@ fn main() -> Result<()> {
                 results.push(result);
             }
             Err(e) => {
-                println!("{:<12} {:<58}", format!("{:?}", shape), format!("❌ Failed: {}", e));
+                println!(
+                    "{:<12} {:<58}",
+                    format!("{:?}", shape),
+                    format!("❌ Failed: {}", e)
+                );
             }
         }
-        
+
         // Compare with pure Candle operations
         if let Ok(pure_candle_time) = benchmark_pure_candle_operations(shape, iterations) {
-            println!("{:<12} {:<10} {:<36} {:<8}", 
-                "", 
+            println!(
+                "{:<12} {:<10} {:<36} {:<8}",
+                "",
                 "",
                 format!("Pure Candle equivalent: {:?}", pure_candle_time),
                 ""
@@ -233,28 +246,32 @@ fn main() -> Result<()> {
         }
         println!();
     }
-    
+
     // Analysis
     if !results.is_empty() {
         println!("=== ANALYSIS ===");
-        
+
         let smallest = results.first().unwrap();
         let largest = results.last().unwrap();
-        
+
         println!("Overhead scaling:");
-        println!("  Small tensors ({:.1}MB): {:?} round-trip", 
-            smallest.memory_mb, smallest.round_trip_time);
-        println!("  Large tensors ({:.1}MB): {:?} round-trip", 
-            largest.memory_mb, largest.round_trip_time);
-        
+        println!(
+            "  Small tensors ({:.1}MB): {:?} round-trip",
+            smallest.memory_mb, smallest.round_trip_time
+        );
+        println!(
+            "  Large tensors ({:.1}MB): {:?} round-trip",
+            largest.memory_mb, largest.round_trip_time
+        );
+
         let overhead_per_mb = largest.round_trip_time.as_nanos() as f64 / largest.memory_mb;
         println!("  Overhead: ~{:.0}µs per MB", overhead_per_mb / 1000.0);
-        
+
         println!("\nRecommendations:");
         println!("  • Use CoreML for large models where energy efficiency matters");
-        println!("  • Consider conversion cost for small, frequent operations"); 
+        println!("  • Consider conversion cost for small, frequent operations");
         println!("  • Batch operations when possible to amortize overhead");
     }
-    
+
     Ok(())
 }
