@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use candle_coreml::{Config as CoreMLConfig, CoreMLModel, download_multi_component_model_robust, MultiComponentConfig, get_component_paths_from_repo};
+use candle_coreml::{Config as CoreMLConfig, CoreMLModel, download_model};
 use tokenizers::Tokenizer;
 
 const QWEN_VOCAB_SIZE: usize = 151936;
@@ -28,32 +28,18 @@ impl MultiComponentTestSetup {
         let device = Device::Cpu;
         let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4";
         
-        // Configure multi-component download with robust strategy
-        let download_config = MultiComponentConfig {
-            components: vec![
-                "qwen_embeddings.mlmodelc".to_string(),
-                "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc".to_string(),
-                "qwen_lm_head_lut6.mlmodelc".to_string(),
-            ],
-            additional_files: vec!["tokenizer.json".to_string()],
-            verbose: true,
-        };
-
-        // Download all model components using robust downloader (hf_hub + git LFS fallback)
-        println!("📥 Downloading multi-component Qwen model with robust strategy...");
-        let cache_dir = download_multi_component_model_robust(model_id, &download_config)?;
-        
-        // Get component paths using the appropriate helper
-        let (_, _, additional_paths) = get_component_paths_from_repo(&cache_dir, &download_config)?;
+        // Download the complete model using the clean git2+LFS approach
+        println!("📥 Downloading multi-component Qwen model with clean strategy...");
+        let cache_dir = download_model(model_id, true)?;
         
         // Set up component paths
-        let tokenizer_path = &additional_paths[0]; // tokenizer.json
+        let tokenizer_path = cache_dir.join("tokenizer.json");
         let embeddings_path = cache_dir.join("qwen_embeddings.mlmodelc");
         let ffn_path = cache_dir.join("qwen_FFN_PF_lut6_chunk_01of01.mlmodelc");
         let lm_head_path = cache_dir.join("qwen_lm_head_lut6.mlmodelc");
 
         // Load tokenizer
-        let tokenizer = Tokenizer::from_file(tokenizer_path)
+        let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::Error::msg(format!("Failed to load tokenizer: {}", e)))?;
 
         // Configure and load embeddings model

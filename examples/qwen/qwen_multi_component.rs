@@ -22,17 +22,15 @@
 
 use anyhow::{Error as E, Result};
 use candle_core::{Device, Tensor};
-use candle_coreml::{Config as CoreMLConfig, CoreMLModel, download_multi_component_model, MultiComponentConfig};
+use candle_coreml::{Config as CoreMLConfig, CoreMLModel, download_model};
 use clap::Parser;
-use hf_hub::api::sync::Api;
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::time::Instant;
 use tokenizers::Tokenizer;
 
 const QWEN_VOCAB_SIZE: usize = 151936;
 const MAX_SEQUENCE_LENGTH: usize = 512;
-const HIDDEN_SIZE: usize = 896; // Qwen 0.6B hidden dimension
+const HIDDEN_SIZE: usize = 1024; // Actual CoreML model hidden dimension (discovered via inspection)
 const EOS_TOKEN_ID: i64 = 151645;
 
 #[derive(Parser, Debug)]
@@ -66,40 +64,28 @@ struct MultiComponentQwen {
     tokenizer: Tokenizer,
     device: Device,
     verbose: bool,
+    // Add state tracking for autoregressive generation
+    ffn_state: Option<candle_coreml::CoreMLState>,
+    current_position: usize,
 }
 
 impl MultiComponentQwen {
     async fn new(args: &Args) -> Result<Self> {
         let device = Device::Cpu;
         
-        // Setup HuggingFace API 
-        let api = Api::new()?;
-        let repo = api.model(args.model_id.clone());
-
-        // Configure multi-component download
-        let download_config = MultiComponentConfig {
-            components: vec![
-                "qwen_embeddings.mlmodelc".to_string(),
-                "qwen_FFN_PF_lut6_chunk_01of01.mlmodelc".to_string(),
-                "qwen_lm_head_lut6.mlmodelc".to_string(),
-            ],
-            additional_files: vec!["tokenizer.json".to_string()],
-            verbose: args.verbose,
-        };
-
-        // Download all model components using the robust downloader
+        // Download the complete model using the clean git2+LFS approach
         if args.verbose {
-            println!("📥 Downloading Qwen model components using multi-component downloader...");
+            println!("📥 Downloading Qwen model using clean git2+LFS downloader...");
         }
         
-        let cache_dir = download_multi_component_model(&repo, &download_config)
+        let cache_dir = download_model(&args.model_id, args.verbose)
             .map_err(|e| E::msg(format!(
-                "🔧 Failed to download multi-component model: {}\n\
+                "🔧 Failed to download model: {}\n\
                 \n\
                 This might be because:\n\
-                • The .mlmodelc directories require special handling\n\
-                • Files are in Git LFS and need authentication\n\
                 • Network connectivity issues\n\
+                • Model repository is private\n\
+                • Git LFS files are too large\n\
                 \n\
                 💡 Alternative: Use the patterns demo that shows the same concepts:\n\
                    cargo run --example qwen_demo_patterns\n\
@@ -129,7 +115,7 @@ impl MultiComponentQwen {
         // Configure and load embeddings model
         let embeddings_config = CoreMLConfig {
             input_names: vec!["input_ids".to_string()],
-            output_name: "embeddings".to_string(),
+            output_name: "hidden_states".to_string(), // Actual output name discovered via inspection
             max_sequence_length: MAX_SEQUENCE_LENGTH,
             vocab_size: QWEN_VOCAB_SIZE,
             model_type: "qwen-embeddings".to_string(),
@@ -138,10 +124,15 @@ impl MultiComponentQwen {
         let embeddings = CoreMLModel::load_from_file(&embeddings_path, &embeddings_config)
             .map_err(|e| E::msg(format!("Failed to load embeddings model: {}", e)))?;
 
-        // Configure and load FFN model  
+        // Configure and load FFN model (requires MLState for KV-cache)
         let ffn_config = CoreMLConfig {
-            input_names: vec!["hidden_states".to_string(), "causal_mask".to_string()],
-            output_name: "hidden_states".to_string(),
+            input_names: vec![
+                "hidden_states".to_string(), 
+                "position_ids".to_string(),
+                "current_pos".to_string(),
+                "causal_mask".to_string()
+            ],
+            output_name: "output_hidden_states".to_string(), // Actual output name
             max_sequence_length: MAX_SEQUENCE_LENGTH,
             vocab_size: HIDDEN_SIZE, // FFN works with hidden dimensions
             model_type: "qwen-ffn".to_string(),
@@ -150,10 +141,10 @@ impl MultiComponentQwen {
         let ffn = CoreMLModel::load_from_file(&ffn_path, &ffn_config)
             .map_err(|e| E::msg(format!("Failed to load FFN model: {}", e)))?;
 
-        // Configure and load LM head model
+        // Configure and load LM head model (has 16 logits outputs that need concatenation)
         let lm_head_config = CoreMLConfig {
             input_names: vec!["hidden_states".to_string()],
-            output_name: "logits".to_string(),
+            output_name: "logits1".to_string(), // We'll handle all 16 outputs manually
             max_sequence_length: MAX_SEQUENCE_LENGTH,
             vocab_size: QWEN_VOCAB_SIZE,
             model_type: "qwen-lm-head".to_string(),
@@ -166,6 +157,9 @@ impl MultiComponentQwen {
             println!("✅ All model components loaded successfully");
         }
 
+        // Initialize FFN state for KV-cache
+        let ffn_state = ffn.make_state()?;
+        
         Ok(Self {
             embeddings,
             ffn,
@@ -173,6 +167,8 @@ impl MultiComponentQwen {
             tokenizer,
             device,
             verbose: args.verbose,
+            ffn_state: Some(ffn_state),
+            current_position: 0,
         })
     }
 
@@ -205,66 +201,152 @@ impl MultiComponentQwen {
             .map_err(|e| E::msg(format!("Detokenization failed: {}", e)))
     }
 
-    /// Run the prefill stage for a sequence of tokens
-    fn prefill(&self, input_tokens: &[i64]) -> Result<Tensor> {
+    /// Process tokens one by one during prefill (discovered architecture)
+    fn prefill(&mut self, input_tokens: &[i64]) -> Result<Tensor> {
         if self.verbose {
-            println!("🔄 Running prefill for {} tokens", input_tokens.len());
+            println!("🔄 Running prefill for {} tokens (single token processing)", input_tokens.len());
         }
 
-        // Step 1: Convert tokens to embeddings
-        let input_tensor = Tensor::from_vec(
-            input_tokens.to_vec(),
-            (1, input_tokens.len()),
+        let mut last_hidden = None;
+        
+        // Process each token individually through the pipeline
+        for (pos, &token) in input_tokens.iter().enumerate() {
+            if self.verbose {
+                println!("  🔸 Processing token {} at position {}", token, pos);
+            }
+            
+            // Step 1: Convert single token to embeddings (embeddings accepts length 1)
+            let token_tensor = Tensor::from_vec(
+                vec![token],
+                (1, 1),
+                &self.device,
+            )?;
+
+            let hidden_states = self.embeddings.forward(&[&token_tensor])?;
+            
+            // Step 2: Process through FFN with state (single token: shape (1,1,1024))
+            let processed_hidden = self.process_single_token_ffn(&hidden_states, pos)?;
+            
+            last_hidden = Some(processed_hidden);
+        }
+        
+        // Update current position for generation phase
+        self.current_position = input_tokens.len();
+        
+        last_hidden.ok_or_else(|| E::msg("No tokens to process"))
+    }
+    
+    /// Process a single token through FFN with MLState
+    fn process_single_token_ffn(&mut self, hidden_states: &Tensor, position: usize) -> Result<Tensor> {
+        // Create position tensors
+        let position_ids = Tensor::from_vec(
+            vec![position as i64],
+            (1,),
             &self.device,
         )?;
-
-        let embeddings_start = Instant::now();
-        let hidden_states = self.embeddings.forward(&[&input_tensor])?;
         
-        if self.verbose {
-            println!("  • Embeddings: {:?} -> {:?} ({:?})", 
-                input_tensor.shape(), hidden_states.shape(), embeddings_start.elapsed());
+        let current_pos = Tensor::from_vec(
+            vec![position as i64],
+            (1,),
+            &self.device,
+        )?;
+        
+        // Create causal mask (rank 4: (1, 1, 1, 512))
+        let causal_mask = self.create_causal_mask_rank4()?;
+        
+        // Use FFN with state
+        if let Some(ref mut state) = self.ffn_state {
+            let processed_hidden = self.ffn.predict_with_state(&[
+                hidden_states,
+                &position_ids,
+                &current_pos,
+                &causal_mask
+            ], state)?;
+            
+            if self.verbose {
+                println!("    • FFN: {:?} -> {:?}", 
+                    hidden_states.shape(), processed_hidden.shape());
+            }
+            
+            Ok(processed_hidden)
+        } else {
+            Err(E::msg("FFN state not initialized"))
         }
-
-        // Step 2: Process through FFN with causal mask
-        let seq_len = input_tokens.len();
-        let causal_mask = self.create_causal_mask(seq_len)?;
-        
-        let ffn_start = Instant::now();
-        let processed_hidden = self.ffn.forward(&[&hidden_states, &causal_mask])?;
-        
-        if self.verbose {
-            println!("  • FFN: {:?} -> {:?} ({:?})", 
-                hidden_states.shape(), processed_hidden.shape(), ffn_start.elapsed());
-        }
-
-        Ok(processed_hidden)
+    }
+    
+    /// Create rank 4 causal mask for FFN
+    fn create_causal_mask_rank4(&self) -> Result<Tensor> {
+        // Shape: (1, 1, 1, 512) as discovered
+        let mask_data = vec![0.0f32; 1 * 1 * 1 * 512];
+        Tensor::from_vec(
+            mask_data,
+            (1, 1, 1, 512),
+            &self.device,
+        ).map_err(Into::into)
     }
 
     /// Generate the next token given current hidden states
     fn generate_next_token(&self, hidden_states: &Tensor, temperature: f32) -> Result<i64> {
-        // Get logits from LM head (only need the last position)
-        let last_hidden = self.extract_last_position(hidden_states)?;
-        
+        // LM head expects single token hidden states: (1, 1, 1024)
         let lm_head_start = Instant::now();
-        let logits = self.lm_head.forward(&[&last_hidden])?;
+        
+        // Get all outputs from LM head (need all 16 logits chunks)
+        let all_outputs = self.lm_head.forward_all(&[hidden_states])?;
         
         if self.verbose {
-            println!("  • LM Head: {:?} -> {:?} ({:?})", 
-                last_hidden.shape(), logits.shape(), lm_head_start.elapsed());
+            println!("  • LM Head: {:?} -> {} outputs ({:?})", 
+                hidden_states.shape(), all_outputs.len(), lm_head_start.elapsed());
         }
 
-        // Sample from logits
-        let logits_vec = logits.to_vec2::<f32>()?;
-        if logits_vec.is_empty() || logits_vec[0].len() != QWEN_VOCAB_SIZE {
-            return Err(E::msg("Invalid logits shape from LM head"));
+        // Concatenate all 16 logits chunks to form complete vocabulary
+        let mut full_logits = Vec::with_capacity(QWEN_VOCAB_SIZE);
+        
+        for i in 1..=16 {
+            let logits_key = format!("logits{}", i);
+            if let Some(chunk_tensor) = all_outputs.get(&logits_key) {
+                let chunk_vec = chunk_tensor.to_vec3::<f32>()?;
+                if !chunk_vec.is_empty() && !chunk_vec[0].is_empty() {
+                    full_logits.extend_from_slice(&chunk_vec[0][0]);
+                } else {
+                    return Err(E::msg(format!("Invalid logits chunk shape for {}", logits_key)));
+                }
+            } else {
+                return Err(E::msg(format!("Missing logits chunk: {}", logits_key)));
+            }
+        }
+        
+        if full_logits.len() != QWEN_VOCAB_SIZE {
+            return Err(E::msg(format!("Concatenated logits size {} != expected vocab size {}", 
+                full_logits.len(), QWEN_VOCAB_SIZE)));
         }
 
-        self.sample_token(&logits_vec[0], temperature)
+        if self.verbose {
+            println!("  • Concatenated {} logits chunks -> vocab size {}", 16, full_logits.len());
+        }
+
+        self.sample_token(&full_logits, temperature)
+    }
+    
+    /// Generate hidden states for the next token
+    fn generate_next_hidden_states(&mut self, next_token: i64) -> Result<Tensor> {
+        // Process new token through embeddings + FFN pipeline
+        let token_tensor = Tensor::from_vec(
+            vec![next_token],
+            (1, 1),
+            &self.device,
+        )?;
+
+        let hidden_states = self.embeddings.forward(&[&token_tensor])?;
+        let processed_hidden = self.process_single_token_ffn(&hidden_states, self.current_position)?;
+        
+        // Update position for next iteration
+        self.current_position += 1;
+        
+        Ok(processed_hidden)
     }
 
     /// Generate text using the multi-component pipeline
-    fn generate(&self, prompt: &str, max_tokens: usize, temperature: f32) -> Result<String> {
+    fn generate(&mut self, prompt: &str, max_tokens: usize, temperature: f32) -> Result<String> {
         let input_tokens = self.tokenize(prompt)?;
         
         println!("🤖 ");
@@ -275,8 +357,8 @@ impl MultiComponentQwen {
         let mut generated_tokens = input_tokens.clone();
         let mut generated_text = String::new();
 
-        // Generation stage: generate tokens one by one
-        for step in 0..max_tokens {
+        // Generation stage: generate tokens one by one using single token pipeline
+        for _step in 0..max_tokens {
             let next_token = self.generate_next_token(&hidden_states, temperature)?;
 
             if next_token == EOS_TOKEN_ID {
@@ -292,71 +374,14 @@ impl MultiComponentQwen {
                 generated_text.push_str(&token_text);
             }
 
-            // For next iteration, we need to update hidden states
-            // In a full implementation, this would involve extending the sequence
-            // For now, we'll use a simplified approach
-            if step < max_tokens - 1 {
-                hidden_states = self.extend_hidden_states(&hidden_states, next_token)?;
-            }
+            // For next iteration: process the new token through the pipeline
+            hidden_states = self.generate_next_hidden_states(next_token)?;
         }
 
         println!(); // New line after generation
         Ok(generated_text)
     }
 
-    fn create_causal_mask(&self, seq_len: usize) -> Result<Tensor> {
-        let mut mask_data = vec![0.0f32; seq_len * seq_len];
-        
-        // Fill upper triangle with -inf for causal masking
-        for i in 0..seq_len {
-            for j in (i + 1)..seq_len {
-                mask_data[i * seq_len + j] = f32::NEG_INFINITY;
-            }
-        }
-
-        Tensor::from_vec(
-            mask_data,
-            (seq_len, seq_len),
-            &self.device,
-        ).map_err(Into::into)
-    }
-
-    fn extract_last_position(&self, hidden_states: &Tensor) -> Result<Tensor> {
-        // Extract the last position from the sequence dimension
-        let shape = hidden_states.shape();
-        if shape.dims().len() != 3 {
-            return Err(E::msg("Expected 3D hidden states tensor"));
-        }
-
-        let seq_len = shape.dims()[1];
-        let last_idx = seq_len - 1;
-        
-        // Get slice [batch, last_position, hidden_dim]
-        hidden_states.narrow(1, last_idx, 1).map_err(Into::into)
-    }
-
-    fn extend_hidden_states(&self, _current_hidden: &Tensor, new_token: i64) -> Result<Tensor> {
-        // In a full implementation, this would:
-        // 1. Convert new_token to embeddings using embeddings model
-        // 2. Concatenate with existing hidden states
-        // 3. Process through FFN with updated causal mask
-        //
-        // For now, return a placeholder
-        // This is where the KV-cache optimization would be most beneficial
-        
-        let new_token_tensor = Tensor::from_vec(
-            vec![new_token],
-            (1, 1),
-            &self.device,
-        )?;
-
-        // Convert to embeddings
-        let new_embeddings = self.embeddings.forward(&[&new_token_tensor])?;
-        
-        // For simplicity, just return the new embeddings
-        // In practice, you'd maintain and extend the full hidden state sequence
-        Ok(new_embeddings)
-    }
 
     fn sample_token(&self, logits: &[f32], temperature: f32) -> Result<i64> {
         if temperature == 0.0 {
@@ -415,10 +440,10 @@ async fn run_multi_component_chat(args: &Args) -> Result<()> {
     println!();
 
     // Load multi-component model
-    let model = MultiComponentQwen::new(args).await?;
+    let mut model = MultiComponentQwen::new(args).await?;
     
     println!("💬 Chat started! Type 'quit' to exit.");
-    println!("🎯 This demo shows multi-component model orchestration");
+    println!("🎯 This demo shows multi-component model orchestration with MLState");
     println!();
 
     loop {
@@ -426,7 +451,18 @@ async fn run_multi_component_chat(args: &Args) -> Result<()> {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        match io::stdin().read_line(&mut input) {
+            Ok(0) => {
+                println!("\n👋 Goodbye!");
+                break;
+            }
+            Ok(_) => {}
+            Err(e) => {
+                println!("❌ Error reading input: {}", e);
+                break;
+            }
+        }
+        
         let input = input.trim();
 
         if input.is_empty() {

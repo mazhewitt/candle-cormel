@@ -1,7 +1,7 @@
 //! Core CoreML model implementation
 
 use crate::config::Config;
-use crate::conversion::{create_multi_feature_provider, extract_output, tensor_to_mlmultiarray};
+use crate::conversion::{create_multi_feature_provider, extract_output, extract_all_outputs, tensor_to_mlmultiarray};
 use crate::state::CoreMLState;
 use candle_core::{Device, Error as CandleError, Tensor};
 use std::path::Path;
@@ -149,6 +149,50 @@ impl CoreMLModel {
         #[cfg(target_os = "macos")]
         {
             self.forward_impl(inputs)
+        }
+
+        #[cfg(not(target_os = "macos"))]
+        {
+            let _ = inputs;
+            Err(CandleError::Msg(
+                "CoreML is only available on macOS".to_string(),
+            ))
+        }
+    }
+
+    /// Forward pass returning all outputs as a HashMap
+    ///
+    /// This is useful for models that have multiple outputs, such as the Qwen LM head
+    /// which produces 16 different logits chunks that need to be concatenated.
+    pub fn forward_all(&self, inputs: &[&Tensor]) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
+        // Validate we have the expected number of inputs
+        if inputs.len() != self.config.input_names.len() {
+            return Err(CandleError::Msg(format!(
+                "Expected {} inputs, got {}. Input names: {:?}",
+                self.config.input_names.len(),
+                inputs.len(),
+                self.config.input_names
+            )));
+        }
+
+        // Validate all input devices are compatible - accept CPU/Metal, reject CUDA
+        for (i, input) in inputs.iter().enumerate() {
+            match input.device() {
+                Device::Cpu | Device::Metal(_) => {
+                    // Valid devices for CoreML
+                }
+                Device::Cuda(_) => {
+                    return Err(CandleError::Msg(format!(
+                        "CoreML models do not support CUDA tensors. Input {} '{}' is on CUDA device. Please move tensor to CPU or Metal device first.",
+                        i, self.config.input_names[i]
+                    )));
+                }
+            }
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            self.forward_all_impl(inputs)
         }
 
         #[cfg(not(target_os = "macos"))]
@@ -308,6 +352,27 @@ impl CoreMLModel {
             let output_tensor = extract_output(&prediction, &self.config.output_name, inputs[0].device())?;
 
             Ok(output_tensor)
+        })
+    }
+
+    #[cfg(target_os = "macos")]
+    fn forward_all_impl(&self, inputs: &[&Tensor]) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
+        autoreleasepool(|_| {
+            // Convert all Candle tensors to MLMultiArrays
+            let mut ml_arrays = Vec::with_capacity(inputs.len());
+            for input in inputs {
+                let ml_array = tensor_to_mlmultiarray(input)?;
+                ml_arrays.push(ml_array);
+            }
+
+            // Create feature provider with all named inputs
+            let provider = create_multi_feature_provider(&self.config.input_names, &ml_arrays)?;
+
+            // Run prediction
+            let prediction = self.run_prediction(&provider)?;
+
+            // Extract all outputs
+            extract_all_outputs(&prediction, inputs[0].device())
         })
     }
 

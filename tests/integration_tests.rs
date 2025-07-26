@@ -13,13 +13,13 @@ fn get_test_model_path() -> Option<PathBuf> {
     // Look for the model relative to the project root
     let mut path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
 
-    // Try .mlpackage first (doesn't require compilation)
+    // Try .mlpackage first (does require compilation)
     path.push("../coreml-OpenELM-450M-Instruct/OpenELM-450M-Instruct-128-float32.mlpackage");
     if path.exists() {
         return Some(path);
     }
 
-    // Fall back to .mlmodelc (may require compilation)
+    // Fall back to .mlmodelc (doesn't require compilation)
     path.pop();
     path.push("../coreml-OpenELM-450M-Instruct/OpenELM-450M-Instruct-128-float32.mlmodelc");
     if path.exists() {

@@ -3,20 +3,19 @@ pub mod conversion;
 pub mod state;
 pub mod builder;
 pub mod model;
-pub mod multi_component_downloader;
-pub mod git_lfs_downloader;
-pub mod robust_downloader;
-pub mod api_recursive_downloader;
-pub mod git2_downloader;
+pub mod model_downloader;
+pub mod clean_git_lfs_downloader;
 
 pub use config::Config;
 pub use model::CoreMLModel;
 pub use builder::CoreMLModelBuilder;
 pub use state::CoreMLState;
-pub use multi_component_downloader::{download_multi_component_model, MultiComponentConfig, get_model_component_paths};
-pub use robust_downloader::{download_multi_component_model_robust, get_component_paths_from_repo};
-pub use api_recursive_downloader::{download_model_with_api_structure, ApiDownloadConfig};
-pub use git2_downloader::{clone_hf_repository_git2, Git2DownloadConfig};
+
+// Main unified downloader API (recommended)
+pub use model_downloader::{download_model, download_model_to, ensure_model_downloaded, get_cached_model_path};
+
+// Advanced downloader API (for specific use cases)
+pub use clean_git_lfs_downloader::{download_hf_model_clean, CleanDownloadConfig, verify_download_completeness};
 
 use std::path::PathBuf;
 
