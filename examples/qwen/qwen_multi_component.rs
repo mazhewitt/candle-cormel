@@ -245,14 +245,15 @@ impl MultiComponentQwen {
             &self.device,
         )?;
         
+        // current_pos should track the absolute position in the sequence
         let current_pos = Tensor::from_vec(
-            vec![position as i64],
+            vec![self.current_position as i64],
             (1,),
             &self.device,
         )?;
         
-        // Create causal mask (rank 4: (1, 1, 1, 512))
-        let causal_mask = self.create_causal_mask_rank4()?;
+        // Create causal mask that reflects the current context length
+        let causal_mask = self.create_causal_mask_for_position(self.current_position)?;
         
         // Use FFN with state
         if let Some(ref mut state) = self.ffn_state {
@@ -274,10 +275,18 @@ impl MultiComponentQwen {
         }
     }
     
-    /// Create rank 4 causal mask for FFN
-    fn create_causal_mask_rank4(&self) -> Result<Tensor> {
+    /// Create rank 4 causal mask for FFN that reflects current context
+    fn create_causal_mask_for_position(&self, current_pos: usize) -> Result<Tensor> {
         // Shape: (1, 1, 1, 512) as discovered
-        let mask_data = vec![0.0f32; 1 * 1 * 1 * 512];
+        // The mask should indicate which positions are visible to the current token
+        let mut mask_data = vec![f32::NEG_INFINITY; 512];
+        
+        // Allow access to all positions up to and including current position
+        for i in 0..=current_pos.min(511) {
+            mask_data[i] = 0.0;
+        }
+        
+        // Reshape to required rank 4 format
         Tensor::from_vec(
             mask_data,
             (1, 1, 1, 512),
@@ -345,9 +354,26 @@ impl MultiComponentQwen {
         Ok(processed_hidden)
     }
 
+    /// Reset conversation state (important for multi-turn chat)
+    fn reset_conversation(&mut self) -> Result<()> {
+        // Create fresh FFN state
+        self.ffn_state = Some(self.ffn.make_state()?);
+        self.current_position = 0;
+        Ok(())
+    }
+    
     /// Generate text using the multi-component pipeline
     fn generate(&mut self, prompt: &str, max_tokens: usize, temperature: f32) -> Result<String> {
+        // Only reset state if this is a completely new conversation
+        // For now, let's NOT reset to see if that helps
+        // self.reset_conversation()?;
+        
         let input_tokens = self.tokenize(prompt)?;
+        
+        if self.verbose {
+            println!("🎯 Input: {} tokens", input_tokens.len());
+            println!("📝 Tokens: {:?}", &input_tokens[..input_tokens.len().min(10)]);
+        }
         
         println!("🤖 ");
         io::stdout().flush().unwrap();
@@ -474,8 +500,8 @@ async fn run_multi_component_chat(args: &Args) -> Result<()> {
             break;
         }
 
-        // Format as chat prompt
-        let prompt = format!("User: {}\nAssistant:", input);
+        // Format as chat prompt (using Qwen chat template)
+        let prompt = format!("<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n", input);
 
         // Generate response
         match model.generate(&prompt, args.max_tokens, args.temperature) {

@@ -5,6 +5,7 @@ pub mod builder;
 pub mod model;
 pub mod model_downloader;
 pub mod clean_git_lfs_downloader;
+pub mod debug_components;
 
 pub use config::Config;
 pub use model::CoreMLModel;
