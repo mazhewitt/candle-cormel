@@ -167,12 +167,13 @@ pub fn create_multi_feature_provider(
 /// 
 /// This is useful for models with multiple outputs, such as the Qwen LM head
 /// which produces 16 different logits chunks.
+#[cfg(target_os = "macos")]
 pub fn extract_all_outputs(
     prediction: &ProtocolObject<dyn MLFeatureProvider>,
     input_device: &Device,
 ) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
-    use std::cell::RefCell;
-    
+    use objc2_foundation::NSString;
+
     autoreleasepool(|pool| unsafe {
         let mut outputs = std::collections::HashMap::new();
         
@@ -190,35 +191,24 @@ pub fn extract_all_outputs(
                 CandleError::Msg(format!("Output '{}' is not MLMultiArray", feature_name_str))
             })?;
 
-            let count = marray.count() as usize;
-            let mut buf = vec![0.0f32; count];
-
-            let buf_cell = RefCell::new(&mut buf);
-
-            marray.getBytesWithHandler(&StackBlock::new(
-                |ptr: std::ptr::NonNull<std::ffi::c_void>, len: isize| {
-                    let src = ptr.as_ptr() as *const f32;
-                    let copy_elements = count.min(len as usize / std::mem::size_of::<f32>());
-                    if copy_elements > 0 && len as usize >= copy_elements * std::mem::size_of::<f32>() {
-                        if let Ok(mut buf_ref) = buf_cell.try_borrow_mut() {
-                            std::ptr::copy_nonoverlapping(src, buf_ref.as_mut_ptr(), copy_elements);
-                        }
-                    }
-                },
-            ));
-            
-            // Get shape from MLMultiArray
+            // Get shape
             let shape_nsarray = marray.shape();
-            let shape_count = shape_nsarray.count();
-            let mut shape = Vec::with_capacity(shape_count);
-
-            for i in 0..shape_count {
+            let mut shape = Vec::with_capacity(shape_nsarray.count());
+            for i in 0..shape_nsarray.count() {
                 let dim_number = shape_nsarray.objectAtIndex(i);
                 let dim_value = dim_number.integerValue() as usize;
                 shape.push(dim_value);
             }
 
-            // Create tensor with the same device as input
+            // Use objectAtIndexedSubscript for direct access
+            let count = marray.count() as usize;
+            let mut buf = Vec::with_capacity(count);
+
+            for i in 0..count {
+                let val = marray.objectAtIndexedSubscript(i as isize).floatValue();
+                buf.push(val);
+            }
+
             let tensor = Tensor::from_vec(buf, shape, input_device)
                 .map_err(|e| CandleError::Msg(format!("Failed to create output tensor '{}': {}", feature_name_str, e)))?;
             
@@ -234,7 +224,7 @@ pub fn extract_output(
     output_name: &str,
     input_device: &Device,
 ) -> Result<Tensor, CandleError> {
-    use std::cell::RefCell;
+    use objc2_foundation::NSString;
 
     autoreleasepool(|_| unsafe {
         let name = NSString::from_str(output_name);
@@ -246,36 +236,24 @@ pub fn extract_output(
             CandleError::Msg(format!("Output '{}' is not MLMultiArray", output_name))
         })?;
 
-        let count = marray.count() as usize;
-        let mut buf = vec![0.0f32; count];
-
-        let buf_cell = RefCell::new(&mut buf);
-
-        marray.getBytesWithHandler(&StackBlock::new(
-            |ptr: std::ptr::NonNull<std::ffi::c_void>, len: isize| {
-                let src = ptr.as_ptr() as *const f32;
-                let copy_elements = count.min(len as usize / std::mem::size_of::<f32>());
-                if copy_elements > 0 && len as usize >= copy_elements * std::mem::size_of::<f32>() {
-                    if let Ok(mut buf_ref) = buf_cell.try_borrow_mut() {
-                        std::ptr::copy_nonoverlapping(src, buf_ref.as_mut_ptr(), copy_elements);
-                    }
-                }
-            },
-        ));
-
-        // Get shape from MLMultiArray
+        // Get shape
         let shape_nsarray = marray.shape();
-        let shape_count = shape_nsarray.count();
-        let mut shape = Vec::with_capacity(shape_count);
-
-        for i in 0..shape_count {
+        let mut shape = Vec::with_capacity(shape_nsarray.count());
+        for i in 0..shape_nsarray.count() {
             let dim_number = shape_nsarray.objectAtIndex(i);
             let dim_value = dim_number.integerValue() as usize;
             shape.push(dim_value);
         }
 
-        // Create tensor with the same device as input
+        // Direct access like Objective-C
+        let count = marray.count() as usize;
+        let mut buf = Vec::with_capacity(count);
+
+        for i in 0..count {
+            let val = marray.objectAtIndexedSubscript(i as isize).floatValue();
+            buf.push(val);
+        }
+
         Tensor::from_vec(buf, shape, input_device)
-            .map_err(|e| CandleError::Msg(format!("Failed to create output tensor: {}", e)))
     })
 }
