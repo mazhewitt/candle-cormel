@@ -6,11 +6,13 @@ pub mod model;
 pub mod model_downloader;
 pub mod clean_git_lfs_downloader;
 pub mod debug_components;
+pub mod qwen;
 
 pub use config::Config;
 pub use model::CoreMLModel;
 pub use builder::CoreMLModelBuilder;
 pub use state::CoreMLState;
+pub use qwen::{QwenModel, QwenConfig};
 
 // Main unified downloader API (recommended)
 pub use model_downloader::{download_model, download_model_to, ensure_model_downloaded, get_cached_model_path};

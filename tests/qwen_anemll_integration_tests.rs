@@ -45,8 +45,8 @@ impl MultiComponentQwen {
         // Set up component paths
         let tokenizer_path = cache_dir.join("tokenizer.json");
         let embeddings_path = cache_dir.join("qwen_embeddings.mlmodelc");
-        let ffn_path = cache_dir.join("qwen_FFN_PF_lut6_chunk_01of01.mlmodelc");
-        let lm_head_path = cache_dir.join("qwen_lm_head_lut6.mlmodelc");
+        let ffn_path = cache_dir.join("qwen_FFN_PF_lut8_chunk_01of01.mlmodelc");
+        let lm_head_path = cache_dir.join("qwen_lm_head_lut8.mlmodelc");
 
         println!("✅ Model downloaded to: {}", cache_dir.display());
         println!("  • Tokenizer: {}", tokenizer_path.display());
