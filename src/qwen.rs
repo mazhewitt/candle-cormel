@@ -4,8 +4,8 @@
 //! with proper tokenization, state management, and inference pipeline.
 
 use crate::{Config as CoreMLConfig, CoreMLModel, CoreMLState};
-use anyhow::Result;
-use candle_core::{Device, Tensor};
+use crate::utils::{mask, sampling, multi_component};
+use candle_core::{Device, Error as CandleError, Tensor};
 use std::collections::HashMap;
 use std::path::Path;
 use tokenizers::Tokenizer;
@@ -55,14 +55,14 @@ impl QwenModel {
     pub fn load_from_directory<P: AsRef<Path>>(
         model_dir: P,
         config: Option<QwenConfig>,
-    ) -> Result<Self> {
+    ) -> Result<Self, CandleError> {
         let config = config.unwrap_or_default();
         let model_dir = model_dir.as_ref();
 
         // Load tokenizer
         let tokenizer_path = model_dir.join("tokenizer.json");
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to load tokenizer: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Failed to load tokenizer: {}", e)))?;
 
         // Configure and load embeddings
         let embeddings_config = CoreMLConfig {
@@ -127,23 +127,23 @@ impl QwenModel {
     }
 
     /// Initialize model states for efficient generation
-    pub fn initialize_states(&mut self) -> Result<()> {
+    pub fn initialize_states(&mut self) -> Result<(), CandleError> {
         self.ffn_prefill_state = Some(self.ffn_prefill.make_state()?);
         self.ffn_infer_state = Some(self.ffn_infer.make_state()?);
         Ok(())
     }
 
     /// Reset states for a new generation sequence
-    pub fn reset_states(&mut self) -> Result<()> {
+    pub fn reset_states(&mut self) -> Result<(), CandleError> {
         self.initialize_states()
     }
 
     /// Tokenize input text
-    pub fn tokenize(&self, text: &str) -> Result<Vec<i64>> {
+    pub fn tokenize(&self, text: &str) -> Result<Vec<i64>, CandleError> {
         let encoding = self
             .tokenizer
             .encode(text, true)
-            .map_err(|e| anyhow::Error::msg(format!("Tokenization failed: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Tokenization failed: {}", e)))?;
 
         Ok(encoding.get_ids().iter().map(|&id| id as i64).collect())
     }
@@ -160,43 +160,25 @@ impl QwenModel {
         }
     }
 
-    /// Create causal attention mask
-    pub fn create_causal_mask(&self, seq_len: usize) -> Result<Tensor> {
-        let mut mask_data = vec![f32::NEG_INFINITY; seq_len * seq_len];
-
-        // Fill causal pattern: set to 0.0 where col_indices <= row_indices
-        for row in 0..seq_len {
-            for col in 0..seq_len {
-                if col <= row {
-                    mask_data[row * seq_len + col] = 0.0;
-                }
-            }
-        }
-
-        Tensor::from_vec(mask_data, (1, 1, seq_len, seq_len), &self.config.device)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create causal mask: {}", e)))
+    /// Create causal attention mask using shared utilities
+    pub fn create_causal_mask(&self, seq_len: usize) -> Result<Tensor, CandleError> {
+        // Create base mask and reshape to rank-4 for CoreML
+        let base_mask = mask::create_causal_mask(seq_len, &self.config.device)?;
+        base_mask.reshape((1, 1, seq_len, seq_len))
     }
 
     /// Create position slice of causal mask for single token processing
-    pub fn create_position_causal_mask(&self, pos: usize, context_length: usize) -> Result<Tensor> {
-        let full_mask = self.create_causal_mask(context_length)?;
-        let slice = full_mask.narrow(2, pos, 1)?; // [1, 1, 1, context_length]
-        Ok(slice)
+    pub fn create_position_causal_mask(&self, pos: usize, context_length: usize) -> Result<Tensor, CandleError> {
+        mask::create_rank4_position_mask(pos, context_length, &self.config.device)
     }
 
     /// Create update mask for FFN infer phase
-    pub fn create_update_mask(&self, pos: usize, context_length: usize) -> Result<Tensor> {
-        let mut mask_data = vec![0.0f32; context_length];
-        if pos < context_length {
-            mask_data[pos] = 1.0;
-        }
-
-        Tensor::from_vec(mask_data, (1, 1, context_length, 1), &self.config.device)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to create update mask: {}", e)))
+    pub fn create_update_mask(&self, pos: usize, context_length: usize) -> Result<Tensor, CandleError> {
+        mask::create_update_mask(pos, context_length, &self.config.device)
     }
 
     /// Run embeddings for input tokens
-    pub fn compute_embeddings(&self, tokens: &[i64]) -> Result<Tensor> {
+    pub fn compute_embeddings(&self, tokens: &[i64]) -> Result<Tensor, CandleError> {
         let padded_tokens = self.pad_tokens(tokens);
         let input_tensor = Tensor::from_vec(
             padded_tokens.clone(),
@@ -204,11 +186,11 @@ impl QwenModel {
             &self.config.device,
         )?;
 
-        Ok(self.embeddings.forward(&[&input_tensor])?)
+        self.embeddings.forward(&[&input_tensor])
     }
 
     /// Process sequence through FFN prefill phase
-    pub fn prefill_sequence(&mut self, embeddings: &Tensor, sequence_length: usize) -> Result<()> {
+    pub fn prefill_sequence(&mut self, embeddings: &Tensor, sequence_length: usize) -> Result<(), CandleError> {
         if self.ffn_prefill_state.is_none() {
             self.initialize_states()?;
         }
@@ -233,7 +215,7 @@ impl QwenModel {
     }
 
     /// Generate next token using FFN infer phase
-    pub fn generate_next_token(&mut self, last_embedding: &Tensor, pos: usize) -> Result<Tensor> {
+    pub fn generate_next_token(&mut self, last_embedding: &Tensor, pos: usize) -> Result<Tensor, CandleError> {
         if self.ffn_infer_state.is_none() {
             self.initialize_states()?;
         }
@@ -264,27 +246,29 @@ impl QwenModel {
         Ok(combined_logits)
     }
 
-    /// Combine 16 LM head output chunks into full vocabulary
-    pub fn combine_lm_head_outputs(&self, outputs: HashMap<String, Tensor>) -> Result<Tensor> {
-        let mut logits_chunks = Vec::new();
-
-        for i in 1..=16 {
-            let key = format!("logits{}", i);
-            if let Some(chunk) = outputs.get(&key) {
-                logits_chunks.push(chunk.clone());
-            } else {
-                return Err(anyhow::Error::msg(format!("Missing logits chunk: {}", key)));
-            }
-        }
-
-        // Concatenate along vocabulary dimension
-        let combined = Tensor::cat(&logits_chunks.iter().collect::<Vec<_>>(), 2)
-            .map_err(|e| anyhow::Error::msg(format!("Failed to concatenate logits: {}", e)))?;
-        Ok(combined)
+    /// Combine 16 LM head output chunks into full vocabulary using shared utility
+    pub fn combine_lm_head_outputs(&self, outputs: HashMap<String, Tensor>) -> Result<Tensor, CandleError> {
+        multi_component::combine_chunked_logits(outputs, 16)
     }
 
-    /// Complete forward pass for a sequence (simplified single-token approach)
-    pub fn forward(&mut self, text: &str) -> Result<i64> {
+    /// Forward pass returning raw logits (consistent with CoreMLModel API)
+    pub fn forward(&mut self, inputs: &[&Tensor]) -> Result<Tensor, CandleError> {
+        // For now, this is a simplified implementation
+        // In a full implementation, this would orchestrate the multi-component pipeline
+        if inputs.is_empty() {
+            return Err(CandleError::Msg("No input tensors provided".to_string()));
+        }
+        
+        // Process through embeddings -> FFN -> LM head
+        let embeddings = self.embeddings.forward(&inputs[0..1])?;
+        
+        // For now, return embeddings as placeholder
+        // TODO: Complete pipeline implementation
+        Ok(embeddings)
+    }
+
+    /// Generate a single token from text input (convenience method)
+    pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         // Reset states for new sequence
         self.reset_states()?;
 
@@ -322,12 +306,23 @@ impl QwenModel {
         Ok(next_token)
     }
 
-    /// Generate multiple tokens (streaming generation)
-    pub fn generate(&mut self, text: &str, max_tokens: usize) -> Result<Vec<i64>> {
+    /// Generate text using temperature sampling
+    pub fn generate_text(&mut self, text: &str, max_tokens: usize, temperature: f32) -> Result<String, CandleError> {
+        let tokens = self.generate_tokens(text, max_tokens, temperature)?;
+        
+        // Decode tokens back to text
+        let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
+        self.tokenizer
+            .decode(&token_ids, false)
+            .map_err(|e| CandleError::Msg(format!("Failed to decode tokens: {}", e)))
+    }
+
+    /// Generate multiple tokens using temperature sampling
+    pub fn generate_tokens(&mut self, text: &str, max_tokens: usize, temperature: f32) -> Result<Vec<i64>, CandleError> {
         let mut generated_tokens = Vec::new();
 
         // Initial forward pass
-        let next_token = self.forward(text)?;
+        let next_token = self.forward_text(text)?;
         generated_tokens.push(next_token);
 
         // Continue generating
@@ -338,17 +333,20 @@ impl QwenModel {
 
             let logits = self.generate_next_token(&token_embedding, i)?;
 
-            let logits_vec = logits.to_vec3::<f32>()?;
-            let next_token_logits = &logits_vec[0][0];
-
-            let next_token = next_token_logits
-                .iter()
-                .enumerate()
-                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-                .map(|(i, _)| i as i64)
-                .unwrap();
+            // Use shared sampling utility
+            let next_token = if temperature <= 0.0 {
+                sampling::greedy_sample(&logits)?
+            } else {
+                sampling::sample_with_temperature(&logits, temperature)?
+            };
 
             generated_tokens.push(next_token);
+            
+            // Stop if EOS token
+            if next_token == 151645 {
+                // Qwen EOS token
+                break;
+            }
         }
 
         Ok(generated_tokens)

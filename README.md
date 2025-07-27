@@ -59,6 +59,143 @@ let output = model.forward(&input)?;
 assert_eq!(output.device(), input.device());
 ```
 
+## 🔥 ANEMLL Models: Multi-Component ANE Architecture
+
+**[ANEMLL](https://github.com/Anemll/Anemll)** (pronounced "animal") provides state-of-the-art Apple Neural Engine optimizations for large language models. Our crate provides comprehensive support for ANEMLL's multi-component architecture.
+
+### Why ANEMLL?
+
+ANEMLL converts large models into **multiple specialized components** that maximize Apple Neural Engine utilization:
+
+- **🚀 True ANE Acceleration**: Models specifically optimized for Apple's Neural Engine
+- **💾 Memory Efficiency**: Component splitting reduces peak memory usage
+- **⚡ Optimized Performance**: Custom quantization (LUT4/LUT6) for ANE constraints
+- **🔧 Production Ready**: Used in real iOS/macOS apps via TestFlight
+
+### Supported Models
+
+| Model | Size | Context | Components | Status |
+|-------|------|---------|------------|--------|
+| Qwen 3 | 0.5B-7B | 512-32K | 3-part split | ✅ Fully Supported |
+| Qwen 2.5 | 0.5B-7B | 512-32K | 3-part split | ✅ Fully Supported |
+
+### Multi-Component Architecture
+
+ANEMLL splits models into specialized components for optimal ANE performance:
+
+```
+Input Tokens → [Embeddings] → [FFN Transformer] → [LM Head] → Output Logits
+               ↓              ↓                   ↓
+               embeddings.    FFN_chunk_01.      lm_head.
+               mlmodelc       mlmodelc           mlmodelc
+```
+
+#### Component Details:
+1. **Embeddings Model** (`qwen_embeddings.mlmodelc`)
+   - Converts token IDs to hidden representations
+   - Output: `[batch, seq_len, hidden_dim]`
+
+2. **FFN Model** (`qwen_FFN_PF_lut8_chunk_01of01.mlmodelc`) 
+   - Transformer feed-forward network with attention
+   - Includes causal masking for autoregressive generation
+   - Output: `[batch, seq_len, hidden_dim]`
+
+3. **LM Head Model** (`qwen_lm_head_lut8.mlmodelc`)
+   - Final linear layer producing vocabulary logits
+   - Input: Last position hidden state `[batch, 1, hidden_dim]`
+   - Output: `[batch, 1, vocab_size]`
+
+### Quick Start with ANEMLL Models
+
+```rust
+use candle_coreml::QwenModel;
+
+// Load complete multi-component model
+let model = QwenModel::load_from_hub(
+    "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4"
+)?;
+
+// Generate text using all components
+let response = model.generate(
+    "Hello, how are you?",
+    50,  // max tokens
+    0.8  // temperature
+)?;
+```
+
+### Manual Component Loading
+
+For advanced use cases, load components individually:
+
+```rust
+use candle_coreml::{CoreMLModel, Config};
+
+// Load each component with specific configs
+let embeddings = CoreMLModel::load_from_file("qwen_embeddings.mlmodelc", &embed_config)?;
+let ffn = CoreMLModel::load_from_file("qwen_FFN_PF_lut8_chunk_01of01.mlmodelc", &ffn_config)?;
+let lm_head = CoreMLModel::load_from_file("qwen_lm_head_lut8.mlmodelc", &head_config)?;
+
+// Orchestrate pipeline manually
+let hidden = embeddings.forward(&[&input_ids])?;
+let processed = ffn.forward(&[&hidden, &causal_mask])?;
+let logits = lm_head.forward(&[&processed.i((.., -1.., ..))?])?;
+```
+
+### Examples and Demos
+
+```bash
+# 🌟 Integration patterns demo (works immediately)
+cargo run --example qwen_demo_patterns
+
+# Full multi-component chat (downloads ~2GB models)
+cargo run --example qwen_multi_component
+
+# Performance benchmarks
+cargo run --example qwen_benchmark
+```
+
+### Model Download and Setup
+
+ANEMLL models are hosted on HuggingFace and downloaded automatically:
+
+```bash
+# Models are cached in ~/.cache/candle-coreml/
+# First run downloads all components (~2GB for Qwen 0.6B)
+
+# Available models:
+# - anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4
+# - anemll/anemll-Qwen-Qwen2.5-0.5B-ctx512_0.3.4
+# - More models available at: https://huggingface.co/anemll
+```
+
+### Performance Characteristics
+
+- **Context Length**: Optimized for 512-2048 tokens (up to 32K supported)
+- **Quantization**: LUT4/LUT6 optimizations for ANE constraints  
+- **Memory**: Component splitting reduces peak usage vs monolithic models
+- **Speed**: True ANE acceleration vs GPU/CPU fallback
+
+### Reference Implementation
+
+ANEMLL provides reference apps showing production usage:
+- **TestFlight App**: [Join Beta](https://testflight.apple.com/join/jrQq1D1C)
+- **iOS/macOS Support**: Complete mobile deployment examples
+- **GitHub**: [ANEMLL Repository](https://github.com/Anemll/Anemll)
+
+### Integration with candle-coreml
+
+Our crate provides the missing piece for Rust developers wanting to use ANEMLL's optimized models:
+
+- ✅ **Automatic component discovery and loading**
+- ✅ **Pipeline orchestration with proper data flow**  
+- ✅ **Causal masking for transformer architectures**
+- ✅ **HuggingFace integration for seamless model access**
+- ✅ **Streaming generation with multi-component coordination**
+
+This makes ANEMLL's advanced ANE optimizations accessible to the entire Candle ecosystem.
+
+**📚 [Complete ANEMLL Integration Guide](ANEMLL_GUIDE.md)** - Comprehensive documentation covering architecture, usage patterns, and production deployment.
+
 ## Architecture
 
 This crate follows the **inference engine** pattern rather than treating CoreML as a device backend:

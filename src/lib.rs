@@ -6,6 +6,7 @@ pub mod model;
 pub mod model_downloader;
 pub mod qwen;
 pub mod state;
+pub mod utils;
 
 pub use builder::CoreMLModelBuilder;
 pub use config::Config;
@@ -22,6 +23,9 @@ pub use model_downloader::{
 pub use clean_git_lfs_downloader::{
     download_hf_model_clean, verify_download_completeness, CleanDownloadConfig,
 };
+
+// Shared utilities for transformer models
+pub use utils::{mask, sampling, multi_component};
 
 use std::path::PathBuf;
 
