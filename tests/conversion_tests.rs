@@ -113,6 +113,7 @@ fn test_batch_tensor_conversion() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
+#[ignore] // Requires external model files
 fn test_embeddings_model_direct() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 Testing direct embeddings model with simple input");
 

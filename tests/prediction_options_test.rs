@@ -5,6 +5,7 @@ use candle_coreml::{Config, CoreMLModel};
 
 #[cfg(target_os = "macos")]
 #[test]
+#[ignore] // Requires external model files
 fn test_prediction_options_impact() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 TESTING DIFFERENT MLPREDICTIONOPTIONS");
     println!("========================================");
