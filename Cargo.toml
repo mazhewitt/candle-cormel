@@ -82,10 +82,3 @@ path = "examples/qwen/qwen_demo_patterns.rs"
 name = "clean_download_example"
 path = "examples/clean_download_example.rs"
 
-[[example]]
-name = "qwen_one_pass_chat"
-path = "examples/qwen_one_pass_chat.rs"
-
-[[example]]
-name = "qwen_simple_demo"
-path = "examples/qwen_simple_demo.rs"

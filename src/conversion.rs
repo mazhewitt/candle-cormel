@@ -74,11 +74,9 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
                             |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
                                 let dst = ptr.as_ptr() as *mut f32;
                                 let src = data_vec.as_ptr();
-                                let copy_elements =
-                                    element_count.min(len as usize / element_size);
+                                let copy_elements = element_count.min(len as usize / element_size);
 
-                                if copy_elements > 0
-                                    && len as usize >= copy_elements * element_size
+                                if copy_elements > 0 && len as usize >= copy_elements * element_size
                                 {
                                     std::ptr::copy_nonoverlapping(src, dst, copy_elements);
                                     copied.store(true, Ordering::Relaxed);
@@ -97,11 +95,9 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
                             |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
                                 let dst = ptr.as_ptr() as *mut i32;
                                 let src = i32_data.as_ptr();
-                                let copy_elements =
-                                    element_count.min(len as usize / element_size);
+                                let copy_elements = element_count.min(len as usize / element_size);
 
-                                if copy_elements > 0
-                                    && len as usize >= copy_elements * element_size
+                                if copy_elements > 0 && len as usize >= copy_elements * element_size
                                 {
                                     std::ptr::copy_nonoverlapping(src, dst, copy_elements);
                                     copied.store(true, Ordering::Relaxed);
@@ -146,8 +142,7 @@ pub fn create_multi_feature_provider(
         }
 
         let key_refs: Vec<&NSString> = keys.iter().map(|k| &**k).collect();
-        let value_refs: Vec<&AnyObject> =
-            values.iter().map(|v| v.as_ref() as &AnyObject).collect();
+        let value_refs: Vec<&AnyObject> = values.iter().map(|v| v.as_ref() as &AnyObject).collect();
         let dict: Retained<NSDictionary<NSString, AnyObject>> =
             NSDictionary::from_slices::<NSString>(&key_refs, &value_refs);
 
@@ -162,9 +157,8 @@ pub fn create_multi_feature_provider(
 }
 
 /// Extract output tensor from CoreML prediction result
-#[cfg(target_os = "macos")]
 /// Extract all outputs from a CoreML prediction
-/// 
+///
 /// This is useful for models with multiple outputs, such as the Qwen LM head
 /// which produces 16 different logits chunks.
 #[cfg(target_os = "macos")]
@@ -172,20 +166,22 @@ pub fn extract_all_outputs(
     prediction: &ProtocolObject<dyn MLFeatureProvider>,
     input_device: &Device,
 ) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
-    use objc2_foundation::NSString;
+    
 
     autoreleasepool(|pool| unsafe {
         let mut outputs = std::collections::HashMap::new();
-        
+
         let feature_names = prediction.featureNames();
         let feature_names_iter = feature_names.iter();
-        
+
         for feature_name in feature_names_iter {
             let feature_name_str = feature_name.to_str(pool);
-            
+
             let value = prediction
                 .featureValueForName(&feature_name)
-                .ok_or_else(|| CandleError::Msg(format!("Output '{}' not found", feature_name_str)))?;
+                .ok_or_else(|| {
+                    CandleError::Msg(format!("Output '{}' not found", feature_name_str))
+                })?;
 
             let marray = value.multiArrayValue().ok_or_else(|| {
                 CandleError::Msg(format!("Output '{}' is not MLMultiArray", feature_name_str))
@@ -209,12 +205,16 @@ pub fn extract_all_outputs(
                 buf.push(val);
             }
 
-            let tensor = Tensor::from_vec(buf, shape, input_device)
-                .map_err(|e| CandleError::Msg(format!("Failed to create output tensor '{}': {}", feature_name_str, e)))?;
-            
+            let tensor = Tensor::from_vec(buf, shape, input_device).map_err(|e| {
+                CandleError::Msg(format!(
+                    "Failed to create output tensor '{}': {}",
+                    feature_name_str, e
+                ))
+            })?;
+
             outputs.insert(feature_name_str.to_string(), tensor);
         }
-        
+
         Ok(outputs)
     })
 }

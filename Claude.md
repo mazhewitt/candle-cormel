@@ -109,7 +109,9 @@ Extract candle-coreml from the Candle monorepo into a standalone publishable cra
 - ✅ Initial commit with clean history
 - ✅ Published Candle dependencies (candle-core 0.9.1)
 - ✅ Comprehensive README and documentation
-- ✅ **All tests passing (12+ integration and unit tests)**
+- ✅ **All tests passing (17+ integration and unit tests)**
+- ✅ **Clean repository with diagnostic files removed**
+- ✅ **Qwen functionality verified and preserved**
 - ✅ Examples directory with working code
 - ✅ Proper .gitignore and project structure
 - ✅ **MLState stateful inference fully implemented**

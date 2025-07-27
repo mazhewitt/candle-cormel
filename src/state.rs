@@ -1,6 +1,6 @@
 //! CoreML state management for autoregressive inference
 
-use candle_core::{Error as CandleError};
+use candle_core::Error as CandleError;
 
 #[cfg(target_os = "macos")]
 use objc2::rc::{autoreleasepool, Retained};

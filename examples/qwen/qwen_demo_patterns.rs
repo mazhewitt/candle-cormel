@@ -6,7 +6,7 @@
 //!
 //! Usage:
 //! ```bash
-//! # Demo of integration patterns 
+//! # Demo of integration patterns
 //! cargo run --example qwen_demo_patterns
 //!
 //! # With verbose output
@@ -49,9 +49,14 @@ impl MockMultiComponentQwen {
     fn demo_embeddings_component(&self) -> Result<Tensor> {
         if self.verbose {
             println!("🔧 Embeddings Component Demo");
-            println!("   Input: Token IDs [batch=1, seq_len={}]", TEST_SEQUENCE_LENGTH);
-            println!("   Output: Hidden states [batch=1, seq_len={}, hidden_dim={}]", 
-                TEST_SEQUENCE_LENGTH, HIDDEN_SIZE);
+            println!(
+                "   Input: Token IDs [batch=1, seq_len={}]",
+                TEST_SEQUENCE_LENGTH
+            );
+            println!(
+                "   Output: Hidden states [batch=1, seq_len={}, hidden_dim={}]",
+                TEST_SEQUENCE_LENGTH, HIDDEN_SIZE
+            );
         }
 
         // Simulate embeddings lookup
@@ -79,7 +84,7 @@ impl MockMultiComponentQwen {
 
         // Create causal mask for demonstration
         let causal_mask = self.create_causal_mask(TEST_SEQUENCE_LENGTH)?;
-        
+
         if self.verbose {
             println!("   Causal mask shape: {:?}", causal_mask.shape());
             println!("   Processing through feed-forward network...");
@@ -87,7 +92,11 @@ impl MockMultiComponentQwen {
 
         // Simulate FFN processing (in real implementation, this would use CoreML)
         // For demo, just add some transformation
-        let small_value = Tensor::full(0.01f32, (1, TEST_SEQUENCE_LENGTH, HIDDEN_SIZE), &self.device)?;
+        let small_value = Tensor::full(
+            0.01f32,
+            (1, TEST_SEQUENCE_LENGTH, HIDDEN_SIZE),
+            &self.device,
+        )?;
         let processed = hidden_states.add(&small_value)?;
 
         if self.verbose {
@@ -101,24 +110,26 @@ impl MockMultiComponentQwen {
     fn demo_lm_head_component(&self, hidden_states: &Tensor) -> Result<Tensor> {
         if self.verbose {
             println!("🔧 LM Head Component Demo");
-            println!("   Input: Last position hidden state [batch=1, 1, hidden_dim={}]", HIDDEN_SIZE);
-            println!("   Output: Token logits [batch=1, 1, vocab_size={}]", QWEN_VOCAB_SIZE);
+            println!(
+                "   Input: Last position hidden state [batch=1, 1, hidden_dim={}]",
+                HIDDEN_SIZE
+            );
+            println!(
+                "   Output: Token logits [batch=1, 1, vocab_size={}]",
+                QWEN_VOCAB_SIZE
+            );
         }
 
         // Extract last position
         let last_hidden = hidden_states.narrow(1, TEST_SEQUENCE_LENGTH - 1, 1)?;
-        
+
         if self.verbose {
             println!("   Extracted last position: {:?}", last_hidden.shape());
         }
 
         // Simulate logits generation (in real implementation, this would use CoreML)
         let mock_logits = vec![0.0f32; QWEN_VOCAB_SIZE];
-        let logits = Tensor::from_vec(
-            mock_logits,
-            (1, 1, QWEN_VOCAB_SIZE),
-            &self.device,
-        )?;
+        let logits = Tensor::from_vec(mock_logits, (1, 1, QWEN_VOCAB_SIZE), &self.device)?;
 
         if self.verbose {
             println!("   ✅ Logits shape: {:?}", logits.shape());
@@ -131,7 +142,7 @@ impl MockMultiComponentQwen {
     fn demo_full_pipeline(&self) -> Result<()> {
         println!("🚀 Multi-Component Pipeline Demo");
         println!("================================");
-        
+
         let total_start = Instant::now();
 
         // Step 1: Embeddings
@@ -164,7 +175,7 @@ impl MockMultiComponentQwen {
         println!("• FFN:         {:?}", ffn_time);
         println!("• LM Head:     {:?}", lm_head_time);
         println!("• Total:       {:?}", total_time);
-        
+
         println!("\n💡 Key Integration Patterns Demonstrated:");
         println!("  ✅ Multi-component model loading");
         println!("  ✅ Pipeline orchestration");
@@ -194,7 +205,7 @@ impl MockMultiComponentQwen {
         println!("   • Output: {}", embeddings_config.output_name);
         println!("   • Vocab size: {}", embeddings_config.vocab_size);
 
-        // FFN config  
+        // FFN config
         let ffn_config = CoreMLConfig {
             input_names: vec!["hidden_states".to_string(), "causal_mask".to_string()],
             output_name: "hidden_states".to_string(),
@@ -229,7 +240,7 @@ impl MockMultiComponentQwen {
 
     fn create_causal_mask(&self, seq_len: usize) -> Result<Tensor> {
         let mut mask_data = vec![0.0f32; seq_len * seq_len];
-        
+
         // Fill upper triangle with -inf for causal masking
         for i in 0..seq_len {
             for j in (i + 1)..seq_len {
@@ -237,11 +248,7 @@ impl MockMultiComponentQwen {
             }
         }
 
-        Tensor::from_vec(
-            mask_data,
-            (seq_len, seq_len),
-            &self.device,
-        ).map_err(Into::into)
+        Tensor::from_vec(mask_data, (seq_len, seq_len), &self.device).map_err(Into::into)
     }
 }
 
@@ -270,7 +277,7 @@ fn demo_integration_patterns(args: &Args) -> Result<()> {
     println!();
     println!("🔗 With real Anemll models, each step would use:");
     println!("   • qwen_embeddings.mlmodelc");
-    println!("   • qwen_FFN_PF_lut6_chunk_01of01.mlmodelc");  
+    println!("   • qwen_FFN_PF_lut6_chunk_01of01.mlmodelc");
     println!("   • qwen_lm_head_lut6.mlmodelc");
     println!();
     println!("💡 This architecture enables true ANE acceleration with memory efficiency!");

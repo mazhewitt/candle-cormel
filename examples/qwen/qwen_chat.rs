@@ -24,7 +24,7 @@
 
 use anyhow::{Error as E, Result};
 use candle_core::{Device, Tensor};
-use candle_coreml::{Config as CoreMLConfig, CoreMLModel, get_local_or_remote_file};
+use candle_coreml::{get_local_or_remote_file, Config as CoreMLConfig, CoreMLModel};
 use clap::Parser;
 use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::{self, Write};
@@ -42,10 +42,7 @@ const DEFAULT_MAX_TOKENS: usize = 50;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Model repository on HuggingFace Hub
-    #[arg(
-        long,
-        default_value = "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4"
-    )]
+    #[arg(long, default_value = "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4")]
     model_id: String,
 
     /// Model revision (branch/tag)
@@ -87,19 +84,14 @@ struct QwenConfig {
 }
 
 impl QwenModel {
-    fn new(
-        model: CoreMLModel,
-        tokenizer: Tokenizer,
-        temperature: f32,
-        max_tokens: usize,
-    ) -> Self {
+    fn new(model: CoreMLModel, tokenizer: Tokenizer, temperature: f32, max_tokens: usize) -> Self {
         let config = QwenConfig {
             temperature,
             max_tokens,
             vocab_size: QWEN_VOCAB_SIZE,
             max_sequence_length: MAX_SEQUENCE_LENGTH,
         };
-        
+
         Self {
             model,
             tokenizer,
@@ -108,16 +100,13 @@ impl QwenModel {
     }
 
     fn tokenize(&self, text: &str) -> Result<Vec<i64>> {
-        let encoding = self.tokenizer
+        let encoding = self
+            .tokenizer
             .encode(text, true)
             .map_err(|e| E::msg(format!("Tokenization failed: {}", e)))?;
-        
-        let tokens: Vec<i64> = encoding
-            .get_ids()
-            .iter()
-            .map(|&id| id as i64)
-            .collect();
-        
+
+        let tokens: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+
         if tokens.len() > self.config.max_sequence_length {
             return Err(E::msg(format!(
                 "Input too long: {} tokens, max: {}",
@@ -139,14 +128,16 @@ impl QwenModel {
     fn generate_streaming(&self, prompt: &str) -> Result<String> {
         let tokens = self.tokenize(prompt)?;
         let device = Device::Cpu;
-        
+
         // Create state for efficient streaming generation
-        let mut state = self.model.make_state()
+        let mut state = self
+            .model
+            .make_state()
             .map_err(|e| E::msg(format!("Failed to create model state: {}", e)))?;
 
         let mut generated_tokens = tokens.clone();
         let mut generated_text = String::new();
-        
+
         print!("🤖 ");
         io::stdout().flush().unwrap();
 
@@ -155,16 +146,14 @@ impl QwenModel {
             let input_len = if step == 0 { tokens.len() } else { 1 };
             let start_idx = generated_tokens.len() - input_len;
             let input_tokens = &generated_tokens[start_idx..];
-            
-            let input_tensor = Tensor::from_vec(
-                input_tokens.to_vec(),
-                (1, input_len),
-                &device,
-            )?;
+
+            let input_tensor = Tensor::from_vec(input_tokens.to_vec(), (1, input_len), &device)?;
 
             // Run inference with state
             let start_time = Instant::now();
-            let output = self.model.predict_with_state(&[&input_tensor], &mut state)
+            let output = self
+                .model
+                .predict_with_state(&[&input_tensor], &mut state)
                 .map_err(|e| E::msg(format!("Inference failed at step {}: {}", step, e)))?;
             let inference_time = start_time.elapsed();
 
@@ -173,13 +162,15 @@ impl QwenModel {
             if logits.is_empty() || logits[0].len() != self.config.vocab_size {
                 return Err(E::msg(format!(
                     "Unexpected output shape: expected ({}, {}), got ({}, {})",
-                    1, self.config.vocab_size, logits.len(), 
-                    logits.get(0).map_or(0, |row| row.len())
+                    1,
+                    self.config.vocab_size,
+                    logits.len(),
+                    logits.first().map_or(0, |row| row.len())
                 )));
             }
 
             let next_token = self.sample_token(&logits[0])?;
-            
+
             // Check for end of sequence
             if next_token == EOS_TOKEN_ID {
                 break;
@@ -196,7 +187,8 @@ impl QwenModel {
 
             if step % 10 == 0 && step > 0 {
                 if let Some(duration_ms) = inference_time.as_millis().checked_sub(0) {
-                    if duration_ms > 100 { // Only show if inference takes notable time
+                    if duration_ms > 100 {
+                        // Only show if inference takes notable time
                         print!(" [{}ms]", duration_ms);
                         io::stdout().flush().unwrap();
                     }
@@ -237,22 +229,19 @@ impl QwenModel {
         let max_logit = scaled_logits
             .iter()
             .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
-        
+
         let exp_logits: Vec<f32> = scaled_logits
             .iter()
             .map(|&x| (x - max_logit).exp())
             .collect();
-        
+
         let sum: f32 = exp_logits.iter().sum();
-        let probabilities: Vec<f32> = exp_logits
-            .iter()
-            .map(|&x| x / sum)
-            .collect();
+        let probabilities: Vec<f32> = exp_logits.iter().map(|&x| x / sum).collect();
 
         // Sample from distribution
         let random_value: f32 = rand::random();
         let mut cumsum = 0.0;
-        
+
         for (idx, &prob) in probabilities.iter().enumerate() {
             cumsum += prob;
             if random_value <= cumsum {
@@ -267,7 +256,7 @@ impl QwenModel {
 
 fn download_tokenizer(api: &hf_hub::api::sync::ApiRepo) -> Result<Tokenizer> {
     println!("📥 Downloading Qwen tokenizer...");
-    
+
     let tokenizer_file = get_local_or_remote_file("tokenizer.json", api)
         .map_err(|e| E::msg(format!("Failed to get tokenizer.json: {}", e)))?;
 
@@ -297,7 +286,7 @@ fn download_model(args: &Args) -> Result<PathBuf> {
     }
 
     println!("📥 Downloading Qwen model from {}...", args.model_id);
-    
+
     let repo = Repo::with_revision(
         args.model_id.clone(),
         RepoType::Model,
@@ -309,11 +298,13 @@ fn download_model(args: &Args) -> Result<PathBuf> {
     // Look for the main model file
     let model_file = get_local_or_remote_file("model.mlmodelc", &api_repo)
         .or_else(|_| get_local_or_remote_file("model.mlpackage", &api_repo))
-        .map_err(|e| E::msg(format!(
-            "Could not find model file in {}: {}\n\
+        .map_err(|e| {
+            E::msg(format!(
+                "Could not find model file in {}: {}\n\
             Expected model.mlmodelc or model.mlpackage",
-            args.model_id, e
-        )))?;
+                args.model_id, e
+            ))
+        })?;
 
     println!("✅ Model downloaded: {}", model_file.display());
     Ok(model_file)
@@ -358,12 +349,7 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
     println!("✅ Model loaded in {:?}", start_time.elapsed());
 
     // Create Qwen wrapper
-    let qwen = QwenModel::new(
-        coreml_model,
-        tokenizer,
-        args.temperature,
-        args.max_tokens,
-    );
+    let qwen = QwenModel::new(coreml_model, tokenizer, args.temperature, args.max_tokens);
 
     // Interactive chat loop
     println!("\n💬 Chat started! Type 'quit' to exit.");

@@ -4,9 +4,9 @@
 //! HuggingFace models with proper LFS support. It uses the clean git2 + hf-hub
 //! approach internally but presents a simple API.
 
+use crate::clean_git_lfs_downloader::{download_hf_model_clean, CleanDownloadConfig};
 use anyhow::Result;
 use std::path::{Path, PathBuf};
-use crate::clean_git_lfs_downloader::{CleanDownloadConfig, download_hf_model_clean};
 
 /// Download a HuggingFace model to the standard cache location
 ///
@@ -23,25 +23,28 @@ use crate::clean_git_lfs_downloader::{CleanDownloadConfig, download_hf_model_cle
 /// Path to the downloaded model directory
 ///
 /// # Example
-/// ```rust
+/// ```rust,no_run
 /// use candle_coreml::download_model;
-/// 
+///
+/// # fn main() -> Result<(), Box<dyn std::error::Error>> {
 /// let model_path = download_model("microsoft/DialoGPT-small", true)?;
 /// let config_path = model_path.join("config.json");
+/// # Ok(())
+/// # }
 /// ```
 pub fn download_model(model_id: &str, verbose: bool) -> Result<PathBuf> {
     // Use standard cache directory
     let cache_base = dirs::cache_dir()
         .ok_or_else(|| anyhow::Error::msg("Cannot determine cache directory"))?
         .join("candle-coreml");
-    
+
     std::fs::create_dir_all(&cache_base)?;
-    
+
     // Configure clean downloader
     let config = CleanDownloadConfig::for_hf_model(model_id, &cache_base)
         .with_verbose(verbose)
         .with_keep_git(false); // Clean up .git directory
-    
+
     // Download using clean approach
     download_hf_model_clean(&config)
 }
@@ -64,7 +67,7 @@ pub fn download_model_to(model_id: &str, target_dir: &Path, verbose: bool) -> Re
         verbose,
         keep_git_dir: false,
     };
-    
+
     download_hf_model_clean(&config)
 }
 
@@ -77,10 +80,10 @@ pub fn download_model_to(model_id: &str, target_dir: &Path, verbose: bool) -> Re
 /// Some(path) if the model exists, None otherwise
 pub fn get_cached_model_path(model_id: &str) -> Option<PathBuf> {
     let cache_base = dirs::cache_dir()?.join("candle-coreml");
-    
+
     let model_cache_name = model_id.replace('/', "--");
     let model_path = cache_base.join(format!("clean-{}", model_cache_name));
-    
+
     if model_path.exists() && model_path.is_dir() {
         Some(model_path)
     } else {
@@ -102,7 +105,11 @@ pub fn get_cached_model_path(model_id: &str) -> Option<PathBuf> {
 pub fn ensure_model_downloaded(model_id: &str, verbose: bool) -> Result<PathBuf> {
     if let Some(cached_path) = get_cached_model_path(model_id) {
         if verbose {
-            println!("✅ Model {} already cached at: {}", model_id, cached_path.display());
+            println!(
+                "✅ Model {} already cached at: {}",
+                model_id,
+                cached_path.display()
+            );
         }
         Ok(cached_path)
     } else {
@@ -116,19 +123,19 @@ pub fn ensure_model_downloaded(model_id: &str, verbose: bool) -> Result<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::env;
     
+
     #[test]
     fn test_cache_path_generation() {
         let model_id = "test/model";
         let expected_suffix = "candle-coreml/clean-test--model";
-        
+
         if let Some(cache_path) = get_cached_model_path(model_id) {
             assert!(cache_path.to_string_lossy().ends_with(expected_suffix));
         }
         // Test passes regardless of whether cache exists
     }
-    
+
     #[test]
     fn test_model_id_normalization() {
         let model_id = "microsoft/DialoGPT-medium";
