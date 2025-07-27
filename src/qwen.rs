@@ -3,8 +3,8 @@
 //! This module provides a complete implementation of the Qwen multi-component architecture
 //! with proper tokenization, state management, and inference pipeline.
 
+use crate::utils::{mask, multi_component, sampling};
 use crate::{Config as CoreMLConfig, CoreMLModel, CoreMLState};
-use crate::utils::{mask, sampling, multi_component};
 use candle_core::{Device, Error as CandleError, Tensor};
 use std::collections::HashMap;
 use std::path::Path;
@@ -168,12 +168,20 @@ impl QwenModel {
     }
 
     /// Create position slice of causal mask for single token processing
-    pub fn create_position_causal_mask(&self, pos: usize, context_length: usize) -> Result<Tensor, CandleError> {
+    pub fn create_position_causal_mask(
+        &self,
+        pos: usize,
+        context_length: usize,
+    ) -> Result<Tensor, CandleError> {
         mask::create_rank4_position_mask(pos, context_length, &self.config.device)
     }
 
     /// Create update mask for FFN infer phase
-    pub fn create_update_mask(&self, pos: usize, context_length: usize) -> Result<Tensor, CandleError> {
+    pub fn create_update_mask(
+        &self,
+        pos: usize,
+        context_length: usize,
+    ) -> Result<Tensor, CandleError> {
         mask::create_update_mask(pos, context_length, &self.config.device)
     }
 
@@ -190,7 +198,11 @@ impl QwenModel {
     }
 
     /// Process sequence through FFN prefill phase
-    pub fn prefill_sequence(&mut self, embeddings: &Tensor, sequence_length: usize) -> Result<(), CandleError> {
+    pub fn prefill_sequence(
+        &mut self,
+        embeddings: &Tensor,
+        sequence_length: usize,
+    ) -> Result<(), CandleError> {
         if self.ffn_prefill_state.is_none() {
             self.initialize_states()?;
         }
@@ -215,7 +227,11 @@ impl QwenModel {
     }
 
     /// Generate next token using FFN infer phase
-    pub fn generate_next_token(&mut self, last_embedding: &Tensor, pos: usize) -> Result<Tensor, CandleError> {
+    pub fn generate_next_token(
+        &mut self,
+        last_embedding: &Tensor,
+        pos: usize,
+    ) -> Result<Tensor, CandleError> {
         if self.ffn_infer_state.is_none() {
             self.initialize_states()?;
         }
@@ -247,7 +263,10 @@ impl QwenModel {
     }
 
     /// Combine 16 LM head output chunks into full vocabulary using shared utility
-    pub fn combine_lm_head_outputs(&self, outputs: HashMap<String, Tensor>) -> Result<Tensor, CandleError> {
+    pub fn combine_lm_head_outputs(
+        &self,
+        outputs: HashMap<String, Tensor>,
+    ) -> Result<Tensor, CandleError> {
         multi_component::combine_chunked_logits(outputs, 16)
     }
 
@@ -258,10 +277,10 @@ impl QwenModel {
         if inputs.is_empty() {
             return Err(CandleError::Msg("No input tensors provided".to_string()));
         }
-        
+
         // Process through embeddings -> FFN -> LM head
         let embeddings = self.embeddings.forward(&inputs[0..1])?;
-        
+
         // For now, return embeddings as placeholder
         // TODO: Complete pipeline implementation
         Ok(embeddings)
@@ -307,9 +326,14 @@ impl QwenModel {
     }
 
     /// Generate text using temperature sampling
-    pub fn generate_text(&mut self, text: &str, max_tokens: usize, temperature: f32) -> Result<String, CandleError> {
+    pub fn generate_text(
+        &mut self,
+        text: &str,
+        max_tokens: usize,
+        temperature: f32,
+    ) -> Result<String, CandleError> {
         let tokens = self.generate_tokens(text, max_tokens, temperature)?;
-        
+
         // Decode tokens back to text
         let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
         self.tokenizer
@@ -318,7 +342,12 @@ impl QwenModel {
     }
 
     /// Generate multiple tokens using temperature sampling
-    pub fn generate_tokens(&mut self, text: &str, max_tokens: usize, temperature: f32) -> Result<Vec<i64>, CandleError> {
+    pub fn generate_tokens(
+        &mut self,
+        text: &str,
+        max_tokens: usize,
+        temperature: f32,
+    ) -> Result<Vec<i64>, CandleError> {
         let mut generated_tokens = Vec::new();
 
         // Initial forward pass
@@ -341,7 +370,7 @@ impl QwenModel {
             };
 
             generated_tokens.push(next_token);
-            
+
             // Stop if EOS token
             if next_token == 151645 {
                 // Qwen EOS token

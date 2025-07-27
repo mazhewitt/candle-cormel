@@ -25,7 +25,7 @@ pub use clean_git_lfs_downloader::{
 };
 
 // Shared utilities for transformer models
-pub use utils::{mask, sampling, multi_component};
+pub use utils::{mask, multi_component, sampling};
 
 use std::path::PathBuf;
 

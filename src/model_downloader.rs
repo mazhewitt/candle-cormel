@@ -123,7 +123,6 @@ pub fn ensure_model_downloaded(model_id: &str, verbose: bool) -> Result<PathBuf>
 #[cfg(test)]
 mod tests {
     use super::*;
-    
 
     #[test]
     fn test_cache_path_generation() {

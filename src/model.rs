@@ -104,7 +104,7 @@ impl CoreMLModel {
                         let err_msg = format!("{:?}", err);
                         if err_msg.contains("Compile the model") {
                             #[allow(deprecated)]
-                    match unsafe { MLModel::compileModelAtURL_error(&url) } {
+                            match unsafe { MLModel::compileModelAtURL_error(&url) } {
                                 Ok(compiled_url) => {
                                     // Try loading the compiled model
                                     match unsafe {

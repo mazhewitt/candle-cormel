@@ -24,7 +24,7 @@ fn test_i64_to_int32_conversion() -> Result<(), Box<dyn std::error::Error>> {
         println!("✅ Conversion successful");
 
         // Try to read back the values to verify conversion
-        
+
         println!("MLArray data type: {:?}", unsafe { ml_array.dataType() });
         println!("MLArray shape: {:?}", unsafe { ml_array.shape() });
 
@@ -61,7 +61,6 @@ fn test_f32_conversion() -> Result<(), Box<dyn std::error::Error>> {
         let ml_array = tensor_to_mlmultiarray(&tensor)?;
         println!("✅ Conversion successful");
 
-        
         println!("MLArray data type: {:?}", unsafe { ml_array.dataType() });
         println!("MLArray shape: {:?}", unsafe { ml_array.shape() });
     }
@@ -97,7 +96,6 @@ fn test_batch_tensor_conversion() -> Result<(), Box<dyn std::error::Error>> {
         let ml_array = tensor_to_mlmultiarray(&tensor)?;
         println!("✅ Batch conversion successful");
 
-        
         println!("MLArray data type: {:?}", unsafe { ml_array.dataType() });
         println!("MLArray shape: {:?}", unsafe { ml_array.shape() });
 

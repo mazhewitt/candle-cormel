@@ -338,7 +338,8 @@ fn run_benchmark(args: &Args) -> Result<()> {
     println!("Iterations: {}", args.iterations);
 
     let sequence_lengths = args
-        .sequence_lengths.as_deref()
+        .sequence_lengths
+        .as_deref()
         .unwrap_or(DEFAULT_SEQUENCE_LENGTHS);
 
     println!("Sequence lengths: {:?}", sequence_lengths);

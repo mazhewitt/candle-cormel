@@ -166,8 +166,6 @@ pub fn extract_all_outputs(
     prediction: &ProtocolObject<dyn MLFeatureProvider>,
     input_device: &Device,
 ) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
-    
-
     autoreleasepool(|pool| unsafe {
         let mut outputs = std::collections::HashMap::new();
 
