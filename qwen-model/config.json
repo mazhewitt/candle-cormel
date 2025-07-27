@@ -1,4 +1,0 @@
-{
-  "tokenizer_class": "LlamaTokenizer",
-  "model_type": "llama"
-}
