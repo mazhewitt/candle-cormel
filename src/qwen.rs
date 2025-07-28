@@ -216,10 +216,22 @@ impl QwenModel {
         // Load from the coreml subdirectory
         let coreml_dir = model_path.join("coreml");
 
-        // Use default config suitable for typo correction
-        let config = QwenConfig::default();
+        // Use config with 256 context length to match typo-fixer model
+        let config = QwenConfig {
+            vocab_size: QWEN_VOCAB_SIZE,
+            hidden_size: QWEN_HIDDEN_SIZE,
+            batch_size: QWEN_BATCH_SIZE,
+            context_length: 256, // Match the model's expected sequence length
+            device: Device::Cpu,
+        };
 
-        Self::load_from_directory(coreml_dir, Some(config))
+        let model = Self::load_from_directory(coreml_dir, Some(config))?;
+        
+        // Validate shapes and show debugging info
+        println!("🔍 Validating typo-fixer model shapes...");
+        model.validate_model_shapes()?;
+        
+        Ok(model)
     }
 
     /// Initialize model states for efficient generation
@@ -232,6 +244,117 @@ impl QwenModel {
     /// Reset states for a new generation sequence
     pub fn reset_states(&mut self) -> Result<(), CandleError> {
         self.initialize_states()
+    }
+
+    /// Validate model shapes and print debugging information
+    pub fn validate_model_shapes(&self) -> Result<(), CandleError> {
+        println!("🔍 QwenModel Shape Validation");
+        println!("================================");
+
+        // Check embeddings model expected shapes
+        println!("\n📦 Embeddings Model:");
+        let embedding_input_shapes = self.embeddings.get_input_shapes();
+        for (name, shape) in &embedding_input_shapes {
+            println!("  Input '{}': {:?}", name, shape);
+        }
+        if let Some(output_shape) = self.embeddings.get_output_shape("hidden_states") {
+            println!("  Output 'hidden_states': {:?}", output_shape);
+        }
+
+        // Check FFN model expected shapes
+        println!("\n🧠 FFN Model:");
+        let ffn_input_shapes = self.ffn_prefill.get_input_shapes();
+        for (name, shape) in &ffn_input_shapes {
+            println!("  Input '{}': {:?}", name, shape);
+        }
+        if let Some(output_shape) = self.ffn_prefill.get_output_shape("output_hidden_states") {
+            println!("  Output 'output_hidden_states': {:?}", output_shape);
+        }
+
+        // Check LM head model expected shapes
+        println!("\n📝 LM Head Model:");
+        let lm_head_input_shapes = self.lm_head.get_input_shapes();
+        for (name, shape) in &lm_head_input_shapes {
+            println!("  Input '{}': {:?}", name, shape);
+        }
+        if let Some(output_shape) = self.lm_head.get_output_shape("logits1") {
+            println!("  Output 'logits1': {:?}", output_shape);
+        }
+
+        // Validate shape consistency
+        if let Some(embedding_input_shape) = embedding_input_shapes.get("input_ids") {
+            if let Some(embedding_output_shape) = self.embeddings.get_output_shape("hidden_states") {
+                println!("\n✅ Shape Analysis:");
+                println!("  Embeddings: input {:?} -> output {:?}", embedding_input_shape, embedding_output_shape);
+                
+                // Check if FFN expects the embedding output shape
+                if let Some(ffn_hidden_shape) = ffn_input_shapes.get("hidden_states") {
+                    if embedding_output_shape == *ffn_hidden_shape {
+                        println!("  ✅ Embeddings output matches FFN input");
+                    } else {
+                        println!("  ⚠️ SHAPE MISMATCH: Embeddings output {:?} != FFN input {:?}", 
+                                embedding_output_shape, ffn_hidden_shape);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Create properly shaped tensor for embedding input based on model requirements
+    pub fn create_embedding_input(&self, tokens: &[i64]) -> Result<Tensor, CandleError> {
+        // Get the expected input shape from the embeddings model
+        if let Some(expected_shape) = self.embeddings.get_input_shape("input_ids") {
+            println!("🔧 Creating embedding input with expected shape: {:?}", expected_shape);
+            
+            // Handle different expected shapes
+            match expected_shape.len() {
+                2 => {
+                    // Shape like [1, sequence_length] - standard case
+                    let seq_len = expected_shape[1] as usize;
+                    let padded_tokens = if tokens.len() <= seq_len {
+                        let mut padded = tokens.to_vec();
+                        padded.resize(seq_len, 0); // Pad with zeros
+                        padded
+                    } else {
+                        tokens[..seq_len].to_vec() // Truncate if too long
+                    };
+                    
+                    Tensor::from_vec(padded_tokens, (1, seq_len), &self.config.device)
+                }
+                4 => {
+                    // Shape like [1, 1, 1, sequence_length] - rank-4 format
+                    let seq_len = expected_shape[3] as usize;
+                    let padded_tokens = if tokens.len() <= seq_len {
+                        let mut padded = tokens.to_vec();
+                        padded.resize(seq_len, 0); // Pad with zeros
+                        padded
+                    } else {
+                        tokens[..seq_len].to_vec() // Truncate if too long
+                    };
+                    
+                    Tensor::from_vec(padded_tokens, (1, 1, 1, seq_len), &self.config.device)
+                }
+                _ => {
+                    // Fallback to config-based padding
+                    self.create_embedding_input_fallback(tokens)
+                }
+            }
+        } else {
+            // Fallback if we can't get shape info
+            self.create_embedding_input_fallback(tokens)
+        }
+    }
+
+    /// Fallback method for creating embedding input when shape detection fails
+    fn create_embedding_input_fallback(&self, tokens: &[i64]) -> Result<Tensor, CandleError> {
+        let padded_tokens = self.pad_tokens(tokens);
+        Tensor::from_vec(
+            padded_tokens.clone(),
+            (1, padded_tokens.len()),
+            &self.config.device,
+        )
     }
 
     /// Tokenize input text
@@ -281,16 +404,13 @@ impl QwenModel {
         mask::create_update_mask(pos, context_length, &self.config.device)
     }
 
-    /// Run embeddings for input tokens
+    /// Run embeddings for input tokens with dynamic shape detection
     pub fn compute_embeddings(&self, tokens: &[i64]) -> Result<Tensor, CandleError> {
-        let padded_tokens = self.pad_tokens(tokens);
-        let input_tensor = Tensor::from_vec(
-            padded_tokens.clone(),
-            (1, padded_tokens.len()),
-            &self.config.device,
-        )?;
-
-        self.embeddings.forward(&[&input_tensor])
+        // Use the new shape-aware method
+        let input_tensor = self.create_embedding_input(tokens)?;
+        let result = self.embeddings.forward(&[&input_tensor])?;
+        
+        Ok(result)
     }
 
     /// Process sequence through FFN prefill phase
@@ -353,7 +473,19 @@ impl QwenModel {
 
         // Run through LM head to get logits
         let lm_outputs = self.lm_head.forward_all(&[&hidden_states])?;
-        let combined_logits = self.combine_lm_head_outputs(lm_outputs)?;
+        
+        // Debug: Check what outputs we actually got (reduced logging)
+        if lm_outputs.len() != 16 {
+            println!("⚠️ Unexpected LM head outputs: {} (expected 16)", lm_outputs.len());
+        }
+        
+        let combined_logits = if lm_outputs.len() == 1 {
+            // Single output - use it directly
+            lm_outputs.into_values().next().unwrap()
+        } else {
+            // Multiple outputs - combine them
+            self.combine_lm_head_outputs(lm_outputs)?
+        };
 
         Ok(combined_logits)
     }
@@ -392,31 +524,39 @@ impl QwenModel {
 
         // Process each token through the FFN to build up context
         for (pos, &token_id) in tokens.iter().enumerate() {
-            // Get embedding for single token
-            let single_token_tensor =
-                Tensor::from_vec(vec![token_id], (1, 1), &self.config.device)?;
-            let token_embedding = self.embeddings.forward(&[&single_token_tensor])?;
+            // Get embedding for single token using shape-aware method
+            let token_embedding = self.compute_embeddings(&[token_id])?;
 
             // Process through FFN infer (this builds up the KV cache)
             let _logits = self.generate_next_token(&token_embedding, pos)?;
         }
 
         // Generate next token after processing all input tokens
-        let last_token_tensor =
-            Tensor::from_vec(vec![tokens[tokens.len() - 1]], (1, 1), &self.config.device)?;
-        let last_embedding = self.embeddings.forward(&[&last_token_tensor])?;
+        let last_embedding = self.compute_embeddings(&[tokens[tokens.len() - 1]])?;
         let logits = self.generate_next_token(&last_embedding, tokens.len())?;
 
         // Extract next token using argmax
-        let logits_vec = logits.to_vec3::<f32>()?;
-        let next_token_logits = &logits_vec[0][0];
-
-        let next_token = next_token_logits
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(i, _)| i as i64)
-            .unwrap();
+        // Handle different tensor shapes: [vocab_size] or [1, 1, vocab_size]
+        let next_token = if logits.dims().len() == 1 {
+            // Shape: [vocab_size] - use direct approach
+            let logits_vec = logits.to_vec1::<f32>()?;
+            logits_vec
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i as i64)
+                .unwrap()
+        } else {
+            // Shape: [1, 1, vocab_size] or similar - flatten and extract
+            let logits_vec = logits.to_vec3::<f32>()?;
+            let next_token_logits = &logits_vec[0][0];
+            next_token_logits
+                .iter()
+                .enumerate()
+                .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+                .map(|(i, _)| i as i64)
+                .unwrap()
+        };
 
         Ok(next_token)
     }
@@ -452,17 +592,24 @@ impl QwenModel {
 
         // Continue generating
         for i in 1..max_tokens {
-            // Create single token embedding
-            let token_tensor = Tensor::from_vec(vec![next_token], (1, 1), &self.config.device)?;
-            let token_embedding = self.embeddings.forward(&[&token_tensor])?;
+            // Create single token embedding using shape-aware method
+            let token_embedding = self.compute_embeddings(&[next_token])?;
 
             let logits = self.generate_next_token(&token_embedding, i)?;
 
+            // Flatten logits to rank-1 for sampling functions
+            let flattened_logits = if logits.dims().len() > 1 {
+                // Remove leading dimensions of size 1: [1, 1, vocab_size] -> [vocab_size]
+                logits.squeeze(0)?.squeeze(0)?
+            } else {
+                logits
+            };
+
             // Use shared sampling utility
             let next_token = if temperature <= 0.0 {
-                sampling::greedy_sample(&logits)?
+                sampling::greedy_sample(&flattened_logits)?
             } else {
-                sampling::sample_with_temperature(&logits, temperature)?
+                sampling::sample_with_temperature(&flattened_logits, temperature)?
             };
 
             generated_tokens.push(next_token);

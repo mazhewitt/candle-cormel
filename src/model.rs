@@ -495,6 +495,95 @@ impl CoreMLModel {
                 .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {:?}", e)))
         })
     }
+
+    /// Get input shape information from the CoreML model description
+    /// 
+    /// Returns the expected shape for a given input name, or None if not found.
+    /// This is useful for debugging shape mismatches and dynamic configuration.
+    #[cfg(target_os = "macos")]
+    pub fn get_input_shape(&self, input_name: &str) -> Option<Vec<i64>> {
+        use objc2_foundation::NSNumber;
+        
+        autoreleasepool(|_| {
+            let model_description = unsafe { self.inner.modelDescription() };
+            let input_descriptions = unsafe { model_description.inputDescriptionsByName() };
+            
+            let ns_input_name = NSString::from_str(input_name);
+            if let Some(input_desc) = unsafe { input_descriptions.objectForKey(&ns_input_name) } {
+                if let Some(multi_array_constraint) = unsafe { input_desc.multiArrayConstraint() } {
+                    let shape = unsafe { multi_array_constraint.shape() };
+                    let mut result = Vec::new();
+                    
+                    for i in 0..unsafe { shape.count() } {
+                        let dimension = unsafe { shape.objectAtIndex(i) };
+                        let number = dimension.as_ref() as *const _ as *const NSNumber;
+                        let value = unsafe { (*number).longLongValue() };
+                        result.push(value);
+                    }
+                    return Some(result);
+                }
+            }
+            None
+        })
+    }
+
+    /// Get all input names and their expected shapes
+    #[cfg(target_os = "macos")]
+    pub fn get_input_shapes(&self) -> std::collections::HashMap<String, Vec<i64>> {
+        let mut shapes = std::collections::HashMap::new();
+        
+        for input_name in &self.config.input_names {
+            if let Some(shape) = self.get_input_shape(input_name) {
+                shapes.insert(input_name.clone(), shape);
+            }
+        }
+        
+        shapes
+    }
+
+    /// Get output shape information from the CoreML model description
+    #[cfg(target_os = "macos")]
+    pub fn get_output_shape(&self, output_name: &str) -> Option<Vec<i64>> {
+        use objc2_foundation::NSNumber;
+        
+        autoreleasepool(|_| {
+            let model_description = unsafe { self.inner.modelDescription() };
+            let output_descriptions = unsafe { model_description.outputDescriptionsByName() };
+            
+            let ns_output_name = NSString::from_str(output_name);
+            if let Some(output_desc) = unsafe { output_descriptions.objectForKey(&ns_output_name) } {
+                if let Some(multi_array_constraint) = unsafe { output_desc.multiArrayConstraint() } {
+                    let shape = unsafe { multi_array_constraint.shape() };
+                    let mut result = Vec::new();
+                    
+                    for i in 0..unsafe { shape.count() } {
+                        let dimension = unsafe { shape.objectAtIndex(i) };
+                        let number = dimension.as_ref() as *const _ as *const NSNumber;
+                        let value = unsafe { (*number).longLongValue() };
+                        result.push(value);
+                    }
+                    return Some(result);
+                }
+            }
+            None
+        })
+    }
+
+    /// Non-macOS stubs for shape methods
+    #[cfg(not(target_os = "macos"))]
+    pub fn get_input_shape(&self, _input_name: &str) -> Option<Vec<i64>> {
+        None
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn get_input_shapes(&self) -> std::collections::HashMap<String, Vec<i64>> {
+        std::collections::HashMap::new()
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    pub fn get_output_shape(&self, _output_name: &str) -> Option<Vec<i64>> {
+        None
+    }
 }
 
 #[cfg(test)]
