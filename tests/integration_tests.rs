@@ -649,6 +649,7 @@ fn test_stateful_prediction() {
 
 /// Test stateful prediction with multiple calls (persistence check)
 #[test]
+#[ignore] // Requires external model files
 fn test_stateful_prediction_persistence() {
     let config = Config::default();
 
