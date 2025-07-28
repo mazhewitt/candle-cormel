@@ -51,6 +51,78 @@ pub struct QwenModel {
 }
 
 impl QwenModel {
+    /// Find the best available model file from multiple variants
+    fn find_model_file<P: AsRef<Path>>(
+        model_dir: P,
+        base_name: &str,
+    ) -> Result<std::path::PathBuf, CandleError> {
+        let model_dir = model_dir.as_ref();
+
+        // Try different variants in order of preference
+        let variants = [
+            // Quantized variants first (preferred for performance)
+            format!("{}_lut8_chunk_01of01.mlmodelc", base_name),
+            format!("{}_lut8.mlmodelc", base_name),
+            // Regular variants with chunk suffix
+            format!("{}_chunk_01of01.mlmodelc", base_name),
+            format!("{}_chunk_01of01.mlpackage", base_name),
+            // Simple regular variants
+            format!("{}.mlmodelc", base_name),
+            format!("{}.mlpackage", base_name),
+        ];
+
+        for variant in &variants {
+            let candidate_path = model_dir.join(variant);
+            if candidate_path.exists() {
+                return Ok(candidate_path);
+            }
+        }
+
+        // If nothing found, provide helpful error message
+        Err(CandleError::Msg(format!(
+            "Model file not found for '{}'. Tried variants: {}. Available files in {}: {:?}",
+            base_name,
+            variants.join(", "),
+            model_dir.display(),
+            std::fs::read_dir(model_dir)
+                .map(|entries| entries
+                    .filter_map(|e| e.ok())
+                    .map(|e| e.file_name().to_string_lossy().to_string())
+                    .collect::<Vec<_>>())
+                .unwrap_or_else(|_| vec!["<could not read directory>".to_string()])
+        )))
+    }
+
+    /// Load tokenizer from multiple possible locations  
+    fn load_tokenizer<P: AsRef<Path>>(model_dir: P) -> Result<Tokenizer, CandleError> {
+        let model_dir = model_dir.as_ref();
+
+        // Try tokenizer in model directory first, then parent directory
+        let tokenizer_locations = [
+            model_dir.join("tokenizer.json"),
+            model_dir
+                .parent()
+                .unwrap_or(model_dir)
+                .join("tokenizer.json"),
+        ];
+
+        for tokenizer_path in &tokenizer_locations {
+            if tokenizer_path.exists() {
+                return Tokenizer::from_file(tokenizer_path)
+                    .map_err(|e| CandleError::Msg(format!("Failed to load tokenizer: {}", e)));
+            }
+        }
+
+        Err(CandleError::Msg(format!(
+            "Tokenizer not found. Tried: {}",
+            tokenizer_locations
+                .iter()
+                .map(|p| p.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
+    }
+
     /// Load Qwen model from the specified directory
     pub fn load_from_directory<P: AsRef<Path>>(
         model_dir: P,
@@ -59,10 +131,8 @@ impl QwenModel {
         let config = config.unwrap_or_default();
         let model_dir = model_dir.as_ref();
 
-        // Load tokenizer
-        let tokenizer_path = model_dir.join("tokenizer.json");
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| CandleError::Msg(format!("Failed to load tokenizer: {}", e)))?;
+        // Load tokenizer with fallback logic
+        let tokenizer = Self::load_tokenizer(model_dir)?;
 
         // Configure and load embeddings
         let embeddings_config = CoreMLConfig {
@@ -73,7 +143,7 @@ impl QwenModel {
             model_type: "qwen-embeddings".to_string(),
         };
 
-        let embeddings_path = model_dir.join("qwen_embeddings.mlmodelc");
+        let embeddings_path = Self::find_model_file(model_dir, "qwen_embeddings")?;
         let embeddings = CoreMLModel::load_from_file(&embeddings_path, &embeddings_config)?;
 
         // Configure and load FFN models (both prefill and infer functions)
@@ -90,7 +160,7 @@ impl QwenModel {
             model_type: "qwen-ffn".to_string(),
         };
 
-        let ffn_path = model_dir.join("qwen_FFN_PF_lut8_chunk_01of01.mlmodelc");
+        let ffn_path = Self::find_model_file(model_dir, "qwen_FFN_PF")?;
 
         // FFN Prefill function (for initial sequence processing)
         let ffn_prefill = CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?;
@@ -111,7 +181,7 @@ impl QwenModel {
             model_type: "qwen-lm-head".to_string(),
         };
 
-        let lm_head_path = model_dir.join("qwen_lm_head_lut8.mlmodelc");
+        let lm_head_path = Self::find_model_file(model_dir, "qwen_lm_head")?;
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)?;
 
         Ok(Self {
@@ -124,6 +194,32 @@ impl QwenModel {
             ffn_prefill_state: None,
             ffn_infer_state: None,
         })
+    }
+
+    /// Load the Qwen typo-fixer model from HuggingFace
+    ///
+    /// This method downloads and loads the mazhewitt/qwen-typo-fixer model
+    /// which uses .mlpackage format and has tokenizer in the root directory.
+    ///
+    /// # Arguments
+    /// * `verbose` - Whether to show download progress
+    ///
+    /// # Returns
+    /// Loaded QwenModel ready for typo correction
+    pub fn load_typo_fixer(verbose: bool) -> Result<Self, CandleError> {
+        use crate::model_downloader::ensure_model_downloaded;
+
+        // Download the typo-fixer model
+        let model_path = ensure_model_downloaded("mazhewitt/qwen-typo-fixer", verbose)
+            .map_err(|e| CandleError::Msg(format!("Failed to download typo-fixer model: {}", e)))?;
+
+        // Load from the coreml subdirectory
+        let coreml_dir = model_path.join("coreml");
+
+        // Use default config suitable for typo correction
+        let config = QwenConfig::default();
+
+        Self::load_from_directory(coreml_dir, Some(config))
     }
 
     /// Initialize model states for efficient generation

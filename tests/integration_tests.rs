@@ -234,6 +234,7 @@ fn get_test_model_path() -> Option<PathBuf> {
 
 /// Test loading a real CoreML model
 #[test]
+#[ignore] // Requires external model files
 fn test_load_real_model() {
     let model_path = match get_test_model_path() {
         Some(path) => path,
@@ -285,6 +286,7 @@ fn test_load_real_model() {
 
 /// Test CoreML model inference with CPU tensors
 #[test]
+#[ignore] // Requires external model files
 #[cfg(target_os = "macos")]
 fn test_inference_cpu() {
     let model_path = match get_test_model_path() {
@@ -384,6 +386,7 @@ fn test_inference_cpu() {
 
 /// Test CoreML model inference with Metal tensors (if available)
 #[test]
+#[ignore] // Requires external model files
 #[cfg(target_os = "macos")]
 fn test_inference_metal() {
     let model_path = match get_test_model_path() {
@@ -446,6 +449,7 @@ fn test_inference_metal() {
 
 /// Test device validation - CUDA tensors should be rejected
 #[test]
+#[ignore] // Requires external model files
 #[cfg(target_os = "macos")]
 fn test_device_validation_cuda_rejection() {
     let model_path = match get_test_model_path() {
