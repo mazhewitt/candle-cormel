@@ -1,0 +1,5 @@
+name: 03_ffn_prefill_current_pos
+shape: (1,)
+dtype: int32
+values: [0]
+min: 0, max: 0, mean: 0.0

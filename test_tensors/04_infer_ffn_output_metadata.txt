@@ -1,0 +1,4 @@
+name: 04_infer_ffn_output
+shape: (1, 1, 1024)
+dtype: float32
+min: -43.5, max: 24.15625, mean: 0.09364397823810577

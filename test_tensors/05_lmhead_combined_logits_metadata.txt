@@ -1,0 +1,4 @@
+name: 05_lmhead_combined_logits
+shape: (1, 1, 151936)
+dtype: float32
+min: -21.5625, max: 21.1875, mean: -3.972424268722534

@@ -1,0 +1,4 @@
+name: 03_ffn_prefill_output
+shape: (1, 1, 1024)
+dtype: float32
+min: -284.25, max: 1508.0, mean: 0.2552921772003174

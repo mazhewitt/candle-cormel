@@ -1,0 +1,4 @@
+name: 04_infer_causal_mask
+shape: (1, 1, 1, 512)
+dtype: float16
+min: -inf, max: 0.0, mean: -inf

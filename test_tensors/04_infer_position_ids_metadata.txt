@@ -1,0 +1,5 @@
+name: 04_infer_position_ids
+shape: (1,)
+dtype: int32
+values: [7]
+min: 7, max: 7, mean: 7.0

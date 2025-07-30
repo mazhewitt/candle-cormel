@@ -1,0 +1,4 @@
+name: 03_ffn_prefill_hidden_input
+shape: (1, 64, 1024)
+dtype: float16
+min: -0.0859375, max: 0.09033203125, mean: -6.198883056640625e-06

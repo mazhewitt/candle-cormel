@@ -1,0 +1,4 @@
+name: 03_ffn_prefill_position_ids
+shape: (64,)
+dtype: int32
+min: 0, max: 63, mean: 31.5

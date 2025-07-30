@@ -1,0 +1,5 @@
+name: 01_input_tokens
+shape: (1, 8)
+dtype: int32
+values: [[  785  3974 13876 38835 34208   916   279 15678]]
+min: 279, max: 38835, mean: 13568.875

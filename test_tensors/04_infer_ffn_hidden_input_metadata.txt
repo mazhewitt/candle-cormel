@@ -1,0 +1,4 @@
+name: 04_infer_ffn_hidden_input
+shape: (1, 1, 1024)
+dtype: float16
+min: -0.080078125, max: 0.0888671875, mean: -9.143352508544922e-05

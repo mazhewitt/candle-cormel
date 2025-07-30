@@ -1,0 +1,4 @@
+name: 05_lmhead_logits13
+shape: (1, 1, 9496)
+dtype: float32
+min: -18.484375, max: 9.3515625, mean: -5.039254188537598
