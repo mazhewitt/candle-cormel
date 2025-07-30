@@ -24,13 +24,11 @@
 
 use anyhow::{Error as E, Result};
 use candle_core::{Device, Tensor};
-use candle_coreml::{get_local_or_remote_file, Config as CoreMLConfig, CoreMLModel};
+use candle_coreml::{ensure_model_downloaded, qwen::{QwenModel, QwenConfig}};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
 use std::io::{self, Write};
 use std::path::PathBuf;
 use std::time::Instant;
-use tokenizers::Tokenizer;
 
 const QWEN_VOCAB_SIZE: usize = 151936;
 const MAX_SEQUENCE_LENGTH: usize = 512;
@@ -42,7 +40,7 @@ const DEFAULT_MAX_TOKENS: usize = 50;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Model repository on HuggingFace Hub
-    #[arg(long, default_value = "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4")]
+    #[arg(long, default_value = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")]
     model_id: String,
 
     /// Model revision (branch/tag)
@@ -70,22 +68,21 @@ struct Args {
     model_path: Option<String>,
 }
 
-struct QwenModel {
-    model: CoreMLModel,
-    tokenizer: Tokenizer,
-    config: QwenConfig,
+struct QwenChatWrapper {
+    model: QwenModel,
+    config: ChatConfig,
 }
 
-struct QwenConfig {
+struct ChatConfig {
     temperature: f32,
     max_tokens: usize,
     vocab_size: usize,
     max_sequence_length: usize,
 }
 
-impl QwenModel {
-    fn new(model: CoreMLModel, tokenizer: Tokenizer, temperature: f32, max_tokens: usize) -> Self {
-        let config = QwenConfig {
+impl QwenChatWrapper {
+    fn new(model: QwenModel, temperature: f32, max_tokens: usize) -> Self {
+        let config = ChatConfig {
             temperature,
             max_tokens,
             vocab_size: QWEN_VOCAB_SIZE,
@@ -94,82 +91,59 @@ impl QwenModel {
 
         Self {
             model,
-            tokenizer,
             config,
         }
     }
 
     fn tokenize(&self, text: &str) -> Result<Vec<i64>> {
-        let encoding = self
-            .tokenizer
-            .encode(text, true)
-            .map_err(|e| E::msg(format!("Tokenization failed: {}", e)))?;
-
-        let tokens: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-
-        if tokens.len() > self.config.max_sequence_length {
-            return Err(E::msg(format!(
-                "Input too long: {} tokens, max: {}",
-                tokens.len(),
-                self.config.max_sequence_length
-            )));
-        }
-
-        Ok(tokens)
+        self.model.tokenize(text)
+            .map_err(|e| E::msg(format!("Tokenization failed: {}", e)))
     }
 
     fn detokenize(&self, tokens: &[i64]) -> Result<String> {
-        let ids: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
-        self.tokenizer
-            .decode(&ids, true)
+        self.model.detokenize(tokens)
             .map_err(|e| E::msg(format!("Detokenization failed: {}", e)))
     }
 
-    fn generate_streaming(&self, prompt: &str) -> Result<String> {
+    fn generate_streaming(&mut self, prompt: &str) -> Result<String> {
         let tokens = self.tokenize(prompt)?;
-        let device = Device::Cpu;
+        
+        // Reset model state for new generation
+        self.model.reset_states()
+            .map_err(|e| E::msg(format!("Failed to reset model states: {}", e)))?;
+        
+        println!("🚀 Starting generation with QwenModel granular API");
+        println!("📝 Input: '{}'", prompt);
+        println!("🔢 Tokens: {} tokens", tokens.len());
 
-        // Create state for efficient streaming generation
-        let mut state = self
-            .model
-            .make_state()
-            .map_err(|e| E::msg(format!("Failed to create model state: {}", e)))?;
-
+        // STEP 1: Run embeddings for the input tokens
+        let embeddings = self.model.compute_embeddings(&tokens)
+            .map_err(|e| E::msg(format!("Embeddings failed: {}", e)))?;
+        
+        // STEP 2: Run prefill phase to populate KV cache
+        self.model.run_prefill_phase(&embeddings, tokens.len())
+            .map_err(|e| E::msg(format!("Prefill phase failed: {}", e)))?;
+        
         let mut generated_tokens = tokens.clone();
         let mut generated_text = String::new();
-
+        
         print!("🤖 ");
         io::stdout().flush().unwrap();
 
+        // STEP 3: Generate tokens one by one using infer phase
         for step in 0..self.config.max_tokens {
-            // Prepare input tensor (single token for continuation)
-            let input_len = if step == 0 { tokens.len() } else { 1 };
-            let start_idx = generated_tokens.len() - input_len;
-            let input_tokens = &generated_tokens[start_idx..];
-
-            let input_tensor = Tensor::from_vec(input_tokens.to_vec(), (1, input_len), &device)?;
-
-            // Run inference with state
+            let current_position = generated_tokens.len() - 1;
+            
+            // Get last token embedding
+            let last_token = generated_tokens[generated_tokens.len() - 1];
+            let last_token_embedding = self.model.compute_embeddings(&[last_token])
+                .map_err(|e| E::msg(format!("Last token embedding failed: {}", e)))?;
+            
+            // Generate next token using granular infer method
             let start_time = Instant::now();
-            let output = self
-                .model
-                .predict_with_state(&[&input_tensor], &mut state)
-                .map_err(|e| E::msg(format!("Inference failed at step {}: {}", step, e)))?;
+            let next_token = self.model.generate_next_token_with_infer(&last_token_embedding, current_position)
+                .map_err(|e| E::msg(format!("Token generation failed at step {}: {}", step, e)))?;
             let inference_time = start_time.elapsed();
-
-            // Get logits and sample next token
-            let logits = output.to_vec2::<f32>()?;
-            if logits.is_empty() || logits[0].len() != self.config.vocab_size {
-                return Err(E::msg(format!(
-                    "Unexpected output shape: expected ({}, {}), got ({}, {})",
-                    1,
-                    self.config.vocab_size,
-                    logits.len(),
-                    logits.first().map_or(0, |row| row.len())
-                )));
-            }
-
-            let next_token = self.sample_token(&logits[0])?;
 
             // Check for end of sequence
             if next_token == EOS_TOKEN_ID {
@@ -254,18 +228,6 @@ impl QwenModel {
     }
 }
 
-fn download_tokenizer(api: &hf_hub::api::sync::ApiRepo) -> Result<Tokenizer> {
-    println!("📥 Downloading Qwen tokenizer...");
-
-    let tokenizer_file = get_local_or_remote_file("tokenizer.json", api)
-        .map_err(|e| E::msg(format!("Failed to get tokenizer.json: {}", e)))?;
-
-    let tokenizer = Tokenizer::from_file(&tokenizer_file)
-        .map_err(|e| E::msg(format!("Failed to load tokenizer: {}", e)))?;
-
-    println!("✅ Tokenizer loaded successfully");
-    Ok(tokenizer)
-}
 
 fn download_model(args: &Args) -> Result<PathBuf> {
     if let Some(path) = &args.model_path {
@@ -273,41 +235,26 @@ fn download_model(args: &Args) -> Result<PathBuf> {
     }
 
     if args.local {
-        let local_path = PathBuf::from("models/qwen/model.mlmodelc");
+        let local_path = PathBuf::from("models/qwen");
         if local_path.exists() {
             return Ok(local_path);
         } else {
             return Err(E::msg(format!(
-                "Local model not found at: {}\n\
+                "Local model directory not found at: {}\n\
                 Run without --local to download from HuggingFace",
                 local_path.display()
             )));
         }
     }
 
-    println!("📥 Downloading Qwen model from {}...", args.model_id);
+    println!("📥 Ensuring Qwen model from {} is available...", args.model_id);
 
-    let repo = Repo::with_revision(
-        args.model_id.clone(),
-        RepoType::Model,
-        args.revision.clone(),
-    );
-    let api = Api::new()?;
-    let api_repo = api.repo(repo);
+    // Use the ensure_model_downloaded function from candle-coreml
+    let model_dir = candle_coreml::ensure_model_downloaded(&args.model_id, false)
+        .map_err(|e| E::msg(format!("Failed to download model: {}", e)))?;
 
-    // Look for the main model file
-    let model_file = get_local_or_remote_file("model.mlmodelc", &api_repo)
-        .or_else(|_| get_local_or_remote_file("model.mlpackage", &api_repo))
-        .map_err(|e| {
-            E::msg(format!(
-                "Could not find model file in {}: {}\n\
-            Expected model.mlmodelc or model.mlpackage",
-                args.model_id, e
-            ))
-        })?;
-
-    println!("✅ Model downloaded: {}", model_file.display());
-    Ok(model_file)
+    println!("✅ Model available at: {}", model_dir.display());
+    Ok(model_dir)
 }
 
 #[cfg(target_os = "macos")]
@@ -319,41 +266,26 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
     println!("Max tokens: {}", args.max_tokens);
     println!();
 
-    // Setup HuggingFace API
-    let repo = Repo::with_revision(
-        args.model_id.clone(),
-        RepoType::Model,
-        args.revision.clone(),
-    );
-    let api = Api::new()?;
-    let api_repo = api.repo(repo);
+    // Download model directory
+    let model_dir = download_model(args)?;
 
-    // Download model and tokenizer
-    let model_path = download_model(args)?;
-    let tokenizer = download_tokenizer(&api_repo)?;
-
-    // Configure CoreML model
-    let config = CoreMLConfig {
-        input_names: vec!["input_ids".to_string()],
-        output_name: "output".to_string(),
-        max_sequence_length: MAX_SEQUENCE_LENGTH,
-        vocab_size: QWEN_VOCAB_SIZE,
-        model_type: "qwen-chat".to_string(),
-    };
-
-    // Load model
-    println!("🔄 Loading CoreML model...");
+    // Load QwenModel using the granular API
+    println!("🔄 Loading QwenModel with granular API...");
     let start_time = Instant::now();
-    let coreml_model = CoreMLModel::load_from_file(&model_path, &config)
-        .map_err(|e| E::msg(format!("Failed to load model: {}", e)))?;
-    println!("✅ Model loaded in {:?}", start_time.elapsed());
+    
+    let qwen_config = QwenConfig::default();
+    let qwen_model = QwenModel::load_from_directory(&model_dir, Some(qwen_config))
+        .map_err(|e| E::msg(format!("Failed to load QwenModel: {}", e)))?;
+    
+    println!("✅ QwenModel loaded in {:?}", start_time.elapsed());
 
-    // Create Qwen wrapper
-    let qwen = QwenModel::new(coreml_model, tokenizer, args.temperature, args.max_tokens);
+    // Create chat wrapper
+    let mut qwen = QwenChatWrapper::new(qwen_model, args.temperature, args.max_tokens);
 
     // Interactive chat loop
     println!("\n💬 Chat started! Type 'quit' to exit.");
     println!("🎯 Tip: Try asking questions or starting conversations");
+    println!("⚠️  Note: This uses the granular QwenModel API for fine-grained control");
     println!();
 
     loop {

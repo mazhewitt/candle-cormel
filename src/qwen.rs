@@ -40,14 +40,13 @@ impl Default for QwenConfig {
 
 /// Complete Qwen model with all components and state management
 pub struct QwenModel {
-    embeddings: CoreMLModel,
-    ffn_prefill: CoreMLModel,
-    ffn_infer: CoreMLModel,
-    lm_head: CoreMLModel,
+    pub embeddings: CoreMLModel,
+    pub ffn_prefill: CoreMLModel,
+    pub ffn_infer: CoreMLModel,
+    pub lm_head: CoreMLModel,
     tokenizer: Tokenizer,
     config: QwenConfig,
-    ffn_prefill_state: Option<CoreMLState>,
-    ffn_infer_state: Option<CoreMLState>,
+    unified_state: Option<CoreMLState>, // Single shared state for both prefill and infer
 }
 
 impl QwenModel {
@@ -121,15 +120,16 @@ impl QwenModel {
             lm_head,
             tokenizer,
             config,
-            ffn_prefill_state: None,
-            ffn_infer_state: None,
+            unified_state: None, // Single shared state
         })
     }
 
     /// Initialize model states for efficient generation
+    /// CRITICAL: Use a single shared state between prefill and infer (matches Python chat.py)
     pub fn initialize_states(&mut self) -> Result<(), CandleError> {
-        self.ffn_prefill_state = Some(self.ffn_prefill.make_state()?);
-        self.ffn_infer_state = Some(self.ffn_infer.make_state()?);
+        // Create ONE unified state that both prefill and infer will share
+        let unified_state = self.ffn_prefill.make_state()?;
+        self.unified_state = Some(unified_state);
         Ok(())
     }
 
@@ -203,7 +203,7 @@ impl QwenModel {
         embeddings: &Tensor,
         sequence_length: usize,
     ) -> Result<(), CandleError> {
-        if self.ffn_prefill_state.is_none() {
+        if self.unified_state.is_none() {
             self.initialize_states()?;
         }
 
@@ -219,23 +219,19 @@ impl QwenModel {
             let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
 
             let inputs = vec![&token_embedding, &position_ids, &causal_mask, &current_pos];
-            let state = self.ffn_prefill_state.as_mut().unwrap();
+            let state = self.unified_state.as_mut().unwrap();
             let _output = self.ffn_prefill.predict_with_state(&inputs, state)?;
         }
 
         Ok(())
     }
 
-    /// Generate next token using FFN infer phase
+    /// Generate next token using granular methods - REFACTORED
     pub fn generate_next_token(
         &mut self,
         last_embedding: &Tensor,
         pos: usize,
     ) -> Result<Tensor, CandleError> {
-        if self.ffn_infer_state.is_none() {
-            self.initialize_states()?;
-        }
-
         let context_length = self.config.context_length;
         let device = &self.config.device;
 
@@ -243,21 +239,19 @@ impl QwenModel {
         let update_mask = self.create_update_mask(pos, context_length)?;
         let position_ids = Tensor::from_vec(vec![pos as i64], (1,), device)?;
         let causal_mask = self.create_position_causal_mask(pos, context_length)?;
-        let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
+        let current_pos = position_ids.clone();
 
-        let inputs = vec![
+        // Use granular infer method
+        let hidden_states = self.run_ffn_infer_with_inputs(
             last_embedding,
             &update_mask,
             &position_ids,
             &causal_mask,
-            &current_pos,
-        ];
-        let state = self.ffn_infer_state.as_mut().unwrap();
-        let hidden_states = self.ffn_infer.predict_with_state(&inputs, state)?;
+            &current_pos
+        )?;
 
-        // Run through LM head to get logits
-        let lm_outputs = self.lm_head.forward_all(&[&hidden_states])?;
-        let combined_logits = self.combine_lm_head_outputs(lm_outputs)?;
+        // Use granular LM head method
+        let combined_logits = self.run_lm_head_with_inputs(&hidden_states)?;
 
         Ok(combined_logits)
     }
@@ -286,35 +280,88 @@ impl QwenModel {
         Ok(embeddings)
     }
 
-    /// Generate a single token from text input (convenience method)
+    /// Generate a single token from text input - REFACTORED TO USE GRANULAR METHODS
+    /// Uses the proven granular methods that work perfectly in our tests
     pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         // Reset states for new sequence
         self.reset_states()?;
 
         // Tokenize input
         let tokens = self.tokenize(text)?;
-
-        // Process each token through the FFN to build up context
-        for (pos, &token_id) in tokens.iter().enumerate() {
-            // Get embedding for single token
-            let single_token_tensor =
-                Tensor::from_vec(vec![token_id], (1, 1), &self.config.device)?;
-            let token_embedding = self.embeddings.forward(&[&single_token_tensor])?;
-
-            // Process through FFN infer (this builds up the KV cache)
-            let _logits = self.generate_next_token(&token_embedding, pos)?;
-        }
-
-        // Generate next token after processing all input tokens
-        let last_token_tensor =
-            Tensor::from_vec(vec![tokens[tokens.len() - 1]], (1, 1), &self.config.device)?;
-        let last_embedding = self.embeddings.forward(&[&last_token_tensor])?;
-        let logits = self.generate_next_token(&last_embedding, tokens.len())?;
-
-        // Flatten logits to 1D for processing (handles 3D tensors from LM head)
-        let flat_logits = logits.squeeze(0)?.squeeze(0)?;
+        let sequence_length = tokens.len();
         
+        println!("🔄 REFACTORED forward_text: Using granular methods for {} tokens", sequence_length);
+
+        // STEP 1: EMBEDDINGS - Get embeddings for full sequence (padded to batch size)
+        let padded_tokens = self.pad_tokens(&tokens);
+        let input_tensor = Tensor::from_vec(
+            padded_tokens.clone(),
+            (1, padded_tokens.len()),
+            &self.config.device,
+        )?;
+
+        let embeddings = self.run_embeddings_with_inputs(&input_tensor)?;
+        
+        // STEP 2: PREFILL PHASE - Use granular method
+        // Create prefill inputs (matching our working tests)
+        let batch_size = self.config.batch_size;
+        let context_length = self.config.context_length;
+        let device = self.config.device.clone();
+
+        // Position IDs for full batch (0, 1, 2, ..., 63)
+        let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
+        let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), &device)?;
+
+        // Causal mask for full batch (1, 1, 64, 512)
+        let mut mask_data = vec![f32::NEG_INFINITY; batch_size * context_length];
+        for i in 0..batch_size {
+            for j in 0..=i.min(context_length - 1) {
+                mask_data[i * context_length + j] = 0.0;
+            }
+        }
+        let causal_mask = Tensor::from_vec(mask_data, (1, 1, batch_size, context_length), &device)?;
+
+        // Current pos is the last actual token position (seq_len - 1)
+        let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), &device)?;
+
+        // Run prefill using granular method
+        let _prefill_output = self.run_ffn_prefill_with_inputs(
+            &embeddings,
+            &position_ids,
+            &causal_mask,
+            &current_pos
+        )?;
+        
+        println!("✅ Prefill using granular method complete - KV cache populated");
+
+        // STEP 3: INFER PHASE - Use granular method
+        // Get embedding for the last token
+        let last_token_tensor = Tensor::from_vec(vec![tokens[tokens.len() - 1]], (1, 1), &device)?;
+        let last_token_embedding = self.run_embeddings_with_inputs(&last_token_tensor)?;
+        
+        // Create infer inputs (matching our working tests)
+        let current_position = sequence_length - 1; // CRITICAL: Use last token position
+        let update_mask = self.create_update_mask(current_position, context_length)?;
+        let infer_position_ids = Tensor::from_vec(vec![current_position as i64], (1,), &device)?;
+        let infer_causal_mask = self.create_position_causal_mask(current_position, context_length)?;
+        let infer_current_pos = infer_position_ids.clone();
+
+        // Run infer using granular method
+        let infer_output = self.run_ffn_infer_with_inputs(
+            &last_token_embedding,
+            &update_mask,
+            &infer_position_ids,
+            &infer_causal_mask,
+            &infer_current_pos
+        )?;
+
+        println!("✅ Infer using granular method complete");
+
+        // STEP 4: LM HEAD - Use granular method
+        let logits = self.run_lm_head_with_inputs(&infer_output)?;
+
         // Extract next token using argmax
+        let flat_logits = logits.squeeze(0)?.squeeze(0)?;
         let logits_vec = flat_logits.to_vec1::<f32>()?;
 
         let next_token = logits_vec
@@ -324,7 +371,98 @@ impl QwenModel {
             .map(|(i, _)| i as i64)
             .unwrap();
 
+        println!("🎯 Generated token: {} using granular methods", next_token);
         Ok(next_token)
+    }
+
+    /// Run prefill phase to populate KV cache for all tokens in sequence
+    /// This replicates the exact prefill behavior from our working tests
+    pub fn run_prefill_phase(
+        &mut self,
+        embeddings: &Tensor,
+        sequence_length: usize,
+    ) -> Result<(), CandleError> {
+        if self.unified_state.is_none() {
+            self.initialize_states()?;
+        }
+
+        let batch_size = self.config.batch_size; // 64
+        let context_length = self.config.context_length; // 512
+        let device = &self.config.device;
+
+        println!("⚡ Running prefill for {} tokens (padded to {} batch) to populate KV cache", sequence_length, batch_size);
+
+        // Create position IDs for the full batch (0, 1, 2, ..., 63)
+        // Note: We use the full batch size, not just sequence_length
+        let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
+        let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), device)?;
+
+        // Create causal mask for the full batch (1, 1, 64, 512)
+        // Each row allows attention to positions up to that token's position
+        let mut mask_data = vec![f32::NEG_INFINITY; batch_size * context_length];
+        for i in 0..batch_size {
+            for j in 0..=i.min(context_length - 1) {
+                mask_data[i * context_length + j] = 0.0;
+            }
+        }
+        let causal_mask = Tensor::from_vec(mask_data, (1, 1, batch_size, context_length), device)?;
+
+        // Current pos is the last actual token position (seq_len - 1)
+        let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
+
+        // Run prefill with full batch embeddings (already padded to 64)
+        let inputs = vec![embeddings, &position_ids, &causal_mask, &current_pos];
+        let state = self.unified_state.as_mut().unwrap();
+        let _prefill_output = self.ffn_prefill.predict_with_state(&inputs, state)?;
+
+        println!("✅ Prefill complete - KV cache populated for positions 0..{}", sequence_length - 1);
+        Ok(())
+    }
+
+    /// Generate next token using FFN infer with populated state
+    /// This replicates the exact infer behavior from our working tests
+    /// CRITICAL: Uses the SAME state object that was populated during prefill
+    pub fn generate_next_token_with_infer(
+        &mut self,
+        token_embedding: &Tensor,
+        current_position: usize,
+    ) -> Result<Tensor, CandleError> {
+        let context_length = self.config.context_length;
+        let device = &self.config.device;
+
+        println!("⚡ Running infer for position {} using SHARED state from prefill (FIXED: last token pos)", current_position);
+
+        // CRITICAL: We must use the SAME state that was populated by prefill!
+        // Use the shared state that was populated during prefill
+        if self.unified_state.is_none() {
+            return Err(CandleError::Msg("No unified state available - prefill must be run first".to_string()));
+        }
+        println!("🔄 Using SHARED state populated by prefill (like working tests)");
+
+        // Create infer inputs (matching our working test exactly)
+        let update_mask = self.create_update_mask(current_position, context_length)?;
+        let position_ids = Tensor::from_vec(vec![current_position as i64], (1,), device)?;
+        let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
+        let current_pos = position_ids.clone();
+
+        // Run infer to get hidden states using the shared populated state
+        let inputs = vec![
+            token_embedding,
+            &update_mask,
+            &position_ids,
+            &causal_mask,
+            &current_pos,
+        ];
+        let state = self.unified_state.as_mut().unwrap(); // Use the UNIFIED state!
+        let hidden_states = self.ffn_infer.predict_with_state(&inputs, state)?;
+
+        println!("✅ Infer complete - processing through LM head");
+
+        // Run through LM head to get logits (16 chunks)
+        let lm_outputs = self.lm_head.forward_all(&[&hidden_states])?;
+        let combined_logits = self.combine_lm_head_outputs(lm_outputs)?;
+
+        Ok(combined_logits)
     }
 
     /// Generate text using temperature sampling
@@ -359,9 +497,9 @@ impl QwenModel {
 
         // Continue generating
         for i in 1..max_tokens {
-            // Create single token embedding
+            // Create single token embedding using granular method
             let token_tensor = Tensor::from_vec(vec![next_token], (1, 1), &self.config.device)?;
-            let token_embedding = self.embeddings.forward(&[&token_tensor])?;
+            let token_embedding = self.run_embeddings_with_inputs(&token_tensor)?;
 
             let logits = self.generate_next_token(&token_embedding, i)?;
             
@@ -417,5 +555,89 @@ impl QwenModel {
     /// Get tokenizer reference
     pub fn tokenizer(&self) -> &Tokenizer {
         &self.tokenizer
+    }
+
+    // ========== GRANULAR PIPELINE METHODS ==========
+    // These methods expose each step of the pipeline for testing and debugging
+    
+    /// Run FFN prefill phase with exact inputs (for testing)
+    pub fn run_ffn_prefill_with_inputs(
+        &mut self,
+        hidden_states: &Tensor,
+        position_ids: &Tensor, 
+        causal_mask: &Tensor,
+        current_pos: &Tensor,
+    ) -> Result<Tensor, CandleError> {
+        if self.unified_state.is_none() {
+            self.initialize_states()?;
+        }
+        
+        let inputs = [hidden_states, position_ids, causal_mask, current_pos];
+        let state = self.unified_state.as_mut().unwrap(); // Use the same unified state
+        let output = self.ffn_prefill.predict_with_state(&inputs, state)?;
+        
+        Ok(output)
+    }
+    
+    /// Run FFN infer phase with exact inputs (for testing)
+    pub fn run_ffn_infer_with_inputs(
+        &mut self,
+        hidden_states: &Tensor,
+        update_mask: &Tensor,
+        position_ids: &Tensor,
+        causal_mask: &Tensor, 
+        current_pos: &Tensor,
+    ) -> Result<Tensor, CandleError> {
+        if self.unified_state.is_none() {
+            return Err(CandleError::Msg("No unified state available - prefill must be run first".to_string()));
+        }
+        
+        let inputs = [hidden_states, update_mask, position_ids, causal_mask, current_pos];
+        let state = self.unified_state.as_mut().unwrap(); // Use the SAME unified state as prefill
+        let output = self.ffn_infer.predict_with_state(&inputs, state)?;
+        
+        Ok(output)
+    }
+    
+    /// Run LM head with exact inputs (for testing)
+    pub fn run_lm_head_with_inputs(&self, hidden_states: &Tensor) -> Result<Tensor, CandleError> {
+        let lm_outputs = self.lm_head.forward_all(&[hidden_states])?;
+        let combined_logits = self.combine_lm_head_outputs(lm_outputs)?;
+        Ok(combined_logits)
+    }
+    
+    /// Get direct access to embeddings model (for testing)
+    pub fn run_embeddings_with_inputs(&self, input_ids: &Tensor) -> Result<Tensor, CandleError> {
+        self.embeddings.forward(&[input_ids])
+    }
+    
+    /// Create state objects (for testing)
+    pub fn create_fresh_states(&mut self) -> Result<(), CandleError> {
+        self.initialize_states()
+    }
+    
+    /// Reset states (for testing)
+    pub fn clear_states(&mut self) -> Result<(), CandleError> {
+        self.reset_states()
+    }
+
+    /// Debug method: Get FFN output directly (for testing) - DEPRECATED
+    /// Use run_ffn_infer_with_inputs for new code
+    pub fn debug_get_ffn_output(
+        &mut self,
+        token_embedding: &Tensor,
+        current_position: usize,
+    ) -> Result<Tensor, CandleError> {
+        let context_length = self.config.context_length;
+        let device = &self.config.device;
+
+        // Create infer inputs using the same methods as production
+        let update_mask = self.create_update_mask(current_position, context_length)?;
+        let position_ids = Tensor::from_vec(vec![current_position as i64], (1,), device)?;
+        let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
+        let current_pos = position_ids.clone();
+
+        // Use the new granular method
+        self.run_ffn_infer_with_inputs(token_embedding, &update_mask, &position_ids, &causal_mask, &current_pos)
     }
 }

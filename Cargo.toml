@@ -29,6 +29,7 @@ clap = { version = "4.0", features = ["derive"] }
 rand = "0.8"
 dirs = "5.0"
 git2 = "0.18"
+half = "2.4"
 
 [dev-dependencies]
 clap = { version = "4.0", features = ["derive"] }
