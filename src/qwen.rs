@@ -311,11 +311,13 @@ impl QwenModel {
         let last_embedding = self.embeddings.forward(&[&last_token_tensor])?;
         let logits = self.generate_next_token(&last_embedding, tokens.len())?;
 
+        // Flatten logits to 1D for processing (handles 3D tensors from LM head)
+        let flat_logits = logits.squeeze(0)?.squeeze(0)?;
+        
         // Extract next token using argmax
-        let logits_vec = logits.to_vec3::<f32>()?;
-        let next_token_logits = &logits_vec[0][0];
+        let logits_vec = flat_logits.to_vec1::<f32>()?;
 
-        let next_token = next_token_logits
+        let next_token = logits_vec
             .iter()
             .enumerate()
             .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
@@ -332,7 +334,7 @@ impl QwenModel {
         max_tokens: usize,
         temperature: f32,
     ) -> Result<String, CandleError> {
-        let tokens = self.generate_tokens(text, max_tokens, temperature)?;
+        let tokens = self.generate_tokens(text, max_tokens, temperature, None)?;
 
         // Decode tokens back to text
         let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
@@ -341,12 +343,13 @@ impl QwenModel {
             .map_err(|e| CandleError::Msg(format!("Failed to decode tokens: {}", e)))
     }
 
-    /// Generate multiple tokens using temperature sampling
+    /// Generate multiple tokens using temperature sampling with optional top-k
     pub fn generate_tokens(
         &mut self,
         text: &str,
         max_tokens: usize,
         temperature: f32,
+        top_k: Option<usize>,
     ) -> Result<Vec<i64>, CandleError> {
         let mut generated_tokens = Vec::new();
 
@@ -361,12 +364,20 @@ impl QwenModel {
             let token_embedding = self.embeddings.forward(&[&token_tensor])?;
 
             let logits = self.generate_next_token(&token_embedding, i)?;
+            
+            // Flatten logits to 1D for sampling utilities (handles 3D tensors from LM head)
+            let flat_logits = logits.squeeze(0)?.squeeze(0)?;
 
             // Use shared sampling utility
-            let next_token = if temperature <= 0.0 {
-                sampling::greedy_sample(&logits)?
+            let next_token = if let Some(k) = top_k {
+                // Top-k sampling with temperature
+                sampling::sample_top_k(&flat_logits, k, temperature)?
+            } else if temperature <= 0.0 {
+                // Greedy sampling
+                sampling::greedy_sample(&flat_logits)?
             } else {
-                sampling::sample_with_temperature(&logits, temperature)?
+                // Temperature sampling
+                sampling::sample_with_temperature(&flat_logits, temperature)?
             };
 
             generated_tokens.push(next_token);
@@ -379,6 +390,23 @@ impl QwenModel {
         }
 
         Ok(generated_tokens)
+    }
+
+    /// Generate text using top-k sampling
+    pub fn generate_text_top_k(
+        &mut self,
+        text: &str,
+        max_tokens: usize,
+        k: usize,
+        temperature: f32,
+    ) -> Result<String, CandleError> {
+        let tokens = self.generate_tokens(text, max_tokens, temperature, Some(k))?;
+
+        // Decode tokens back to text
+        let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
+        self.tokenizer
+            .decode(&token_ids, false)
+            .map_err(|e| CandleError::Msg(format!("Failed to decode tokens: {}", e)))
     }
 
     /// Get model configuration
