@@ -5,8 +5,7 @@
 
 use anyhow::Result;
 use candle_core::{Device, Tensor};
-use candle_coreml::{get_local_or_remote_file, Config as CoreMLConfig, CoreMLModel};
-use hf_hub::{api::sync::Api, Repo, RepoType};
+use candle_coreml::{ensure_model_downloaded, Config as CoreMLConfig, CoreMLModel};
 use tokenizers::Tokenizer;
 
 const QWEN_VOCAB_SIZE: usize = 151936;
@@ -19,30 +18,34 @@ struct QwenTestSetup {
 
 impl QwenTestSetup {
     async fn new() -> Result<Self> {
-        let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4";
+        let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
 
-        // Setup HuggingFace API
-        let repo = Repo::with_revision(model_id.to_string(), RepoType::Model, "main".to_string());
-        let api = Api::new()?;
-        let api_repo = api.repo(repo);
-
-        // Download model files
-        let model_path = get_local_or_remote_file("model.mlmodelc", &api_repo)
-            .or_else(|_| get_local_or_remote_file("model.mlpackage", &api_repo))?;
-
-        let tokenizer_path = get_local_or_remote_file("tokenizer.json", &api_repo)?;
+        // Download model using our ensure_model_downloaded function
+        let model_dir = ensure_model_downloaded(model_id, true)?;
+        
+        // Get paths to specific model files
+        let model_path = model_dir.join("qwen_embeddings.mlmodelc");
+        let tokenizer_path = model_dir.join("tokenizer.json");
+        
+        // Verify files exist
+        if !model_path.exists() {
+            return Err(anyhow::Error::msg(format!("Embeddings model not found: {}", model_path.display())));
+        }
+        if !tokenizer_path.exists() {
+            return Err(anyhow::Error::msg(format!("Tokenizer not found: {}", tokenizer_path.display())));
+        }
 
         // Load tokenizer
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
             .map_err(|e| anyhow::Error::msg(format!("Failed to load tokenizer: {}", e)))?;
 
-        // Configure and load model
+        // Configure and load embeddings model
         let config = CoreMLConfig {
             input_names: vec!["input_ids".to_string()],
-            output_name: "output".to_string(),
+            output_name: "hidden_states".to_string(),
             max_sequence_length: 512,
             vocab_size: QWEN_VOCAB_SIZE,
-            model_type: "qwen-test".to_string(),
+            model_type: "qwen-embeddings".to_string(),
         };
 
         let model = CoreMLModel::load_from_file(&model_path, &config)?;

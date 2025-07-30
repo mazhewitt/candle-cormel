@@ -2,6 +2,7 @@
 
 use candle_core::{DType, Device, Tensor};
 use candle_coreml::conversion::tensor_to_mlmultiarray;
+use candle_coreml::ensure_model_downloaded;
 
 #[test]
 fn test_i64_to_int32_conversion() -> Result<(), Box<dyn std::error::Error>> {
@@ -117,7 +118,9 @@ fn test_batch_tensor_conversion() -> Result<(), Box<dyn std::error::Error>> {
 fn test_embeddings_model_direct() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔧 Testing direct embeddings model with simple input");
 
-    let cache_dir = "/Users/mazdahewitt/projects/candle-coreml/qwen-model";
+    // Download model if not already cached
+    let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4";
+    let cache_dir = ensure_model_downloaded(model_id, true)?;
     let device = Device::Cpu;
 
     // Simple single token test first
@@ -135,7 +138,7 @@ fn test_embeddings_model_direct() -> Result<(), Box<dyn std::error::Error>> {
     {
         use candle_coreml::{Config, CoreMLModel};
 
-        let embeddings_path = format!("{}/qwen_embeddings.mlmodelc", cache_dir);
+        let embeddings_path = cache_dir.join("qwen_embeddings.mlmodelc");
 
         let config = Config {
             input_names: vec!["input_ids".to_string()],
