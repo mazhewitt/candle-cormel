@@ -2,6 +2,7 @@
 
 use candle_core::{Device, Error as CandleError, Tensor};
 use half::f16;
+use tracing::{debug, info, trace, warn};
 
 #[cfg(target_os = "macos")]
 use objc2_core_ml::{MLMultiArray, MLMultiArrayDataType};
@@ -70,7 +71,7 @@ pub fn convert_mlmultiarray_to_tensor(
             // Handle Float16 and other unknown types
             if data_type_raw == 65552 {
                 // Float16 type - extract raw bytes and convert properly
-                println!("🔧 Detected Float16 data type (65552), using proper half-precision conversion");
+                debug!("Detected Float16 data type (65552), using proper half-precision conversion");
                 
                 // Get raw bytes from MLMultiArray
                 let data_ptr = marray.dataPointer();
@@ -86,7 +87,7 @@ pub fn convert_mlmultiarray_to_tensor(
                 }
             } else {
                 // For other unknown types, try floatValue as fallback
-                println!("⚠️ Unknown MLMultiArray data type: {} (raw: {}), using floatValue fallback", 
+                warn!("Unknown MLMultiArray data type: {} (raw: {}), using floatValue fallback", 
                         format!("{:?}", data_type), data_type_raw);
                 
                 for i in 0..count {
@@ -418,6 +419,7 @@ mod tests {
         #[test]
         fn test_convert_actual_float16_mlarray() {
             use half::f16;
+            use tracing::{debug, info};
             
             let device = Device::Cpu;
             
@@ -468,9 +470,9 @@ mod tests {
             assert_eq!(tensor_data[0], pi_f16_expected, "π should match f16 precision");
             assert!((tensor_data[0] - test_values[0]).abs() > 0.0001, "π should lose precision in f16");
             
-            println!("✅ Actual Float16 MLMultiArray conversion test passed!");
-            println!("   Original values: {:?}", test_values);
-            println!("   F16 converted:   {:?}", tensor_data);
+            info!("Actual Float16 MLMultiArray conversion test passed!");
+            debug!("   Original values: {:?}", test_values);
+            debug!("   F16 converted:   {:?}", tensor_data);
             
           
         }
@@ -483,7 +485,7 @@ mod tests {
         fn test_conversion_functions_not_available() {
             // This test just ensures the module compiles on non-macOS platforms
             // The actual conversion functions are only available on macOS
-            println!("Conversion functions are only available on macOS");
+            info!("Conversion functions are only available on macOS");
         }
     }
 }
