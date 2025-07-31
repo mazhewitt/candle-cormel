@@ -30,6 +30,7 @@ rand = "0.8"
 dirs = "5.0"
 git2 = "0.18"
 half = "2.4"
+tracing = "0.1"
 
 [dev-dependencies]
 clap = { version = "4.0", features = ["derive"] }
@@ -82,4 +83,8 @@ path = "examples/qwen/qwen_demo_patterns.rs"
 [[example]]
 name = "clean_download_example"
 path = "examples/clean_download_example.rs"
+
+[[example]]
+name = "qwen_performance_benchmark"
+path = "examples/qwen/qwen_performance_benchmark.rs"
 
