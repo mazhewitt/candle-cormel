@@ -141,7 +141,7 @@ async fn test_tdd_pipeline_step_isolation() -> Result<()> {
     if tokens != py_input_vec {
         println!("❌ TOKENIZATION DIFFERS! This explains the end-to-end difference.");
         println!("   Rust and Python are processing different token sequences.");
-        return Ok(());
+        panic!("TOKENIZATION FAILURE: Rust tokens {:?} != Python tokens {:?}", tokens, py_input_vec);
     }
     println!("✅ Tokenization matches");
     
@@ -160,7 +160,7 @@ async fn test_tdd_pipeline_step_isolation() -> Result<()> {
         println!("❌ TDD STEP 1 FAILED: Embeddings differ");
         println!("   Root cause: Embeddings step produces different output");
         println!("   This explains why the end-to-end pipeline differs");
-        return Ok(());
+        panic!("EMBEDDINGS FAILURE: QwenModel embeddings do not match Python reference. Fix embeddings before testing other components.");
     }
     
     // ========== TDD STEP 2: PREFILL ==========
@@ -190,7 +190,7 @@ async fn test_tdd_pipeline_step_isolation() -> Result<()> {
     if !prefill_match {
         println!("❌ TDD STEP 2 FAILED: Prefill with Rust embeddings differs from Python");
         println!("   Root cause: Even with Python position/masks, Rust embeddings cause different prefill output");
-        return Ok(());
+        panic!("PREFILL FAILURE: QwenModel prefill does not match Python reference. This is the infinite values bug - check run_ffn_prefill_with_inputs().");
     }
     
     println!("✅ TDD STEP 2 PASSED: Prefill with Rust embeddings matches Python prefill output");
@@ -242,7 +242,7 @@ async fn test_tdd_pipeline_step_isolation() -> Result<()> {
             println!("   ➜ Issue: Rust uses different position IDs for infer phase");
         }
         
-        return Ok(());
+        panic!("INFER FAILURE: QwenModel infer does not match Python reference. This is the 55.18 difference bug - check run_ffn_infer_with_inputs().");
     }
     
     // ========== TDD STEP 3: LM HEAD ==========

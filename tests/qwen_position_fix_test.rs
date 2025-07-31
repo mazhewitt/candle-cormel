@@ -42,8 +42,9 @@ async fn test_qwen_position_fix() -> Result<()> {
             println!("   Different prediction - position fix may have changed something");
         }
         
-        // For now, don't fail - we're making progress
-        Ok(())
+        panic!("POSITION FIX TEST FAILED: Expected token 5562 ('dog'), got token {} ('{}')", 
+               next_token, 
+               qwen_model.tokenizer().decode(&[next_token as u32], false).unwrap_or("???".to_string()));
     }
 }
 
