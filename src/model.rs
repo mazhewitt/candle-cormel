@@ -490,6 +490,7 @@ impl CoreMLModel {
         autoreleasepool(|_| unsafe {
             let protocol_provider = ProtocolObject::from_ref(provider);
 
+
             self.inner
                 .predictionFromFeatures_usingState_error(protocol_provider, state.inner())
                 .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {:?}", e)))

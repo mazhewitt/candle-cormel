@@ -282,7 +282,7 @@ impl QwenModel {
 
     /// Generate a single token from text input - REFACTORED TO USE GRANULAR METHODS
     /// Uses the proven granular methods that work perfectly in our tests
-    /// Generate a single token from text input - **FIXED** to use proper prefill → infer sequence
+    /// Generate a single token from text input - **FIXED** to match Python reference exactly
     pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         // Reset states for new sequence
         self.reset_states()?;
@@ -291,7 +291,7 @@ impl QwenModel {
         let tokens = self.tokenize(text)?;
         let sequence_length = tokens.len();
         
-        println!("🔄 FIXED forward_text: Processing {} tokens with proper prefill → infer sequence", sequence_length);
+        println!("🔄 FIXED forward_text: Using EXACT Python reference approach for {} tokens", sequence_length);
 
         // STEP 1: EMBEDDINGS - Get embeddings for full sequence (padded to batch size)
         let padded_tokens = self.pad_tokens(&tokens);
@@ -303,50 +303,80 @@ impl QwenModel {
 
         let embeddings = self.run_embeddings_with_inputs(&input_tensor)?;
         
-        // STEP 2: **CRITICAL FIX** - Run prefill phase for ALL tokens to populate KV cache
-        // This matches Python's approach: process entire sequence through prefill
-        self.run_prefill_phase(&embeddings, sequence_length)?;
+        // STEP 2: **CRITICAL FIX** - Use EXACT Python prefill approach from TDD test
+        // Generate position/mask tensors EXACTLY like Python does
+        let batch_size = self.config.batch_size; // 64
+        let context_length = self.config.context_length; // 512
+        let device = self.config.device.clone();
         
-        println!("✅ Prefill complete - KV cache properly populated for positions 0..{}", sequence_length - 1);
+        // Create position IDs for the full batch (0, 1, 2, ..., 63) - EXACTLY like Python
+        let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
+        let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), &device)?;
 
-        // STEP 3: **CRITICAL FIX** - Use infer for generating the NEXT token
-        // Now we use the properly populated unified state
-        let last_token_tensor = Tensor::from_vec(vec![tokens[tokens.len() - 1]], (1, 1), &self.config.device)?;
-        let last_token_embedding = self.run_embeddings_with_inputs(&last_token_tensor)?;
-        
-        // Create infer inputs for single token generation
-        let current_position = sequence_length; // Position to generate from (not last token position)
-        let update_mask = self.create_update_mask(current_position, self.config.context_length)?;
-        let position_ids = Tensor::from_vec(vec![current_position as i64], (1,), &self.config.device)?;
-        let causal_mask = self.create_position_causal_mask(current_position, self.config.context_length)?;
-        let current_pos = position_ids.clone();
+        // Create causal mask for the full batch (1, 1, 64, 512) - EXACTLY like Python
+        let mut mask_data = vec![f32::NEG_INFINITY; batch_size * context_length];
+        for i in 0..batch_size {
+            for j in 0..=i.min(context_length - 1) {
+                mask_data[i * context_length + j] = 0.0;
+            }
+        }
+        let causal_mask = Tensor::from_vec(mask_data, (1, 1, batch_size, context_length), &device)?;
 
-        // Run infer using the **properly populated unified state**
-        let infer_output = self.run_ffn_infer_with_inputs(
-            &last_token_embedding,
-            &update_mask,
+        // Current pos starts from 0 for prefill - EXACTLY like Python  
+        let current_pos = Tensor::from_vec(vec![0i64], (1,), &device)?;
+
+        // Run prefill using EXACT same method as TDD test
+        let _prefill_output = self.run_ffn_prefill_with_inputs(
+            &embeddings,
             &position_ids,
             &causal_mask,
             &current_pos
         )?;
+        
+        println!("✅ Prefill complete using Python reference approach");
 
-        println!("✅ Infer complete - generating next token from populated KV cache");
+        // STEP 3: **CRITICAL FIX** - Use EXACT Python infer approach from TDD test
+        let last_token_tensor = Tensor::from_vec(vec![tokens[tokens.len() - 1]], (1, 1), &device)?;
+        let last_token_embedding = self.run_embeddings_with_inputs(&last_token_tensor)?;
+        
+        // Create infer inputs EXACTLY like Python reference
+        let current_position = sequence_length; // Position to generate from
+        let update_mask = self.create_update_mask(current_position, context_length)?;
+        let position_ids_infer = Tensor::from_vec(vec![current_position as i64], (1,), &device)?;
+        let causal_mask_infer = self.create_position_causal_mask(current_position, context_length)?;
+        let current_pos_infer = position_ids_infer.clone();
 
-        // STEP 4: LM HEAD - Use granular method
+        // Run infer using EXACT same method as TDD test
+        let infer_output = self.run_ffn_infer_with_inputs(
+            &last_token_embedding,
+            &update_mask,
+            &position_ids_infer,
+            &causal_mask_infer,
+            &current_pos_infer
+        )?;
+
+        println!("✅ Infer complete using Python reference approach");
+
+        // STEP 4: LM HEAD - Same as TDD test
         let logits = self.run_lm_head_with_inputs(&infer_output)?;
 
-        // Extract next token using argmax
+        // Extract next token using EXACT same logic as TDD test
         let flat_logits = logits.squeeze(0)?.squeeze(0)?;
         let logits_vec = flat_logits.to_vec1::<f32>()?;
 
-        let next_token = logits_vec
-            .iter()
-            .enumerate()
-            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-            .map(|(i, _)| i as i64)
-            .unwrap();
+        // Use EXACT same tie-breaking logic as TDD test
+        let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &score)| (i, score)).collect();
+        indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let next_token = indexed_logits[0].0 as i64;
 
-        println!("🎯 FIXED: Generated token {} using proper prefill → infer pipeline", next_token);
+        // Show top predictions for debugging (like TDD test)
+        println!("🔍 Top 5 forward_text predictions:");
+        for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
+            let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
+            println!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
+        }
+
+        println!("🎯 FIXED: Generated token {} using EXACT TDD test tie-breaking logic", next_token);
         Ok(next_token)
     }
 
@@ -607,10 +637,46 @@ pub fn generate_tokens(
         println!("🔧 DEBUG: Infer inputs - position_ids: {:?}, current_pos: {:?}", 
                  position_ids.to_vec1::<f32>().unwrap_or_default(), 
                  current_pos.to_vec1::<f32>().unwrap_or_default());
+
+        // DEBUGGING: Validate all inputs before CoreML call
+        println!("🔍 INFER INPUT VALIDATION:");
+        println!("  hidden_states: shape={:?}, sample={:?}", 
+                 hidden_states.shape(), 
+                 hidden_states.to_vec3::<f32>().unwrap_or_default()[0][0][..3.min(hidden_states.dim(2).unwrap_or(0))].to_vec());
+        let update_nonzeros = if let Ok(flat) = update_mask.flatten_all() {
+            if let Ok(vec) = flat.to_vec1::<f32>() {
+                vec.iter().filter(|&&x| x != 0.0).count()
+            } else { 0 }
+        } else { 0 };
+        println!("  update_mask: shape={:?}, nonzeros={}", update_mask.shape(), update_nonzeros);
         
+        println!("  position_ids: shape={:?}, values={:?}", 
+                 position_ids.shape(),
+                 position_ids.to_vec1::<f32>().unwrap_or_default());
+        
+        let causal_nonzeros = if let Ok(flat) = causal_mask.flatten_all() {
+            if let Ok(vec) = flat.to_vec1::<f32>() {
+                vec.iter().filter(|&&x| x != 0.0).count()
+            } else { 0 }
+        } else { 0 };
+        println!("  causal_mask: shape={:?}, nonzeros={}", causal_mask.shape(), causal_nonzeros);
+
         let inputs = [hidden_states, update_mask, position_ids, causal_mask, current_pos];
         let state = self.unified_state.as_mut().unwrap(); // Use the SAME unified state as prefill
+        
+        println!("🔧 About to call CoreML infer model...");
         let output = self.ffn_infer.predict_with_state(&inputs, state)?;
+        
+        // DEBUGGING: Check output immediately after CoreML call
+        let output_sample = output.to_vec3::<f32>().unwrap_or_default()[0][0][..5.min(output.dim(2).unwrap_or(0))].to_vec();
+        println!("🔍 INFER OUTPUT VALIDATION:");
+        println!("  output: shape={:?}, sample={:?}", output.shape(), output_sample);
+        
+        if output_sample.iter().all(|&x| x == 0.0) {
+            println!("❌ ZEROS DETECTED: CoreML infer model returned all zeros!");
+        } else {
+            println!("✅ NON-ZERO OUTPUT: CoreML infer model returned valid data");
+        }
         
         Ok(output)
     }

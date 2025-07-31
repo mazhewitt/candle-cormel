@@ -1,4 +1,4 @@
 name: 04_infer_update_mask
 shape: (1, 1, 512, 1)
-dtype: float16
+dtype: float32
 min: 0.0, max: 1.0, mean: 0.001953125

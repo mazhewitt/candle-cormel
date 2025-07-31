@@ -1,4 +1,4 @@
 name: 05_lmhead_input
 shape: (1, 1, 1024)
 dtype: float16
-min: -43.5, max: 24.15625, mean: 0.0936279296875
+min: -49.625, max: 21.90625, mean: 0.057098388671875
