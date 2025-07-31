@@ -176,25 +176,31 @@ def capture_tensors_from_pipeline(model_dir, prompt="The quick brown fox jumps o
             for chunk_idx, ffn_model in enumerate(ffn_models):
                 if isinstance(ffn_model, dict):
                     inputs = {
-                        'hidden_states': hidden_states.numpy().astype(np.float16),
+                        'hidden_states': hidden_states.numpy().astype(np.float32),  # Use float32
                         'position_ids': position_ids.numpy().astype(np.int32),
-                        'causal_mask': batch_causal_mask.numpy().astype(np.float16),
+                        'causal_mask': batch_causal_mask.numpy().astype(np.float32),  # Use float32
                         'current_pos': np.array([batch_pos], dtype=np.int32)
                     }
                     
                     # Capture inputs to first FFN chunk
                     if chunk_idx == 0 and batch_pos == 0:
+                        print(f"🔍 Prefill inputs for chunk {chunk_idx}:")
+                        print(f"  hidden_states: shape={inputs['hidden_states'].shape}, sample={inputs['hidden_states'][0,0,:3]}")
+                        print(f"  position_ids: shape={inputs['position_ids'].shape}, sample={inputs['position_ids'][:5]}")
+                        print(f"  current_pos: {inputs['current_pos']}")
+                        
                         save_tensor(inputs['hidden_states'], "03_ffn_prefill_hidden_input", output_dir)
                         save_tensor(inputs['position_ids'], "03_ffn_prefill_position_ids", output_dir)
                         save_tensor(inputs['causal_mask'], "03_ffn_prefill_causal_mask", output_dir)
                         save_tensor(inputs['current_pos'], "03_ffn_prefill_current_pos", output_dir)
                     
                     output = ffn_model['prefill'].predict(inputs, state)
-                    hidden_states = torch.from_numpy(output['output_hidden_states'])
+                    hidden_states = torch.from_numpy(output['output_hidden_states']).float()  # Ensure float32
                     
                     # Capture output from first FFN chunk, first batch
                     if chunk_idx == 0 and batch_pos == 0:
                         save_tensor(hidden_states, "03_ffn_prefill_output", output_dir)
+                        print(f"🔍 Prefill output for chunk {chunk_idx}: shape={hidden_states.shape}, sample={hidden_states[0,0,:5].tolist()}")
             
             prefill_outputs.append(hidden_states)
             batch_pos = batch_end
@@ -209,20 +215,23 @@ def capture_tensors_from_pipeline(model_dir, prompt="The quick brown fox jumps o
         
         print(f"Current token: {current_token.item()} ('{tokenizer.decode(current_token[0])}')")
         
-        # Run embeddings on single token
+        # Run embeddings on single token - CRITICAL: Use float32 not float16
         single_token_embeddings = torch.from_numpy(
             embed_model.predict({'input_ids': current_token.numpy().astype(np.int32)})['hidden_states']
-        )
+        ).float()  # Ensure float32
         
         save_tensor(current_token, "04_infer_input_token", output_dir)
         save_tensor(single_token_embeddings, "04_infer_token_embeddings", output_dir)
         
-        # Create masks for infer phase
-        pos = context_pos  # Position for next token
-        update_mask = torch.zeros((1, 1, context_length, 1), dtype=torch.float16)
-        update_mask[0, 0, pos-1, 0] = 1.0
-        position_ids = torch.tensor([pos-1], dtype=torch.int32)
-        single_causal_mask = causal_mask[:, :, pos-1:pos, :]
+        print(f"🔍 Single token embeddings: shape={single_token_embeddings.shape}, dtype={single_token_embeddings.dtype}")
+        print(f"🔍 Sample values: {single_token_embeddings[0, 0, :5].tolist()}")
+        
+        # Create masks for infer phase - CRITICAL: Fix position calculation
+        pos = context_pos  # Position for next token (7 for our test case)
+        update_mask = torch.zeros((1, 1, context_length, 1), dtype=torch.float32)  # Use float32
+        update_mask[0, 0, pos, 0] = 1.0  # Update at position pos, not pos-1
+        position_ids = torch.tensor([pos], dtype=torch.int32)  # Position pos, not pos-1
+        single_causal_mask = causal_mask[:, :, pos:pos+1, :].float()  # Use float32 and correct slice
         
         save_tensor(update_mask, "04_infer_update_mask", output_dir)
         save_tensor(position_ids, "04_infer_position_ids", output_dir)
@@ -232,24 +241,34 @@ def capture_tensors_from_pipeline(model_dir, prompt="The quick brown fox jumps o
         hidden_states = single_token_embeddings
         for chunk_idx, ffn_model in enumerate(ffn_models):
             if isinstance(ffn_model, dict):
+                # CRITICAL: Use float32 precision throughout to avoid corruption
                 inputs = {
-                    'hidden_states': hidden_states.numpy().astype(np.float16),
-                    'update_mask': update_mask.numpy().astype(np.float16),
+                    'hidden_states': hidden_states.numpy().astype(np.float32),  # Use float32
+                    'update_mask': update_mask.numpy().astype(np.float32),      # Use float32
                     'position_ids': position_ids.numpy().astype(np.int32),
-                    'causal_mask': single_causal_mask.numpy().astype(np.float16),
+                    'causal_mask': single_causal_mask.numpy().astype(np.float32),  # Use float32
                     'current_pos': position_ids.numpy().astype(np.int32)
                 }
+                
+                # Debug: Print input values to verify they're reasonable
+                if chunk_idx == 0:
+                    print(f"🔍 Infer inputs for chunk {chunk_idx}:")
+                    print(f"  hidden_states: shape={inputs['hidden_states'].shape}, sample={inputs['hidden_states'][0,0,:3]}")
+                    print(f"  update_mask: shape={inputs['update_mask'].shape}, nonzero_count={np.count_nonzero(inputs['update_mask'])}")
+                    print(f"  position_ids: {inputs['position_ids']}")
+                    print(f"  causal_mask: shape={inputs['causal_mask'].shape}, sample={inputs['causal_mask'][0,0,0,:5]}")
                 
                 # Capture first chunk inputs
                 if chunk_idx == 0:
                     save_tensor(inputs['hidden_states'], "04_infer_ffn_hidden_input", output_dir)
                 
                 output = ffn_model['infer'].predict(inputs, state)
-                hidden_states = torch.from_numpy(output['output_hidden_states'])
+                hidden_states = torch.from_numpy(output['output_hidden_states']).float()  # Ensure float32
                 
                 # Capture first chunk output
                 if chunk_idx == 0:
                     save_tensor(hidden_states, "04_infer_ffn_output", output_dir)
+                    print(f"🔍 Infer output for chunk {chunk_idx}: shape={hidden_states.shape}, sample={hidden_states[0,0,:5].tolist()}")
         
         print(f"✅ Infer phase complete, hidden states shape: {hidden_states.shape}")
         

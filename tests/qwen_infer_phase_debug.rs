@@ -29,7 +29,11 @@ fn load_numpy_tensor(path: &str, expected_shape: &[usize], device: &Device) -> R
     let expected_elements: usize = expected_shape.iter().product();
     
     if data.len() == expected_elements * 4 {
-        if path.contains("input") || path.contains("token") || path.contains("position") {
+        // Better detection: only treat as int32 if it's specifically input_ids, position_ids, etc.
+        // NOT token_embeddings which is float32 data
+        if (path.contains("input_ids") || path.contains("input_token") || 
+            path.contains("position_ids") || path.contains("current_pos")) &&
+            !path.contains("embeddings") {
             // int32 data
             let mut values = Vec::with_capacity(expected_elements);
             for chunk in data.chunks_exact(4) {
@@ -39,7 +43,7 @@ fn load_numpy_tensor(path: &str, expected_shape: &[usize], device: &Device) -> R
             }
             return Tensor::from_vec(values, expected_shape, device).map_err(Into::into);
         } else {
-            // float32 data  
+            // float32 data (including token_embeddings!)
             let mut values = Vec::with_capacity(expected_elements);
             for chunk in data.chunks_exact(4) {
                 let bytes = [chunk[0], chunk[1], chunk[2], chunk[3]];
@@ -205,7 +209,14 @@ async fn test_qwen_infer_phase_isolation() -> Result<()> {
     println!("\n🔍 STEP 2: ISOLATED INFER PHASE - Using EXACT Python tensors");
     
     // Load the EXACT same infer inputs that Python used
+    println!("📥 Loading infer tensor files...");
     let py_infer_hidden = load_numpy_tensor("test_tensors/04_infer_token_embeddings.npy", &[1, 1, 1024], &device)?;
+    println!("✅ Loaded infer hidden: shape={:?}", py_infer_hidden.shape());
+    
+    // DEBUG: Check if the loaded tensor has reasonable values
+    let hidden_sample = py_infer_hidden.to_vec3::<f32>()?[0][0][0..5].to_vec();
+    println!("🔍 Loaded hidden_states sample: {:?}", hidden_sample);
+    
     let py_infer_update_mask = load_numpy_tensor("test_tensors/04_infer_update_mask.npy", &[1, 1, 512, 1], &device)?;
     let py_infer_position_ids = load_numpy_tensor("test_tensors/04_infer_position_ids.npy", &[1], &device)?;
     let py_infer_causal_mask = load_numpy_tensor("test_tensors/04_infer_causal_mask.npy", &[1, 1, 1, 512], &device)?;
