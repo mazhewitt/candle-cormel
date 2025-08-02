@@ -42,8 +42,9 @@ async fn test_qwen_architecture_success() -> Result<()> {
                     println!("⚠️ Token {} exists but couldn't decode", token);
                 }
                 
-                // Basic sanity check - token should be in valid range
-                assert!(token > 0 && token < 200000, "Token {} should be in reasonable range", token);
+                // Basic sanity check - token should be in valid range  
+                // Note: Token 0 is valid (maps to "!" for some prompts)
+                assert!(token >= 0 && token < 200000, "Token {} should be in reasonable range", token);
             }
             Err(e) => {
                 panic!("❌ QwenModel failed: {}", e);
