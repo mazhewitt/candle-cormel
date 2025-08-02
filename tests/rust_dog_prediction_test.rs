@@ -34,6 +34,7 @@ async fn test_rust_dog_prediction() -> Result<()> {
             let dog_token_ids: Vec<u32> = dog_tokens.get_ids().to_vec();
             println!("🔍 ' dog' tokenizes to: {:?}", dog_token_ids);
         }
+        panic!("Rust prediction did not match expected 'dog' token");
     }
     
     Ok(())

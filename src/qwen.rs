@@ -50,7 +50,6 @@ pub struct QwenModel {
     unified_state: Option<CoreMLState>, // Single shared state for both prefill and infer
     cached_causal_mask: Option<Tensor>, // Pre-computed causal mask (like chat.py)
     // Embeddings optimization
-    embeddings_cache: HashMap<Vec<i64>, Tensor>, // Cache for token sequence embeddings
     last_sequence_embeddings: Option<(Vec<i64>, Tensor)>, // Cache last full sequence
 }
 
@@ -127,7 +126,6 @@ impl QwenModel {
             config,
             unified_state: None, // Single shared state
             cached_causal_mask: None, // Will be computed on first use
-            embeddings_cache: HashMap::new(),
             last_sequence_embeddings: None,
         })
     }
@@ -191,12 +189,6 @@ impl QwenModel {
         }
     }
 
-    /// Create causal attention mask using shared utilities
-    pub fn create_causal_mask(&self, seq_len: usize) -> Result<Tensor, CandleError> {
-        // Create base mask and reshape to rank-4 for CoreML
-        let base_mask = mask::create_causal_mask(seq_len, &self.config.device)?;
-        base_mask.reshape((1, 1, seq_len, seq_len))
-    }
 
     /// Create position slice of causal mask for single token processing
     pub fn create_position_causal_mask(
@@ -303,64 +295,7 @@ impl QwenModel {
         Ok(None)
     }
 
-    /// Process sequence through FFN prefill phase
-    pub fn prefill_sequence(
-        &mut self,
-        embeddings: &Tensor,
-        sequence_length: usize,
-    ) -> Result<(), CandleError> {
-        if self.unified_state.is_none() {
-            self.initialize_states()?;
-        }
 
-        let context_length = self.config.context_length;
-        let device = &self.config.device;
-
-        // Process each token position through prefill
-        for pos in 0..sequence_length {
-            let token_embedding = embeddings.narrow(1, pos, 1)?;
-
-            let position_ids = Tensor::from_vec(vec![pos as i64], (1,), device)?;
-            let causal_mask = self.create_position_causal_mask(pos, context_length)?;
-            let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
-
-            let inputs = vec![&token_embedding, &position_ids, &causal_mask, &current_pos];
-            let state = self.unified_state.as_mut().unwrap();
-            let _output = self.ffn_prefill.predict_with_state(&inputs, state)?;
-        }
-
-        Ok(())
-    }
-
-    /// Generate next token using granular methods - REFACTORED
-    pub fn generate_next_token(
-        &mut self,
-        last_embedding: &Tensor,
-        pos: usize,
-    ) -> Result<Tensor, CandleError> {
-        let context_length = self.config.context_length;
-        let device = &self.config.device;
-
-        // Create inputs for infer phase
-        let update_mask = self.create_update_mask(pos, context_length)?;
-        let position_ids = Tensor::from_vec(vec![pos as i64], (1,), device)?;
-        let causal_mask = self.create_position_causal_mask(pos, context_length)?;
-        let current_pos = position_ids.clone();
-
-        // Use granular infer method
-        let hidden_states = self.run_ffn_infer_with_inputs(
-            last_embedding,
-            &update_mask,
-            &position_ids,
-            &causal_mask,
-            &current_pos
-        )?;
-
-        // Use granular LM head method
-        let combined_logits = self.run_lm_head_with_inputs(&hidden_states)?;
-
-        Ok(combined_logits)
-    }
 
     /// Combine 16 LM head output chunks into full vocabulary using shared utility
     pub fn combine_lm_head_outputs(
@@ -370,21 +305,6 @@ impl QwenModel {
         multi_component::combine_chunked_logits(outputs, 16)
     }
 
-    /// Forward pass returning raw logits (consistent with CoreMLModel API)
-    pub fn forward(&mut self, inputs: &[&Tensor]) -> Result<Tensor, CandleError> {
-        // For now, this is a simplified implementation
-        // In a full implementation, this would orchestrate the multi-component pipeline
-        if inputs.is_empty() {
-            return Err(CandleError::Msg("No input tensors provided".to_string()));
-        }
-
-        // Process through embeddings -> FFN -> LM head
-        let embeddings = self.embeddings.forward(&inputs[0..1])?;
-
-        // For now, return embeddings as placeholder
-        // TODO: Complete pipeline implementation
-        Ok(embeddings)
-    }
 
 
     /// Generate a single token from text input - PRIMARY METHOD
@@ -739,22 +659,6 @@ pub fn generate_tokens(
     Ok(generated_tokens)
 }
 
-    /// Generate text using top-k sampling
-    pub fn generate_text_top_k(
-        &mut self,
-        text: &str,
-        max_tokens: usize,
-        k: usize,
-        temperature: f32,
-    ) -> Result<String, CandleError> {
-        let tokens = self.generate_tokens(text, max_tokens, temperature, Some(k))?;
-
-        // Decode tokens back to text
-        let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
-        self.tokenizer
-            .decode(&token_ids, false)
-            .map_err(|e| CandleError::Msg(format!("Failed to decode tokens: {}", e)))
-    }
 
     /// Get model configuration
     pub fn config(&self) -> &QwenConfig {
@@ -863,36 +767,7 @@ pub fn generate_tokens(
         self.embeddings.forward(&[input_ids])
     }
     
-    /// Create state objects (for testing)
-    pub fn create_fresh_states(&mut self) -> Result<(), CandleError> {
-        self.initialize_states()
-    }
-    
-    /// Reset states (for testing)
-    pub fn clear_states(&mut self) -> Result<(), CandleError> {
-        self.reset_states()
-    }
 
-    /// Debug method: Get FFN output directly (for testing) - DEPRECATED
-    /// Use run_ffn_infer_with_inputs for new code
-    pub fn debug_get_ffn_output(
-        &mut self,
-        token_embedding: &Tensor,
-        current_position: usize,
-    ) -> Result<Tensor, CandleError> {
-        let context_length = self.config.context_length;
-        let device = &self.config.device;
-
-        // Create infer inputs using the same methods as production
-        let update_mask = self.create_update_mask(current_position, context_length)?;
-        let position_ids = Tensor::from_vec(vec![current_position as i64], (1,), device)?;
-        let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
-        let current_pos = position_ids.clone();
-
-        // Use the new granular method
-        self.run_ffn_infer_with_inputs(token_embedding, &update_mask, &position_ids, &causal_mask, &current_pos)
-    }
-    
     /// Direct access to CoreML infer model for granular testing
     pub fn debug_direct_infer_model_execution(
         &mut self,
