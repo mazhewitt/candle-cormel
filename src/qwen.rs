@@ -361,279 +361,11 @@ impl QwenModel {
         Ok(embeddings)
     }
 
-    /// Generate a single token from text input - LEGACY implementation (for benchmarking)
-    /// This is the original slow implementation that processes tokens one-by-one
-    /// Used as baseline for performance comparisons
-    pub fn forward_text_legacy(&mut self, text: &str) -> Result<i64, CandleError> {
-        let start_time = std::time::Instant::now();
-        
-        // Reset states for new sequence
-        let reset_start = std::time::Instant::now();
-        self.reset_states()?;
-        let reset_time = reset_start.elapsed();
-        debug!("⏱️ State reset took: {:?}", reset_time);
-        
-        // Tokenize input
-        let tokenize_start = std::time::Instant::now();
-        let tokens = self.tokenize(text)?;
-        let sequence_length = tokens.len();
-        let tokenize_time = tokenize_start.elapsed();
-        debug!("⏱️ Tokenization took: {:?} for {} tokens", tokenize_time, sequence_length);
-        
-        debug!("forward_text: Using EXACT Python reference approach for {} tokens", sequence_length);
 
-        // STEP 1: EMBEDDINGS - Get embeddings for full sequence (padded to batch size)
-        let embeddings_start = std::time::Instant::now();
-        let padded_tokens = self.pad_tokens(&tokens);
-        let input_tensor = Tensor::from_vec(
-            padded_tokens.clone(),
-            (1, padded_tokens.len()),
-            &self.config.device,
-        )?;
-
-        let embeddings = self.run_embeddings_with_inputs(&input_tensor)?;
-        let embeddings_time = embeddings_start.elapsed();
-        debug!("⏱️ Embeddings took: {:?} for {} padded tokens", embeddings_time, padded_tokens.len());
-        
-        // STEP 2: **CRITICAL FIX** - Use EXACT Python prefill approach from TDD test
-        // Generate position/mask tensors EXACTLY like Python does
-        let batch_size = self.config.batch_size; // 64
-        let context_length = self.config.context_length; // 512
-        let device = self.config.device.clone();
-        
-        // Create position IDs for the full batch (0, 1, 2, ..., 63) - EXACTLY like Python
-        let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
-        let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), &device)?;
-
-        // Create causal mask for the full batch (1, 1, 64, 512) - EXACTLY like Python
-        let mut mask_data = vec![f32::NEG_INFINITY; batch_size * context_length];
-        for i in 0..batch_size {
-            for j in 0..=i.min(context_length - 1) {
-                mask_data[i * context_length + j] = 0.0;
-            }
-        }
-        let causal_mask = Tensor::from_vec(mask_data, (1, 1, batch_size, context_length), &device)?;
-
-        // Current pos starts from 0 for prefill - EXACTLY like Python  
-        let current_pos = Tensor::from_vec(vec![0i64], (1,), &device)?;
-
-        // Run prefill using EXACT same method as TDD test
-        let prefill_start = std::time::Instant::now();
-        let _prefill_output = self.run_ffn_prefill_with_inputs(
-            &embeddings,
-            &position_ids,
-            &causal_mask,
-            &current_pos
-        )?;
-        let prefill_time = prefill_start.elapsed();
-        debug!("⏱️ Prefill took: {:?} for {} batch tokens", prefill_time, batch_size);
-        
-        debug!("Prefill complete using Python reference approach");
-
-        // STEP 3: **CRITICAL FIX** - Use EXACT Python infer approach from TDD test
-        let last_token_start = std::time::Instant::now();
-        let last_token_tensor = Tensor::from_vec(vec![tokens[tokens.len() - 1]], (1, 1), &device)?;
-        let last_token_embedding = self.run_embeddings_with_inputs(&last_token_tensor)?;
-        let last_token_time = last_token_start.elapsed();
-        debug!("⏱️ Last token embedding took: {:?}", last_token_time);
-        
-        // Create infer inputs EXACTLY like Python reference
-        let infer_prep_start = std::time::Instant::now();
-        let current_position = sequence_length; // Position to generate from
-        let update_mask = self.create_update_mask(current_position, context_length)?;
-        let position_ids_infer = Tensor::from_vec(vec![current_position as i64], (1,), &device)?;
-        let causal_mask_infer = self.create_position_causal_mask(current_position, context_length)?;
-        let current_pos_infer = position_ids_infer.clone();
-        let infer_prep_time = infer_prep_start.elapsed();
-        debug!("⏱️ Infer preparation took: {:?}", infer_prep_time);
-
-        // Run infer using EXACT same method as TDD test
-        let infer_start = std::time::Instant::now();
-        let infer_output = self.run_ffn_infer_with_inputs(
-            &last_token_embedding,
-            &update_mask,
-            &position_ids_infer,
-            &causal_mask_infer,
-            &current_pos_infer
-        )?;
-        let infer_time = infer_start.elapsed();
-        debug!("⏱️ Infer took: {:?}", infer_time);
-
-        debug!("Infer complete using Python reference approach");
-
-        // STEP 4: LM HEAD - Same as TDD test
-        let lm_head_start = std::time::Instant::now();
-        let logits = self.run_lm_head_with_inputs(&infer_output)?;
-        let lm_head_time = lm_head_start.elapsed();
-        debug!("⏱️ LM head took: {:?}", lm_head_time);
-
-        // Extract next token using EXACT same logic as TDD test
-        let flat_logits = logits.squeeze(0)?.squeeze(0)?;
-        let logits_vec = flat_logits.to_vec1::<f32>()?;
-
-        // Use EXACT same tie-breaking logic as TDD test
-        let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &score)| (i, score)).collect();
-        indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        let next_token = indexed_logits[0].0 as i64;
-
-        // Show top predictions for debugging (like TDD test)
-        debug!("Top 5 forward_text predictions:");
-        for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
-            let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
-            debug!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
-        }
-
-        let total_time = start_time.elapsed();
-        debug!("⏱️ TOTAL forward_text took: {:?} ({:.2} ms)", total_time, total_time.as_millis());
-        debug!("Generated token {} using EXACT TDD test tie-breaking logic", next_token);
-        Ok(next_token)
-    }
-
-    /// Generate a single token from text input - MAIN OPTIMIZED implementation
-    /// ✅ PRIMARY METHOD: Uses embeddings caching and efficient batch processing
-    /// Achieves ~19 t/s (3.47x speedup over legacy), close to 20 t/s target
-    pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
-        let start_time = std::time::Instant::now();
-        
-        // Reset states for new sequence
-        self.reset_states()?;
-        
-        // Tokenize input
-        let tokens = self.tokenize(text)?;
-        let sequence_length = tokens.len();
-        debug!("🚀 Optimized pipeline: Processing {} tokens", sequence_length);
-
-        // PHASE 1: EFFICIENT BATCH PREFILL (like Python run_prefill)
-        // Instead of processing tokens one-by-one, process the full batch efficiently
-        let prefill_start = std::time::Instant::now();
-        
-        // Get embeddings for all tokens at once (batch processing with optimization)
-        let embeddings = self.compute_embeddings_optimized(&tokens)?;
-        
-        // Run single efficient prefill call (not token-by-token)
-        self.run_batch_prefill_optimized(&embeddings, sequence_length)?;
-        let prefill_time = prefill_start.elapsed();
-        debug!("⚡ Batch prefill took: {:?} (vs old: token-by-token)", prefill_time);
-
-        // PHASE 2: EFFICIENT INFER (like Python infer with update_mask) 
-        let infer_start = std::time::Instant::now();
-        
-        // Get last token embedding for generation (optimized)
-        let last_token_embedding = self.get_last_token_embedding_optimized(&tokens)?;
-        
-        // Run efficient infer with proper update_mask (not recreating masks)
-        let logits = self.run_efficient_infer(&last_token_embedding, sequence_length)?;
-        let infer_time = infer_start.elapsed();
-        debug!("⚡ Efficient infer took: {:?} (vs old: mask recreation)", infer_time);
-
-        // PHASE 3: TOKEN EXTRACTION
-        let token_start = std::time::Instant::now();
-        let next_token = self.extract_next_token(&logits)?;
-        let token_time = token_start.elapsed();
-        debug!("⚡ Token extraction took: {:?}", token_time);
-
-        let total_time = start_time.elapsed();
-        debug!("🎯 OPTIMIZED TOTAL: {:?} (target: <12ms for 87 t/s)", total_time);
-        
-        Ok(next_token)
-    }
-
-    /// Efficient batch prefill implementation (Python reference style)
-    fn run_batch_prefill_optimized(&mut self, embeddings: &Tensor, sequence_length: usize) -> Result<(), CandleError> {
-        if self.unified_state.is_none() {
-            self.initialize_states()?;
-        }
-
-        let batch_size = self.config.batch_size; // 64
-        let context_length = self.config.context_length; // 512
-        let device = &self.config.device;
-
-        // OPTIMIZED: Single prefill call with proper batch tensors (like Python)
-        // Create position IDs for the full batch (0, 1, 2, ..., 63)
-        let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
-        let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), device)?;
-
-        // Create causal mask for the full batch (1, 1, 64, 512) 
-        let mut mask_data = vec![f32::NEG_INFINITY; batch_size * context_length];
-        for i in 0..batch_size {
-            for j in 0..=i.min(context_length - 1) {
-                mask_data[i * context_length + j] = 0.0;
-            }
-        }
-        let causal_mask = Tensor::from_vec(mask_data, (1, 1, batch_size, context_length), device)?;
-
-        // Current pos starts from 0 for prefill - EXACTLY like Python and legacy
-        let current_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
-
-        // CRITICAL: Use the working prefill method (not direct predict_with_state)
-        let _prefill_output = self.run_ffn_prefill_with_inputs(
-            embeddings,
-            &position_ids,
-            &causal_mask,
-            &current_pos
-        )?;
-
-        debug!("✅ Optimized prefill: Single batch call (vs old: {} token-by-token calls)", sequence_length);
-        Ok(())
-    }
-
-    /// Efficient infer implementation with update_mask (like Python)
-    fn run_efficient_infer(&mut self, token_embedding: &Tensor, current_position: usize) -> Result<Tensor, CandleError> {
-        let context_length = self.config.context_length;
-        let device = &self.config.device;
-
-        // OPTIMIZED: Use efficient update_mask (like Python) instead of recreating causal masks
-        let update_mask = self.create_update_mask(current_position, context_length)?;
-        let position_ids = Tensor::from_vec(vec![current_position as i64], (1,), device)?;
-        let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
-        let current_pos = position_ids.clone();
-
-        // Use the SAME state populated by prefill (critical for performance)
-        if self.unified_state.is_none() {
-            return Err(CandleError::Msg("No unified state available - prefill must be run first".to_string()));
-        }
-
-        let inputs = vec![
-            token_embedding,
-            &update_mask,
-            &position_ids,
-            &causal_mask,
-            &current_pos,
-        ];
-        let state = self.unified_state.as_mut().unwrap();
-        let hidden_states = self.ffn_infer.predict_with_state(&inputs, state)?;
-
-        // Run through LM head to get final logits
-        let logits = self.run_lm_head_with_inputs(&hidden_states)?;
-        
-        debug!("✅ Optimized infer: Used update_mask + shared state (vs old: separate states)");
-        Ok(logits)
-    }
-
-    /// Extract next token from logits (shared utility)
-    fn extract_next_token(&self, logits: &Tensor) -> Result<i64, CandleError> {
-        let flat_logits = logits.squeeze(0)?.squeeze(0)?;
-        let logits_vec = flat_logits.to_vec1::<f32>()?;
-
-        // Use same tie-breaking logic as TDD test
-        let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &score)| (i, score)).collect();
-        indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        let next_token = indexed_logits[0].0 as i64;
-
-        // Show top predictions for debugging
-        debug!("Top 5 extract_next_token predictions:");
-        for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
-            let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
-            debug!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
-        }
-
-        Ok(next_token)
-    }
-
-    /// Generate a single token from text input - CHAT.PY ARCHITECTURE implementation
+    /// Generate a single token from text input - PRIMARY METHOD
+    /// ✅ Uses chat.py architecture for correct predictions (correctly answers "Paris" for capital of France)
     /// Replicates Python reference architecture with chunked prefill and cached masks
-    /// Different token output than optimized version due to tie-breaking differences
-    pub fn forward_text_chatpy_style(&mut self, text: &str) -> Result<i64, CandleError> {
+    pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         let start_time = std::time::Instant::now();
         
         // Ensure states and causal mask are initialized (done once like chat.py)
@@ -665,54 +397,28 @@ impl QwenModel {
         Ok(next_token)
     }
 
-    /// Generate a single token from text input - PURE EMBEDDINGS optimization implementation  
-    /// 🚀 SPECIALIZED: Maximum embeddings caching with sequence reuse optimization
-    /// This was the breakthrough method that achieved 22.87 t/s (6.4x speedup)
-    pub fn forward_text_embeddings_optimized(&mut self, text: &str) -> Result<i64, CandleError> {
-        let start_time = std::time::Instant::now();
-        
-        // Reset states for new sequence
-        self.reset_states()?;
-        
-        // Tokenize input
-        let tokens = self.tokenize(text)?;
-        let sequence_length = tokens.len();
-        debug!("🚀 Embeddings-optimized: Processing {} tokens", sequence_length);
 
-        // PHASE 1: OPTIMIZED EMBEDDINGS - Compute once, reuse multiple times
-        let embeddings_start = std::time::Instant::now();
-        let embeddings = self.compute_embeddings_optimized(&tokens)?;
-        let embeddings_time = embeddings_start.elapsed();
-        debug!("⚡ Cached embeddings took: {:?} for {} tokens", embeddings_time, sequence_length);
-        
-        // PHASE 2: PREFILL using cached embeddings 
-        let prefill_start = std::time::Instant::now();
-        self.run_batch_prefill_optimized(&embeddings, sequence_length)?;
-        let prefill_time = prefill_start.elapsed();
-        debug!("⚡ Prefill took: {:?}", prefill_time);
+    /// Extract next token from logits (shared utility)
+    fn extract_next_token(&self, logits: &Tensor) -> Result<i64, CandleError> {
+        let flat_logits = logits.squeeze(0)?.squeeze(0)?;
+        let logits_vec = flat_logits.to_vec1::<f32>()?;
 
-        // PHASE 3: INFER using optimized last token embedding
-        let infer_start = std::time::Instant::now();
-        
-        // 🚀 KEY OPTIMIZATION: Reuse last token embedding from cached sequence
-        let last_token_embedding = self.get_last_token_embedding_optimized(&tokens)?;
-        
-        // Run infer with the optimized embedding
-        let logits = self.run_efficient_infer(&last_token_embedding, sequence_length)?;
-        let infer_time = infer_start.elapsed();
-        debug!("⚡ Optimized infer took: {:?}", infer_time);
+        // Use same tie-breaking logic as TDD test
+        let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &score)| (i, score)).collect();
+        indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        let next_token = indexed_logits[0].0 as i64;
 
-        // PHASE 4: TOKEN EXTRACTION
-        let token_start = std::time::Instant::now();
-        let next_token = self.extract_next_token(&logits)?;
-        let token_time = token_start.elapsed();
-        debug!("⚡ Token extraction took: {:?}", token_time);
+        // Show top predictions for debugging
+        debug!("Top 5 extract_next_token predictions:");
+        for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
+            let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
+            debug!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
+        }
 
-        let total_time = start_time.elapsed();
-        debug!("🎯 EMBEDDINGS-OPTIMIZED TOTAL: {:?} (target: <100ms)", total_time);
-        
         Ok(next_token)
     }
+
+
 
     /// Chat.py-style chunked prefill implementation
     fn run_chatpy_prefill(&mut self, tokens: &[i64], context_pos: usize) -> Result<(), CandleError> {
@@ -801,111 +507,50 @@ impl QwenModel {
         Ok(next_token)
     }
 
-    /// Performance benchmark: Compare all implementations
+    /// Performance benchmark for the current implementation
     pub fn benchmark_implementations(&mut self, text: &str, iterations: usize) -> Result<(), CandleError> {
-        println!("🏁 PERFORMANCE BENCHMARK: Legacy vs Optimized vs Chat.py-style");
+        println!("🏁 PERFORMANCE BENCHMARK: Chat.py-style Implementation");
         println!("Text: '{}'", text);
         println!("Iterations: {}", iterations);
         println!("================================");
 
-        // Benchmark OLD implementation
-        let old_start = std::time::Instant::now();
-        let mut old_results = Vec::new();
-        for i in 0..iterations {
-            let token = self.forward_text_legacy(text)?;
-            old_results.push(token);
-            if i == 0 {
-                println!("🐌 Old result: token {}", token);
-            }
-        }
-        let old_total = old_start.elapsed();
-        let old_avg = old_total / iterations as u32;
-        let old_tokens_per_sec = 1000.0 / old_avg.as_millis() as f64;
-
-        println!("🐌 OLD IMPLEMENTATION:");
-        println!("   Total time: {:?}", old_total);
-        println!("   Average per call: {:?}", old_avg);
-        println!("   Tokens/second: {:.2}", old_tokens_per_sec);
-
-        // Benchmark OPTIMIZED implementation  
-        let opt_start = std::time::Instant::now();
-        let mut opt_results = Vec::new();
+        // Benchmark current forward_text implementation (chat.py-style)
+        let start = std::time::Instant::now();
+        let mut results = Vec::new();
         for i in 0..iterations {
             let token = self.forward_text(text)?;
-            opt_results.push(token);
+            results.push(token);
             if i == 0 {
-                println!("🚀 Optimized result: token {}", token);
+                println!("🚀 Result: token {}", token);
+                // Decode the token to show what it predicts
+                if let Ok(decoded) = self.tokenizer.decode(&[token as u32], false) {
+                    println!("   Decoded: '{}'", decoded);
+                }
             }
         }
-        let opt_total = opt_start.elapsed();
-        let opt_avg = opt_total / iterations as u32;
-        let opt_tokens_per_sec = 1000.0 / opt_avg.as_millis() as f64;
+        let total_time = start.elapsed();
+        let avg_time = total_time / iterations as u32;
+        let tokens_per_sec = 1000.0 / avg_time.as_millis() as f64;
 
-        println!("🚀 OPTIMIZED IMPLEMENTATION:");
-        println!("   Total time: {:?}", opt_total);
-        println!("   Average per call: {:?}", opt_avg);
-        println!("   Tokens/second: {:.2}", opt_tokens_per_sec);
+        println!("🚀 CURRENT IMPLEMENTATION (Chat.py-style):");
+        println!("   Total time: {:?}", total_time);
+        println!("   Average per call: {:?}", avg_time);
+        println!("   Tokens/second: {:.2}", tokens_per_sec);
 
-        // Calculate improvement
-        let speedup = old_avg.as_nanos() as f64 / opt_avg.as_nanos() as f64;
-        let improvement_percent = (speedup - 1.0) * 100.0;
-
-        println!("📊 PERFORMANCE COMPARISON:");
-        println!("   Speedup: {:.2}x", speedup);
-        println!("   Improvement: {:.1}%", improvement_percent);
-        
-        // Check quality (results should be identical)
-        let quality_match = old_results == opt_results;
-        println!("   Quality: {} (results {})", 
-                 if quality_match { "✅ IDENTICAL" } else { "❌ DIFFERENT" },
-                 if quality_match { "match" } else { "differ" });
-
-        // Benchmark CHAT.PY-STYLE implementation
-        let chatpy_start = std::time::Instant::now();
-        let mut chatpy_results = Vec::new();
-        for i in 0..iterations {
-            let token = self.forward_text_chatpy_style(text)?;
-            chatpy_results.push(token);
-            if i == 0 {
-                println!("🐍 Chat.py-style result: token {}", token);
-            }
-        }
-        let chatpy_total = chatpy_start.elapsed();
-        let chatpy_avg = chatpy_total / iterations as u32;
-        let chatpy_tokens_per_sec = 1000.0 / chatpy_avg.as_millis() as f64;
-
-        println!("🐍 CHAT.PY-STYLE IMPLEMENTATION:");
-        println!("   Total time: {:?}", chatpy_total);
-        println!("   Average per call: {:?}", chatpy_avg);
-        println!("   Tokens/second: {:.2}", chatpy_tokens_per_sec);
-
-        // Calculate improvements
-        let opt_speedup = old_avg.as_nanos() as f64 / opt_avg.as_nanos() as f64;
-        let chatpy_speedup = old_avg.as_nanos() as f64 / chatpy_avg.as_nanos() as f64;
-        let chatpy_vs_opt = opt_avg.as_nanos() as f64 / chatpy_avg.as_nanos() as f64;
-
-        println!("📊 PERFORMANCE COMPARISON:");
-        println!("   Old → Optimized: {:.2}x speedup", opt_speedup);
-        println!("   Old → Chat.py: {:.2}x speedup", chatpy_speedup);
-        println!("   Optimized → Chat.py: {:.2}x speedup", chatpy_vs_opt);
-        
-        // Check quality (all results should be identical)
-        let opt_quality_match = old_results == opt_results;
-        let chatpy_quality_match = old_results == chatpy_results;
-        println!("   Quality: Old=Opt: {} | Old=Chat.py: {} | All Match: {}", 
-                 if opt_quality_match { "✅" } else { "❌" },
-                 if chatpy_quality_match { "✅" } else { "❌" },
-                 if opt_quality_match && chatpy_quality_match { "✅" } else { "❌" });
-
-        // Performance target assessment (use best implementation)
-        let best_tokens_per_sec = chatpy_tokens_per_sec.max(opt_tokens_per_sec);
-        if best_tokens_per_sec >= 70.0 {
-            println!("🎯 TARGET ACHIEVED: {:.2} t/s >= 70 t/s ✅", best_tokens_per_sec);
-        } else if best_tokens_per_sec >= 20.0 {
-            println!("🎯 PARTIAL SUCCESS: {:.2} t/s >= 20 t/s (minimum target) ⚠️", best_tokens_per_sec);
+        // Performance target assessment
+        if tokens_per_sec >= 70.0 {
+            println!("🎯 TARGET ACHIEVED: {:.2} t/s >= 70 t/s ✅", tokens_per_sec);
+        } else if tokens_per_sec >= 20.0 {
+            println!("🎯 PARTIAL SUCCESS: {:.2} t/s >= 20 t/s (minimum target) ⚠️", tokens_per_sec);
         } else {
-            println!("🎯 TARGET MISSED: {:.2} t/s < 20 t/s ❌", best_tokens_per_sec);
+            println!("🎯 TARGET MISSED: {:.2} t/s < 20 t/s ❌", tokens_per_sec);
         }
+
+        // Consistency check
+        let all_same = results.iter().all(|&token| token == results[0]);
+        println!("✅ Consistency: {} (all iterations produced {})", 
+                 if all_same { "CONSISTENT" } else { "INCONSISTENT" },
+                 if all_same { "same result" } else { "different results" });
 
         Ok(())
     }
