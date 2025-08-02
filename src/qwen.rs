@@ -49,6 +49,9 @@ pub struct QwenModel {
     config: QwenConfig,
     unified_state: Option<CoreMLState>, // Single shared state for both prefill and infer
     cached_causal_mask: Option<Tensor>, // Pre-computed causal mask (like chat.py)
+    // Embeddings optimization
+    embeddings_cache: HashMap<Vec<i64>, Tensor>, // Cache for token sequence embeddings
+    last_sequence_embeddings: Option<(Vec<i64>, Tensor)>, // Cache last full sequence
 }
 
 impl QwenModel {
@@ -124,6 +127,8 @@ impl QwenModel {
             config,
             unified_state: None, // Single shared state
             cached_causal_mask: None, // Will be computed on first use
+            embeddings_cache: HashMap::new(),
+            last_sequence_embeddings: None,
         })
     }
 
@@ -220,6 +225,56 @@ impl QwenModel {
             &self.config.device,
         )?;
 
+        self.embeddings.forward(&[&input_tensor])
+    }
+
+    /// 🚀 OPTIMIZED: Compute embeddings with caching and reuse
+    pub fn compute_embeddings_optimized(&mut self, tokens: &[i64]) -> Result<Tensor, CandleError> {
+        // Check if we already have embeddings for this exact sequence
+        if let Some((cached_tokens, cached_embeddings)) = &self.last_sequence_embeddings {
+            if cached_tokens == tokens {
+                debug!("⚡ CACHE HIT: Reusing embeddings for sequence {:?}", tokens);
+                return Ok(cached_embeddings.clone());
+            }
+        }
+
+        // Compute new embeddings
+        debug!("💾 CACHE MISS: Computing embeddings for sequence {:?}", tokens);
+        let embeddings = self.compute_embeddings(tokens)?;
+        
+        // Cache the result
+        self.last_sequence_embeddings = Some((tokens.to_vec(), embeddings.clone()));
+        
+        Ok(embeddings)
+    }
+
+    /// 🚀 OPTIMIZED: Get single token embedding from cached sequence  
+    pub fn get_token_embedding_from_sequence(&self, tokens: &[i64], token_index: usize) -> Result<Option<Tensor>, CandleError> {
+        if let Some((cached_tokens, cached_embeddings)) = &self.last_sequence_embeddings {
+            if cached_tokens == tokens && token_index < tokens.len() {
+                // Extract the specific token embedding from the cached sequence
+                debug!("⚡ EXTRACTING: Token {} from cached sequence embeddings", token_index);
+                let token_embedding = cached_embeddings.narrow(1, token_index, 1)?;
+                return Ok(Some(token_embedding));
+            }
+        }
+        Ok(None)
+    }
+
+    /// 🚀 OPTIMIZED: Get last token embedding without recomputing
+    pub fn get_last_token_embedding_optimized(&mut self, tokens: &[i64]) -> Result<Tensor, CandleError> {
+        let last_index = tokens.len() - 1;
+        
+        // Try to get from cached sequence first
+        if let Some(cached_embedding) = self.get_token_embedding_from_sequence(tokens, last_index)? {
+            debug!("⚡ REUSING: Last token embedding from cached sequence");
+            return Ok(cached_embedding);
+        }
+        
+        // Fallback: compute single token embedding
+        debug!("💾 COMPUTING: Single last token embedding");
+        let last_token = tokens[last_index];
+        let input_tensor = Tensor::from_vec(vec![last_token], (1, 1), &self.config.device)?;
         self.embeddings.forward(&[&input_tensor])
     }
 
@@ -611,6 +666,54 @@ impl QwenModel {
 
         let total_time = start_time.elapsed();
         debug!("🎯 CHAT.PY TOTAL: {:?} (target: ~11ms for 87 t/s)", total_time);
+        
+        Ok(next_token)
+    }
+
+    /// 🚀 EMBEDDINGS-OPTIMIZED: Forward text with embeddings caching and reuse
+    /// This version eliminates redundant embeddings computation
+    pub fn forward_text_embeddings_optimized(&mut self, text: &str) -> Result<i64, CandleError> {
+        let start_time = std::time::Instant::now();
+        
+        // Reset states for new sequence
+        self.reset_states()?;
+        
+        // Tokenize input
+        let tokens = self.tokenize(text)?;
+        let sequence_length = tokens.len();
+        debug!("🚀 Embeddings-optimized: Processing {} tokens", sequence_length);
+
+        // PHASE 1: OPTIMIZED EMBEDDINGS - Compute once, reuse multiple times
+        let embeddings_start = std::time::Instant::now();
+        let embeddings = self.compute_embeddings_optimized(&tokens)?;
+        let embeddings_time = embeddings_start.elapsed();
+        debug!("⚡ Cached embeddings took: {:?} for {} tokens", embeddings_time, sequence_length);
+        
+        // PHASE 2: PREFILL using cached embeddings 
+        let prefill_start = std::time::Instant::now();
+        self.run_batch_prefill_optimized(&embeddings, sequence_length)?;
+        let prefill_time = prefill_start.elapsed();
+        debug!("⚡ Prefill took: {:?}", prefill_time);
+
+        // PHASE 3: INFER using optimized last token embedding
+        let infer_start = std::time::Instant::now();
+        
+        // 🚀 KEY OPTIMIZATION: Reuse last token embedding from cached sequence
+        let last_token_embedding = self.get_last_token_embedding_optimized(&tokens)?;
+        
+        // Run infer with the optimized embedding
+        let logits = self.run_efficient_infer(&last_token_embedding, sequence_length)?;
+        let infer_time = infer_start.elapsed();
+        debug!("⚡ Optimized infer took: {:?}", infer_time);
+
+        // PHASE 4: TOKEN EXTRACTION
+        let token_start = std::time::Instant::now();
+        let next_token = self.extract_next_token(&logits)?;
+        let token_time = token_start.elapsed();
+        debug!("⚡ Token extraction took: {:?}", token_time);
+
+        let total_time = start_time.elapsed();
+        debug!("🎯 EMBEDDINGS-OPTIMIZED TOTAL: {:?} (target: <100ms)", total_time);
         
         Ok(next_token)
     }
