@@ -422,10 +422,10 @@ impl QwenModel {
         let next_token = indexed_logits[0].0 as i64;
 
         // Show top predictions for debugging (like TDD test)
-        trace!("Top 5 forward_text predictions:");
+        debug!("Top 5 forward_text predictions:");
         for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
             let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
-            trace!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
+            debug!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
         }
 
         let total_time = start_time.elapsed();
@@ -570,6 +570,13 @@ impl QwenModel {
         let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &score)| (i, score)).collect();
         indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         let next_token = indexed_logits[0].0 as i64;
+
+        // Show top predictions for debugging
+        debug!("Top 5 extract_next_token predictions:");
+        for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
+            let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
+            debug!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
+        }
 
         Ok(next_token)
     }
