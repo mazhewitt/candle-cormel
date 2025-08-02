@@ -278,6 +278,36 @@ impl QwenModel {
         self.embeddings.forward(&[&input_tensor])
     }
 
+    /// 🚀 OPTIMIZATION: Try to get cached embeddings for a batch of tokens
+    /// This checks if the padded batch matches part of our cached sequence
+    fn get_cached_batch_embeddings(&self, padded_batch: &[i64]) -> Result<Option<Tensor>, CandleError> {
+        // Check if we have cached embeddings for the full sequence
+        if let Some((cached_tokens, cached_embeddings)) = &self.last_sequence_embeddings {
+            // Try to find if this padded batch corresponds to a slice of our cached sequence
+            let batch_size = padded_batch.len();
+            
+            // Look for the meaningful part of the batch (before padding zeros)
+            let meaningful_end = padded_batch.iter().position(|&x| x == 0).unwrap_or(batch_size);
+            
+            if meaningful_end > 0 {
+                let meaningful_batch = &padded_batch[..meaningful_end];
+                
+                // Check if this meaningful batch appears at the start of our cached tokens
+                if cached_tokens.len() >= meaningful_batch.len() &&
+                   &cached_tokens[..meaningful_batch.len()] == meaningful_batch {
+                    
+                    // Extract the corresponding embeddings slice
+                    let batch_embeddings = cached_embeddings.narrow(1, 0, batch_size)?;
+                    debug!("⚡ EMBEDDINGS CACHE HIT: Reusing {} tokens from cached sequence", meaningful_end);
+                    return Ok(Some(batch_embeddings));
+                }
+            }
+        }
+        
+        // No cache hit found
+        Ok(None)
+    }
+
     /// Process sequence through FFN prefill phase
     pub fn prefill_sequence(
         &mut self,
@@ -364,6 +394,7 @@ impl QwenModel {
 
     /// Generate a single token from text input - PRIMARY METHOD
     /// ✅ Uses chat.py architecture for correct predictions (correctly answers "Paris" for capital of France)
+    /// 🚀 OPTIMIZED: Enhanced with embeddings caching for maximum performance
     /// Replicates Python reference architecture with chunked prefill and cached masks
     pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         let start_time = std::time::Instant::now();
@@ -376,23 +407,28 @@ impl QwenModel {
         // Tokenize input
         let tokens = self.tokenize(text)?;
         let context_pos = tokens.len();
-        debug!("🚀 Chat.py-style: Processing {} tokens", context_pos);
+        debug!("🚀 Chat.py-style OPTIMIZED: Processing {} tokens", context_pos);
 
-        // PHASE 1: CHUNKED PREFILL (exactly like chat.py run_prefill)
+        // 🚀 OPTIMIZATION: Pre-compute and cache embeddings for the full sequence
+        let embeddings_start = std::time::Instant::now();
+        let _cached_embeddings = self.compute_embeddings_optimized(&tokens)?;
+        let embeddings_time = embeddings_start.elapsed();
+        debug!("⚡ Cached embeddings took: {:?} for {} tokens", embeddings_time, context_pos);
+
+        // PHASE 1: CHUNKED PREFILL (chat.py architecture with embeddings optimization)
         let prefill_start = std::time::Instant::now();
-        self.run_chatpy_prefill(&tokens, context_pos)?;
+        self.run_chatpy_prefill_optimized(&tokens, context_pos)?;
         let prefill_time = prefill_start.elapsed();
-        debug!("⚡ Chat.py prefill took: {:?}", prefill_time);
+        debug!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
 
-        // PHASE 2: SINGLE TOKEN INFER (exactly like chat.py generate_next_token)
+        // PHASE 2: SINGLE TOKEN INFER (chat.py architecture with embeddings optimization)
         let infer_start = std::time::Instant::now();
-        let last_token = tokens[tokens.len() - 1];
-        let next_token = self.run_chatpy_infer(last_token, context_pos)?;
+        let next_token = self.run_chatpy_infer_optimized(&tokens, context_pos)?;
         let infer_time = infer_start.elapsed();
-        debug!("⚡ Chat.py infer took: {:?}", infer_time);
+        debug!("⚡ Optimized chat.py infer took: {:?}", infer_time);
 
         let total_time = start_time.elapsed();
-        debug!("🎯 CHAT.PY TOTAL: {:?} (target: ~11ms for 87 t/s)", total_time);
+        debug!("🎯 OPTIMIZED CHAT.PY TOTAL: {:?} (target: ~11ms for 87 t/s)", total_time);
         
         Ok(next_token)
     }
@@ -420,7 +456,62 @@ impl QwenModel {
 
 
 
-    /// Chat.py-style chunked prefill implementation
+    /// 🚀 OPTIMIZED: Chat.py-style chunked prefill with embeddings caching
+    fn run_chatpy_prefill_optimized(&mut self, tokens: &[i64], context_pos: usize) -> Result<(), CandleError> {
+        let batch_size = self.config.batch_size; // 64
+        let device = self.config.device.clone(); // Clone to avoid borrowing issues
+        let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
+        
+        // Process in 64-token chunks (exactly like chat.py)
+        let mut batch_pos = 0;
+        while batch_pos < context_pos {
+            let batch_end = (batch_pos + batch_size).min(context_pos);
+            let _current_batch_size = batch_end - batch_pos;
+            
+            // Get current batch tokens
+            let batch_tokens = &tokens[batch_pos..batch_end];
+            
+            // Pad to full batch size (exactly like chat.py F.pad)
+            let mut padded_batch = batch_tokens.to_vec();
+            padded_batch.resize(batch_size, 0); // Pad with zeros
+            
+            // 🚀 OPTIMIZATION: Try to reuse cached embeddings instead of recomputing
+            let hidden_states = if let Some(cached_embeddings) = self.get_cached_batch_embeddings(&padded_batch)? {
+                debug!("⚡ CACHE HIT: Reusing cached embeddings for batch at position {}", batch_pos);
+                cached_embeddings
+            } else {
+                debug!("💾 CACHE MISS: Computing embeddings for batch at position {}", batch_pos);
+                // Fallback to direct embeddings computation
+                let batch_input = Tensor::from_vec(padded_batch.clone(), (1, batch_size), &device)?;
+                self.embeddings.forward(&[&batch_input])?
+            };
+            
+            // Generate position IDs for full batch size (like chat.py)
+            let position_ids_vec: Vec<i64> = (batch_pos as i64..(batch_pos + batch_size) as i64).collect();
+            let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), &device)?;
+            
+            // Use pre-computed causal mask slice (like chat.py batch_causal_mask)
+            let batch_causal_mask = causal_mask.narrow(2, batch_pos, batch_size)?;
+            
+            // Current pos for this batch
+            let current_pos = Tensor::from_vec(vec![batch_pos as i64], (1,), &device)?;
+            
+            // Run prefill with the working method
+            let _output = self.run_ffn_prefill_with_inputs(
+                &hidden_states,
+                &position_ids,
+                &batch_causal_mask,
+                &current_pos
+            )?;
+            
+            batch_pos = batch_end;
+        }
+        
+        debug!("✅ Optimized chat.py prefill: Processed {} tokens in {} chunks", context_pos, (context_pos + batch_size - 1) / batch_size);
+        Ok(())
+    }
+
+    /// Chat.py-style chunked prefill implementation (ORIGINAL - kept for reference)
     fn run_chatpy_prefill(&mut self, tokens: &[i64], context_pos: usize) -> Result<(), CandleError> {
         let batch_size = self.config.batch_size; // 64
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
@@ -470,7 +561,43 @@ impl QwenModel {
         Ok(())
     }
 
-    /// Chat.py-style single token infer implementation
+    /// 🚀 OPTIMIZED: Chat.py-style single token infer with embeddings caching
+    fn run_chatpy_infer_optimized(&mut self, tokens: &[i64], pos: usize) -> Result<i64, CandleError> {
+        let context_length = self.config.context_length;
+        let device = self.config.device.clone(); // Clone to avoid borrowing issues
+        let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
+        
+        // 🚀 OPTIMIZATION: Get last token embedding from cached sequence
+        let hidden_states = self.get_last_token_embedding_optimized(tokens)?;
+        
+        // Create update mask (like chat.py)
+        let mut update_mask_data = vec![0.0f32; context_length];
+        update_mask_data[pos - 1] = 1.0; // Set position for update
+        let update_mask = Tensor::from_vec(update_mask_data, (1, 1, context_length, 1), &device)?;
+        
+        // Position IDs and causal mask slice (like chat.py)
+        let position_ids = Tensor::from_vec(vec![(pos - 1) as i64], (1,), &device)?;
+        let single_causal_mask = causal_mask.narrow(2, pos - 1, 1)?; // Get slice for current position
+        let current_pos = position_ids.clone();
+        
+        // Run infer using the working method
+        let infer_output = self.run_ffn_infer_with_inputs(
+            &hidden_states,
+            &update_mask,
+            &position_ids,
+            &single_causal_mask,
+            &current_pos
+        )?;
+        
+        // Run LM head and extract token (like chat.py)
+        let logits = self.run_lm_head_with_inputs(&infer_output)?;
+        let next_token = self.extract_next_token(&logits)?;
+        
+        debug!("✅ Optimized chat.py infer: Generated token {} at position {}", next_token, pos);
+        Ok(next_token)
+    }
+
+    /// Chat.py-style single token infer implementation (ORIGINAL - kept for reference)
     fn run_chatpy_infer(&mut self, last_token: i64, pos: usize) -> Result<i64, CandleError> {
         let context_length = self.config.context_length;
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
