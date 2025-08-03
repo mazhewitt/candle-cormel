@@ -547,10 +547,8 @@ impl QwenModel {
         // Current pos is the last actual token position (seq_len - 1)
         let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
 
-        // Run prefill with full batch embeddings (already padded to 64)
-        let inputs = vec![embeddings, &position_ids, &causal_mask, &current_pos];
-        let state = self.unified_state.as_mut().unwrap();
-        let _prefill_output = self.ffn_prefill.predict_with_state(&inputs, state)?;
+        // Run prefill with full batch embeddings (using granular method)
+        let _prefill_output = self.run_ffn_prefill_with_inputs(embeddings, &position_ids, &causal_mask, &current_pos)?;
 
         debug!("Prefill complete - KV cache populated for positions 0..{}", sequence_length - 1);
         Ok(())
@@ -582,22 +580,19 @@ impl QwenModel {
         let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
         let current_pos = position_ids.clone();
 
-        // Run infer to get hidden states using the shared populated state
-        let inputs = vec![
+        // Run infer to get hidden states using granular method  
+        let hidden_states = self.run_ffn_infer_with_inputs(
             token_embedding,
             &update_mask,
             &position_ids,
             &causal_mask,
-            &current_pos,
-        ];
-        let state = self.unified_state.as_mut().unwrap(); // Use the UNIFIED state!
-        let hidden_states = self.ffn_infer.predict_with_state(&inputs, state)?;
+            &current_pos
+        )?;
 
         debug!("Infer complete - processing through LM head");
 
-        // Run through LM head to get logits (16 chunks)
-        let lm_outputs = self.lm_head.forward_all(&[&hidden_states])?;
-        let combined_logits = self.combine_lm_head_outputs(lm_outputs)?;
+        // Run through LM head to get logits (using granular method)
+        let combined_logits = self.run_lm_head_with_inputs(&hidden_states)?;
 
         Ok(combined_logits)
     }
