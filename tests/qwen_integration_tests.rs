@@ -8,7 +8,7 @@ use candle_coreml::{ensure_model_downloaded, qwen::QwenModel};
 
 #[cfg(target_os = "macos")]
 #[tokio::test]
-#[ignore = "downloads large model - run manually to verify complete Qwen pipeline"]
+// Model is cached after first download - safe for coverage analysis
 async fn test_qwen_complete_pipeline_fox_completion() -> Result<()> {
     // Download the Qwen model
     let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
