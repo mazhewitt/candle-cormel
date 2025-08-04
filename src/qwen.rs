@@ -14,7 +14,7 @@ use tracing::{debug, trace, warn};
 /// Qwen model constants
 pub const QWEN_VOCAB_SIZE: usize = 151936;
 pub const QWEN_HIDDEN_SIZE: usize = 1024;
-pub const QWEN_BATCH_SIZE: usize = 64;
+pub const QWEN_BATCH_SIZE: usize = 64; // CoreML model only accepts this specific shape
 pub const QWEN_CONTEXT_LENGTH: usize = 512;
 
 /// Configuration for Qwen model components
@@ -167,14 +167,25 @@ impl QwenModel {
         self.initialize_states()
     }
 
-    /// Tokenize input text
+    /// Tokenize input text with length validation
     pub fn tokenize(&self, text: &str) -> Result<Vec<i64>, CandleError> {
         let encoding = self
             .tokenizer
             .encode(text, true)
             .map_err(|e| CandleError::Msg(format!("Tokenization failed: {}", e)))?;
 
-        Ok(encoding.get_ids().iter().map(|&id| id as i64).collect())
+        let tokens: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
+        
+        // Validate token length against context window (not batch size)
+        if tokens.len() > QWEN_CONTEXT_LENGTH {
+            return Err(CandleError::Msg(format!(
+                "Input too long: {} tokens exceeds maximum context length of {} tokens supported by the model. \
+                Consider shortening your input.", 
+                tokens.len(), QWEN_CONTEXT_LENGTH
+            )));
+        }
+        
+        Ok(tokens)
     }
 
     /// Pad tokens to appropriate batch size for embeddings
@@ -239,8 +250,15 @@ impl QwenModel {
     pub fn get_token_embedding_from_sequence(&self, tokens: &[i64], token_index: usize) -> Result<Option<Tensor>, CandleError> {
         if let Some((cached_tokens, cached_embeddings)) = &self.last_sequence_embeddings {
             if cached_tokens == tokens && token_index < tokens.len() {
+                // Validate bounds against actual cached embeddings dimensions
+                let cached_seq_len = cached_embeddings.dims()[1];
+                if token_index >= cached_seq_len {
+                    debug!("❌ BOUNDS: token_index {} >= cached_seq_len {}, falling back", token_index, cached_seq_len);
+                    return Ok(None);
+                }
+                
                 // Extract the specific token embedding from the cached sequence
-                debug!("⚡ EXTRACTING: Token {} from cached sequence embeddings", token_index);
+                debug!("⚡ EXTRACTING: Token {} from cached sequence embeddings (dims: {:?})", token_index, cached_embeddings.dims());
                 let token_embedding = cached_embeddings.narrow(1, token_index, 1)?;
                 return Ok(Some(token_embedding));
             }
@@ -377,7 +395,7 @@ impl QwenModel {
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
         
-        // Process in 64-token chunks (exactly like chat.py)
+        // Process in 64-token chunks (CoreML model constraint)
         let mut batch_pos = 0;
         while batch_pos < context_pos {
             let batch_end = (batch_pos + batch_size).min(context_pos);
@@ -443,7 +461,16 @@ impl QwenModel {
         
         // Position IDs and causal mask slice (like chat.py)
         let position_ids = Tensor::from_vec(vec![(pos - 1) as i64], (1,), &device)?;
-        let single_causal_mask = causal_mask.narrow(2, pos - 1, 1)?; // Get slice for current position
+        
+        // Fix bounds checking for causal mask slicing
+        let mask_pos = pos - 1;
+        if mask_pos >= context_length {
+            return Err(CandleError::Msg(format!(
+                "Position {} exceeds causal mask context length {}. Input may be too long for chunked processing.",
+                mask_pos, context_length
+            )));
+        }
+        let single_causal_mask = causal_mask.narrow(2, mask_pos, 1)?; // Get slice for current position
         let current_pos = position_ids.clone();
         
         // Run infer using the working method

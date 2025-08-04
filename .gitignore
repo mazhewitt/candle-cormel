@@ -21,3 +21,6 @@ test_models/
 
 # Logs
 *.log
+
+# Coverage
+coverage*

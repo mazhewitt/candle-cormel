@@ -2,7 +2,7 @@
 
 use candle_core::{Device, Error as CandleError, Tensor};
 use half::f16;
-use tracing::{debug, info, trace, warn};
+use tracing::{debug, warn};
 
 #[cfg(target_os = "macos")]
 use objc2_core_ml::{MLMultiArray, MLMultiArrayDataType};

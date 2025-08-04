@@ -212,7 +212,14 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
         io::stdout().flush().unwrap();
 
         let mut input = String::new();
-        io::stdin().read_line(&mut input)?;
+        let bytes_read = io::stdin().read_line(&mut input)?;
+        
+        // Handle EOF (Ctrl+D or stdin closed)
+        if bytes_read == 0 {
+            println!("\n👋 Goodbye!");
+            break;
+        }
+        
         let input = input.trim();
 
         if input.is_empty() {
