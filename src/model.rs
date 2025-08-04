@@ -7,6 +7,7 @@ use crate::conversion::{
 use crate::state::CoreMLState;
 use candle_core::{Device, Error as CandleError, Tensor};
 use std::path::Path;
+use tracing::{debug, info};
 
 #[cfg(target_os = "macos")]
 use objc2::rc::{autoreleasepool, Retained};
@@ -83,7 +84,7 @@ impl CoreMLModel {
                     unsafe { NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())) };
 
                 // Show loading progress for large models
-                eprintln!("🔄 Loading and compiling CoreML model (this may take 30-60s for large models)...");
+                info!("Loading and compiling CoreML model at {}", path.display());
                 let load_start = std::time::Instant::now();
 
                 // Create configuration with function name if provided
@@ -101,8 +102,8 @@ impl CoreMLModel {
                 // Try to load the model with function name support
                 match model_result {
                     Ok(model) => {
-                        eprintln!(
-                            "✅ Model loaded and compiled in {:.1}s",
+                        info!(
+                            "Model loaded and compiled in {:.1}s",
                             load_time.as_secs_f32()
                         );
                         Ok(CoreMLModel {
@@ -115,20 +116,18 @@ impl CoreMLModel {
                         // If direct loading fails, try compiling first
                         let err_msg = format!("{:?}", err);
                         if err_msg.contains("Compile the model") {
-                            eprintln!("🔧 Model requires compilation, compiling now...");
+                            debug!("Model requires compilation, compiling now");
                             #[allow(deprecated)]
                             match unsafe { MLModel::compileModelAtURL_error(&url) } {
                                 Ok(compiled_url) => {
-                                    eprintln!(
-                                        "✅ Compilation completed, loading compiled model..."
-                                    );
+                                    debug!("Compilation completed, loading compiled model");
                                     // Try loading the compiled model
                                     match unsafe {
                                         MLModel::modelWithContentsOfURL_error(&compiled_url)
                                     } {
                                         Ok(model) => {
-                                            eprintln!(
-                                                "✅ Compiled model loaded in {:.1}s total",
+                                            info!(
+                                                "Compiled model loaded in {:.1}s total",
                                                 load_time.as_secs_f32()
                                             );
                                             Ok(CoreMLModel {

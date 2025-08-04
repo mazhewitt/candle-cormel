@@ -77,6 +77,10 @@ impl QwenModel {
         };
 
         let embeddings_path = model_dir.join("qwen_embeddings.mlmodelc");
+        debug!(
+            "Loading embeddings component from {}",
+            embeddings_path.display()
+        );
         let embeddings = CoreMLModel::load_from_file(&embeddings_path, &embeddings_config)?;
 
         // Configure and load FFN models (both prefill and infer functions)
@@ -96,9 +100,11 @@ impl QwenModel {
         let ffn_path = model_dir.join("qwen_FFN_PF_lut8_chunk_01of01.mlmodelc");
 
         // FFN Prefill function (for initial sequence processing)
+        debug!("Loading FFN prefill component from {}", ffn_path.display());
         let ffn_prefill = CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?;
 
         // FFN Infer function (for token-by-token generation with update_mask)
+        debug!("Loading FFN infer component from {}", ffn_path.display());
         let mut ffn_infer_config = ffn_config_base.clone();
         ffn_infer_config
             .input_names
@@ -115,6 +121,7 @@ impl QwenModel {
         };
 
         let lm_head_path = model_dir.join("qwen_lm_head_lut8.mlmodelc");
+        debug!("Loading LM head component from {}", lm_head_path.display());
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)?;
 
         Ok(Self {
