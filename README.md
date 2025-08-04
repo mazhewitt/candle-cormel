@@ -26,7 +26,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-candle-coreml = "0.2.0"
+candle-coreml = "0.2.1"
 candle-core = "0.9.1"
 ```
 
@@ -38,7 +38,7 @@ use candle_coreml::{Config, CoreMLModel};
 
 // Create config for your model
 let config = Config {
-    input_name: "input_ids".to_string(),
+    input_names: vec!["input_ids".to_string()],
     output_name: "logits".to_string(),
     max_sequence_length: 128,
     vocab_size: 32000,
