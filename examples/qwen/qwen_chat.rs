@@ -193,6 +193,9 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
 
     // Load QwenModel using the granular API
     println!("🔄 Loading QwenModel with granular API...");
+    println!("   📦 This model has 4 components: embeddings, FFN prefill, FFN infer, LM head");
+    println!("   ⏱️  Each component requires compilation (expect ~30-60s total)");
+    println!("   💡 Set RUST_LOG=debug to see detailed component loading progress");
     let start_time = Instant::now();
 
     let qwen_config = QwenConfig::default();
