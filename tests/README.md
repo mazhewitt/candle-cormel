@@ -1,175 +1,203 @@
-# Integration Tests for candle-coreml
+# Test Suite for candle-coreml
 
-This directory contains comprehensive integration tests for the candle-coreml library, specifically focusing on the F16-compatible typo correction pipeline.
+This directory contains comprehensive tests for the candle-coreml library, organized by functionality and test type.
 
-## Test Files
+## Test Organization
 
-### `typo_fixer_integration_tests.rs` - Main Automation Tests ⭐
+### Core Integration Tests
+- **`integration_tests.rs`** - Main CoreML integration tests (15 tests)
+  - Model loading and validation
+  - Device compatibility (CPU, Metal, CUDA rejection)
+  - Stateful and stateless prediction
+  - Error handling and edge cases
 
-**Purpose**: Comprehensive integration tests for the Qwen typo-fixer model with F16 CoreML support
+### Model-Specific Tests
+- **`qwen_tests.rs`** - Comprehensive Qwen model testing (25+ tests)
+  - Architecture validation and pipeline testing
+  - Position handling and boundary conditions
+  - Specific prediction validation (e.g., "dog" completion)
+  - Integration testing across full pipeline
+  - Extended edge case coverage
+  - Organized in modules: `architecture_tests`, `position_fix_tests`, `prediction_tests`, `integration_tests`, `extended_coverage_tests`
 
-**Key Features Tested**:
-- ✅ **F16 Compatibility**: Verifies F16 data type handling doesn't crash
-- ✅ **Token Generation**: Ensures diverse tokens (not repetitive 151668)  
-- ✅ **Performance**: Validates reasonable inference times
-- ✅ **Pipeline Integrity**: End-to-end model loading and prediction
+### Utility and Component Tests
+- **`builder_tests.rs`** - CoreMLModelBuilder pattern testing (18 tests)
+  - Builder creation and configuration validation
+  - HuggingFace integration error handling
+  - Path validation and config management
 
-### Running Individual Tests
+- **`utils_tests.rs`** - Utility function testing (24 tests)
+  - Causal mask creation and validation
+  - Sampling utilities (greedy, temperature, top-k)
+  - Multi-component configuration builders
+  - Organized in modules: `mask_tests`, `sampling_tests`, `multi_component_tests`
 
-Since each test loads the model (which takes ~30s), run tests individually for faster iteration:
+- **`performance_regression_tests.rs`** - Performance benchmarks (8 tests, mostly ignored)
+  - Baseline validation against reference implementations
+  - Memory efficiency testing
+  - Consistency validation
 
-```bash
-# Test model loading with F16 support (essential)
-cargo test --test typo_fixer_integration_tests test_typo_fixer_model_loading -- --nocapture
+## Running Tests
 
-# Test single token generation (F16 regression test)
-cargo test --test typo_fixer_integration_tests test_typo_fixer_single_token_generation -- --nocapture
+### 🚀 Recommended: Use Test Scripts
 
-# Test performance baseline
-cargo test --test typo_fixer_integration_tests test_typo_fixer_performance_baseline -- --nocapture
-
-# Test tokenization works correctly
-cargo test --test typo_fixer_integration_tests test_typo_fixer_tokenization -- --nocapture
-
-# Test text generation doesn't crash
-cargo test --test typo_fixer_integration_tests test_typo_fixer_text_generation -- --nocapture
-
-# Test model validation
-cargo test --test typo_fixer_integration_tests test_typo_fixer_model_validation -- --nocapture
-
-# Test specific corrections (ignored by default - run manually)
-cargo test --test typo_fixer_integration_tests test_typo_fixer_specific_corrections -- --ignored --nocapture
-```
-
-### Running All Tests (Warning: Slow)
-
-```bash
-# Run all tests (takes ~3-5 minutes due to model loading)
-cargo test --test typo_fixer_integration_tests
-
-# Run all tests including ignored ones
-cargo test --test typo_fixer_integration_tests -- --ignored
-```
-
-### CI/CD Usage
-
-For automated testing in CI/CD pipelines:
+For the best experience, use the provided test scripts that handle all the complexity:
 
 ```bash
-# Quick regression test (essential for F16 compatibility)
-cargo test --test typo_fixer_integration_tests test_typo_fixer_single_token_generation
+# Fast unit tests (no models, works anywhere, ~10 seconds)
+./run_unit_tests.sh
 
-# Full validation suite (if models are available)
-cargo test --test typo_fixer_integration_tests
+# Full integration tests (downloads models, macOS only, ~5 minutes)
+./run_integration_tests.sh
 ```
 
-## Other Test Files
+These scripts automatically:
+- ✅ Check platform compatibility and disk space
+- ✅ Use proper thread safety flags (`--test-threads=1`)
+- ✅ Show progress and provide helpful tips
+- ✅ Handle Core ML limitations safely
 
-### `qwen_integration_tests.rs`
-Generic Qwen model tests (downloads models from HuggingFace)
+### Manual Test Commands
 
-### `integration_tests.rs`  
-General CoreML integration tests
+If you prefer manual control:
 
-### `conversion_tests.rs`
-Tensor conversion performance tests
+#### Quick Tests (No Models Required)
+```bash
+# Run unit tests and utility functions
+cargo test utils_tests builder_tests
 
-### `prediction_options_test.rs`
-Prediction configuration tests
-
-## Test Requirements
-
-### Model Files Required
-Tests require the typo-fixer model at:
-```
-/Users/mazdahewitt/projects/train-typo-fixer/models/qwen-typo-fixer-ane/
+# Run core integration tests (uses cached models)
+cargo test integration_tests
 ```
 
-If models are not available, tests will skip gracefully with informative messages.
+### Model-Specific Tests
+```bash
+# Run all Qwen tests
+cargo test qwen_tests
 
-### Platform Requirements
-- **macOS only**: CoreML is macOS-specific
-- **Non-macOS**: Tests verify proper error handling
+# Run specific Qwen test modules
+cargo test qwen_tests::architecture_tests
+cargo test qwen_tests::position_fix_tests
+cargo test qwen_tests::prediction_tests
+cargo test qwen_tests::integration_tests
 
-## Key Test Validations
-
-### F16 Regression Tests ⚡
-These tests specifically prevent regression of the F16 data type fix:
-
-1. **Token Diversity**: `assert_ne!(next_token, 151668)` 
-   - Before F16 fix: Generated only token 151668 repeatedly
-   - After F16 fix: Generates diverse tokens
-
-2. **No F16 Crashes**: `assert!(!error_msg.contains("MLMultiArrayDataType"))`
-   - Before F16 fix: Crashed with data type errors  
-   - After F16 fix: Handles F16 gracefully
-
-3. **Performance**: Inference completes within reasonable time
-   - Before F16 fix: Often timed out or failed
-   - After F16 fix: Fast, reliable inference
-
-### Performance Baselines
-
-| Test | Expected Time | Pre-F16 Fix | Post-F16 Fix |
-|------|---------------|-------------|--------------|
-| Model Loading | < 35s | ❌ Often failed | ✅ ~30s |
-| Single Token | < 2s | ❌ 420ms+ (just LM head) | ✅ ~580ms (full pipeline) |
-| Full Generation | < 5s | ❌ Often infinite loop | ✅ Works correctly |
-
-## Expected Test Output
-
-### Success Example:
-```
-✅ Typo-fixer model loaded successfully with F16 support
-✅ Generated token: 115752 -> '哪一个'
-✅ F16 pipeline working correctly (no repetitive generation)
-✅ Single token inference time: 583ms
-✅ F16 pipeline performance: 583ms (pre-fix: often failed completely)
+# Run extended coverage tests (ignored by default)
+cargo test qwen_tests::extended_coverage_tests -- --ignored --nocapture
 ```
 
-### Graceful Handling (No Models):
-```
-⚠️ Skipping integration test: Models not found at /path/to/models
-```
-
-## Troubleshooting
-
-### Test Failures
-
-1. **"Models not found"**: Install typo-fixer models or set correct path
-2. **"Token 151668 generated"**: F16 fix regression - check data type handling
-3. **"MLMultiArrayDataType error"**: F16 conversion issue - check conversion.rs
-4. **Performance timeout**: Normal on first run, models need warming up
-
-### Development Workflow
-
-1. **After F16 changes**: Run `test_typo_fixer_single_token_generation`
-2. **Before commits**: Run essential tests to prevent regression
-3. **Full validation**: Run all tests before releases
-
-## Adding New Tests
-
-When adding tests:
-
-1. **Use descriptive names**: `test_typo_fixer_specific_feature`
-2. **Check for models**: Skip gracefully if not available
-3. **Test F16 handling**: Include F16-specific assertions
-4. **Document purpose**: Explain what regression it prevents
-
-## Integration with CI/CD
-
-Recommended CI/CD test strategy:
-```yaml
-# Essential F16 regression test (fast)
-- name: F16 Regression Test
-  run: cargo test --test typo_fixer_integration_tests test_typo_fixer_single_token_generation
-
-# Full validation (if models available)  
-- name: Full Integration Tests
-  run: cargo test --test typo_fixer_integration_tests
-  continue-on-error: true  # Models may not be available in CI
+### Performance Tests
+```bash
+# Run performance benchmarks (ignored by default) - MUST use --test-threads=1
+cargo test performance_regression_tests -- --ignored --nocapture --test-threads=1
 ```
 
----
+### All Tests
+```bash
+# Standard test suite (fast, no ignored tests)
+cargo test
 
-**The typo_fixer integration tests provide comprehensive validation that the F16 data type fix works correctly and prevents regression of the critical token generation issues.** 🚀
+# Include ignored performance/integration tests (slow) - MUST use --test-threads=1
+cargo test -- --ignored --nocapture --test-threads=1
+```
+
+## Test Coverage
+
+Generate coverage reports to analyze test effectiveness:
+
+```bash
+# Generate HTML coverage report
+cargo tarpaulin --workspace --all-features --out Html --output-dir coverage-report
+
+# Open coverage report
+open coverage-report/tarpaulin-report.html
+```
+
+**Current Coverage**: ~48% overall
+- ✅ Conversion utilities: 76%+
+- ✅ Configuration: 100%
+- ✅ State management: 100%
+- ✅ Utility functions: 100% (24 comprehensive tests)
+- ✅ Builder patterns: Fully covered (18 tests)
+- ⚠️ Qwen implementation: 36% (room for improvement)
+
+## Model Requirements
+
+Many tests require downloaded models, which are automatically cached:
+
+- **Qwen Models**: `anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4` (~1.8GB)
+- **OpenELM Models**: `corenet-community/coreml-OpenELM-450M-Instruct` (~1.7GB) 
+- **Mistral Models**: `apple/mistral-coreml` (~17GB)
+
+Models are downloaded automatically via `ensure_model_downloaded()` on first use.
+
+**⏱️ Model Loading Times**: Each model requires compilation on first load:
+- **Download**: ~30s for large models (cached afterward)
+- **Compilation**: 30-60s per model (optimizes for your hardware: ANE/GPU/CPU)
+- **Subsequent loads**: Much faster (~2-5s) as compiled models are cached
+
+If you see a long pause after "Found [model] CoreML package", this is normal - CoreML is compiling the model for optimal performance on your hardware.
+
+### ⚠️ Disk Space Requirements
+
+**CRITICAL**: Running ignored tests requires **significant disk space**:
+
+- **Minimum Required**: ~25GB free space for all models
+- **Apple Mistral Model**: 17GB (largest model)
+- **Model Cache Location**: `~/Library/Caches/candle-coreml/`
+
+**Disk Space Issues**: If you encounter:
+- `LLVM ERROR: IO failure on output stream: No space left on device`
+- Segmentation faults during test execution
+- Test hangs or crashes
+
+Check available disk space with `df -h`. Tests will fail if insufficient space is available.
+
+### ⚠️ Thread Safety Limitations
+
+**CRITICAL**: Core ML models are **NOT thread-safe**. Running ignored tests in parallel will cause segmentation faults.
+
+**Apple's Core ML Documentation**:
+- "The model class is not guaranteed to be thread-safe"
+- "You must assume that a single MLModel instance cannot be safely accessed from multiple threads simultaneously"
+- Multiple model instances of the same .mlpackage may share internal resources
+
+**Required for Ignored Tests**:
+```bash
+# ✅ SAFE: Run tests sequentially
+cargo test -- --ignored --nocapture --test-threads=1
+
+# ❌ UNSAFE: Parallel execution causes SIGSEGV
+cargo test -- --ignored --nocapture  # (crashes)
+```
+
+**Why This Happens**:
+- `test_mistral_baseline_completion` and `test_mistral_autoregressive_mlstate` both load the same Apple Mistral model
+- Rust runs tests in parallel by default
+- Concurrent access to Core ML models causes race conditions and crashes
+
+**Solution**: Always use `--test-threads=1` when running ignored tests that load Core ML models.
+
+## Platform Support
+
+- **macOS**: Full test suite including CoreML functionality
+- **Other Platforms**: Limited to unit tests and error handling (CoreML tests skipped)
+
+## Test Development Guidelines
+
+### Adding Tests
+- **Unit Tests**: Add to `utils_tests.rs` or `builder_tests.rs`
+- **Integration Tests**: Add to `integration_tests.rs`
+- **Model Tests**: Add to appropriate modules in `qwen_tests.rs`
+- **Performance Tests**: Add to `performance_regression_tests.rs`
+
+### Test Conventions
+- Use descriptive names: `test_function_specific_behavior`
+- Group related tests in modules
+- Use `#[ignore]` for tests requiring model downloads
+- Provide graceful fallbacks for missing models
+- Use conditional compilation for macOS-only features
+
+### Performance Considerations
+- Tests requiring models should be ignored by default
+- Use `--nocapture` to see progress output
+- First model download takes ~30s, subsequent runs use cache

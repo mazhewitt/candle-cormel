@@ -82,6 +82,10 @@ impl CoreMLModel {
                 let url =
                     unsafe { NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())) };
 
+                // Show loading progress for large models
+                eprintln!("🔄 Loading and compiling CoreML model (this may take 30-60s for large models)...");
+                let load_start = std::time::Instant::now();
+
                 // Create configuration with function name if provided
                 let model_result = if let Some(func_name) = function_name {
                     let config = unsafe { MLModelConfiguration::new() };
@@ -92,29 +96,47 @@ impl CoreMLModel {
                     unsafe { MLModel::modelWithContentsOfURL_error(&url) }
                 };
 
+                let load_time = load_start.elapsed();
+
                 // Try to load the model with function name support
                 match model_result {
-                    Ok(model) => Ok(CoreMLModel {
-                        inner: model,
-                        config: config.clone(),
-                        function_name: function_name.map(|s| s.to_string()),
-                    }),
+                    Ok(model) => {
+                        eprintln!(
+                            "✅ Model loaded and compiled in {:.1}s",
+                            load_time.as_secs_f32()
+                        );
+                        Ok(CoreMLModel {
+                            inner: model,
+                            config: config.clone(),
+                            function_name: function_name.map(|s| s.to_string()),
+                        })
+                    }
                     Err(err) => {
                         // If direct loading fails, try compiling first
                         let err_msg = format!("{:?}", err);
                         if err_msg.contains("Compile the model") {
+                            eprintln!("🔧 Model requires compilation, compiling now...");
                             #[allow(deprecated)]
                             match unsafe { MLModel::compileModelAtURL_error(&url) } {
                                 Ok(compiled_url) => {
+                                    eprintln!(
+                                        "✅ Compilation completed, loading compiled model..."
+                                    );
                                     // Try loading the compiled model
                                     match unsafe {
                                         MLModel::modelWithContentsOfURL_error(&compiled_url)
                                     } {
-                                        Ok(model) => Ok(CoreMLModel {
-                                            inner: model,
-                                            config: config.clone(),
-                                            function_name: function_name.map(|s| s.to_string()),
-                                        }),
+                                        Ok(model) => {
+                                            eprintln!(
+                                                "✅ Compiled model loaded in {:.1}s total",
+                                                load_time.as_secs_f32()
+                                            );
+                                            Ok(CoreMLModel {
+                                                inner: model,
+                                                config: config.clone(),
+                                                function_name: function_name.map(|s| s.to_string()),
+                                            })
+                                        }
                                         Err(compile_err) => Err(CandleError::Msg(format!(
                                             "Failed to load compiled CoreML model: {:?}",
                                             compile_err
@@ -489,7 +511,6 @@ impl CoreMLModel {
     ) -> Result<Retained<ProtocolObject<dyn MLFeatureProvider>>, CandleError> {
         autoreleasepool(|_| unsafe {
             let protocol_provider = ProtocolObject::from_ref(provider);
-
 
             self.inner
                 .predictionFromFeatures_usingState_error(protocol_provider, state.inner())
