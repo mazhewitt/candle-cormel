@@ -124,7 +124,7 @@ impl QwenModel {
             lm_head,
             tokenizer,
             config,
-            unified_state: None, // Single shared state
+            unified_state: None,      // Single shared state
             cached_causal_mask: None, // Will be computed on first use
             last_sequence_embeddings: None,
         })
@@ -136,15 +136,18 @@ impl QwenModel {
         // Create ONE unified state that both prefill and infer will share
         let unified_state = self.ffn_prefill.make_state()?;
         self.unified_state = Some(unified_state);
-        
+
         // Pre-compute causal mask ONCE (like chat.py initialize_causal_mask)
         if self.cached_causal_mask.is_none() {
             let context_length = self.config.context_length;
             let causal_mask = self.create_full_causal_mask(context_length)?;
             self.cached_causal_mask = Some(causal_mask);
-            debug!("✅ Pre-computed causal mask for context length {}", context_length);
+            debug!(
+                "✅ Pre-computed causal mask for context length {}",
+                context_length
+            );
         }
-        
+
         Ok(())
     }
 
@@ -152,14 +155,18 @@ impl QwenModel {
     fn create_full_causal_mask(&self, context_length: usize) -> Result<Tensor, CandleError> {
         // Create full causal mask: (1, 1, context_length, context_length)
         let mut mask_data = vec![f32::NEG_INFINITY; context_length * context_length];
-        
+
         for i in 0..context_length {
             for j in 0..=i {
                 mask_data[i * context_length + j] = 0.0;
             }
         }
-        
-        Tensor::from_vec(mask_data, (1, 1, context_length, context_length), &self.config.device)
+
+        Tensor::from_vec(
+            mask_data,
+            (1, 1, context_length, context_length),
+            &self.config.device,
+        )
     }
 
     /// Reset states for a new generation sequence
@@ -175,7 +182,7 @@ impl QwenModel {
             .map_err(|e| CandleError::Msg(format!("Tokenization failed: {}", e)))?;
 
         let tokens: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
-        
+
         // Validate token length against context window (not batch size)
         if tokens.len() > QWEN_CONTEXT_LENGTH {
             return Err(CandleError::Msg(format!(
@@ -184,7 +191,7 @@ impl QwenModel {
                 tokens.len(), QWEN_CONTEXT_LENGTH
             )));
         }
-        
+
         Ok(tokens)
     }
 
@@ -199,7 +206,6 @@ impl QwenModel {
             padded
         }
     }
-
 
     /// Create position slice of causal mask for single token processing
     pub fn create_position_causal_mask(
@@ -219,7 +225,6 @@ impl QwenModel {
         mask::create_update_mask(pos, context_length, &self.config.device)
     }
 
-
     /// Compute embeddings with caching and reuse optimization
     pub fn compute_embeddings(&mut self, tokens: &[i64]) -> Result<Tensor, CandleError> {
         // Check if we already have embeddings for this exact sequence
@@ -231,7 +236,10 @@ impl QwenModel {
         }
 
         // Compute new embeddings
-        debug!("💾 CACHE MISS: Computing embeddings for sequence {:?}", tokens);
+        debug!(
+            "💾 CACHE MISS: Computing embeddings for sequence {:?}",
+            tokens
+        );
         let padded_tokens = self.pad_tokens(tokens);
         let input_tensor = Tensor::from_vec(
             padded_tokens.clone(),
@@ -239,26 +247,37 @@ impl QwenModel {
             &self.config.device,
         )?;
         let embeddings = self.embeddings.forward(&[&input_tensor])?;
-        
+
         // Cache the result
         self.last_sequence_embeddings = Some((tokens.to_vec(), embeddings.clone()));
-        
+
         Ok(embeddings)
     }
 
     /// 🚀 OPTIMIZED: Get single token embedding from cached sequence  
-    pub fn get_token_embedding_from_sequence(&self, tokens: &[i64], token_index: usize) -> Result<Option<Tensor>, CandleError> {
+    pub fn get_token_embedding_from_sequence(
+        &self,
+        tokens: &[i64],
+        token_index: usize,
+    ) -> Result<Option<Tensor>, CandleError> {
         if let Some((cached_tokens, cached_embeddings)) = &self.last_sequence_embeddings {
             if cached_tokens == tokens && token_index < tokens.len() {
                 // Validate bounds against actual cached embeddings dimensions
                 let cached_seq_len = cached_embeddings.dims()[1];
                 if token_index >= cached_seq_len {
-                    debug!("❌ BOUNDS: token_index {} >= cached_seq_len {}, falling back", token_index, cached_seq_len);
+                    debug!(
+                        "❌ BOUNDS: token_index {} >= cached_seq_len {}, falling back",
+                        token_index, cached_seq_len
+                    );
                     return Ok(None);
                 }
-                
+
                 // Extract the specific token embedding from the cached sequence
-                debug!("⚡ EXTRACTING: Token {} from cached sequence embeddings (dims: {:?})", token_index, cached_embeddings.dims());
+                debug!(
+                    "⚡ EXTRACTING: Token {} from cached sequence embeddings (dims: {:?})",
+                    token_index,
+                    cached_embeddings.dims()
+                );
                 let token_embedding = cached_embeddings.narrow(1, token_index, 1)?;
                 return Ok(Some(token_embedding));
             }
@@ -267,15 +286,20 @@ impl QwenModel {
     }
 
     /// 🚀 OPTIMIZED: Get last token embedding without recomputing
-    pub fn get_last_token_embedding_optimized(&mut self, tokens: &[i64]) -> Result<Tensor, CandleError> {
+    pub fn get_last_token_embedding_optimized(
+        &mut self,
+        tokens: &[i64],
+    ) -> Result<Tensor, CandleError> {
         let last_index = tokens.len() - 1;
-        
+
         // Try to get from cached sequence first
-        if let Some(cached_embedding) = self.get_token_embedding_from_sequence(tokens, last_index)? {
+        if let Some(cached_embedding) =
+            self.get_token_embedding_from_sequence(tokens, last_index)?
+        {
             debug!("⚡ REUSING: Last token embedding from cached sequence");
             return Ok(cached_embedding);
         }
-        
+
         // Fallback: compute single token embedding
         debug!("💾 COMPUTING: Single last token embedding");
         let last_token = tokens[last_index];
@@ -285,35 +309,51 @@ impl QwenModel {
 
     /// 🚀 OPTIMIZATION: Try to get cached embeddings for a batch of tokens
     /// This checks if the padded batch matches part of our cached sequence
-    fn get_cached_batch_embeddings(&self, padded_batch: &[i64]) -> Result<Option<Tensor>, CandleError> {
+    fn get_cached_batch_embeddings(
+        &self,
+        padded_batch: &[i64],
+    ) -> Result<Option<Tensor>, CandleError> {
         // Check if we have cached embeddings for the full sequence
         if let Some((cached_tokens, cached_embeddings)) = &self.last_sequence_embeddings {
             // Try to find if this padded batch corresponds to a slice of our cached sequence
             let batch_size = padded_batch.len();
-            
+
             // Look for the meaningful part of the batch (before padding zeros)
-            let meaningful_end = padded_batch.iter().position(|&x| x == 0).unwrap_or(batch_size);
-            
+            let meaningful_end = padded_batch
+                .iter()
+                .position(|&x| x == 0)
+                .unwrap_or(batch_size);
+
             if meaningful_end > 0 {
                 let meaningful_batch = &padded_batch[..meaningful_end];
-                
+
                 // Check if this meaningful batch appears at the start of our cached tokens
-                if cached_tokens.len() >= meaningful_batch.len() &&
-                   &cached_tokens[..meaningful_batch.len()] == meaningful_batch {
-                    
-                    // Extract the corresponding embeddings slice
-                    let batch_embeddings = cached_embeddings.narrow(1, 0, batch_size)?;
-                    debug!("⚡ EMBEDDINGS CACHE HIT: Reusing {} tokens from cached sequence", meaningful_end);
-                    return Ok(Some(batch_embeddings));
+                if cached_tokens.len() >= meaningful_batch.len()
+                    && &cached_tokens[..meaningful_batch.len()] == meaningful_batch
+                {
+                    // Check if cached embeddings have sufficient size for the requested batch
+                    let cached_dims = cached_embeddings.dims();
+                    if cached_dims.len() >= 2 && cached_dims[1] >= batch_size {
+                        // Extract the corresponding embeddings slice
+                        let batch_embeddings = cached_embeddings.narrow(1, 0, batch_size)?;
+                        debug!(
+                            "⚡ EMBEDDINGS CACHE HIT: Reusing {} tokens from cached sequence",
+                            meaningful_end
+                        );
+                        return Ok(Some(batch_embeddings));
+                    } else {
+                        debug!(
+                            "⚠️ EMBEDDINGS CACHE MISS: Cached dims {:?} insufficient for batch_size {}",
+                            cached_dims, batch_size
+                        );
+                    }
                 }
             }
         }
-        
+
         // No cache hit found
         Ok(None)
     }
-
-
 
     /// Combine 16 LM head output chunks into full vocabulary using shared utility
     pub fn combine_lm_head_outputs(
@@ -323,30 +363,34 @@ impl QwenModel {
         multi_component::combine_chunked_logits(outputs, 16)
     }
 
-
-
     /// Generate a single token from text input - PRIMARY METHOD
     /// ✅ Uses chat.py architecture for correct predictions (correctly answers "Paris" for capital of France)
     /// 🚀 OPTIMIZED: Enhanced with embeddings caching for maximum performance
     /// Replicates Python reference architecture with chunked prefill and cached masks
     pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         let start_time = std::time::Instant::now();
-        
+
         // Ensure states and causal mask are initialized (done once like chat.py)
         if self.unified_state.is_none() || self.cached_causal_mask.is_none() {
             self.initialize_states()?;
         }
-        
+
         // Tokenize input
         let tokens = self.tokenize(text)?;
         let context_pos = tokens.len();
-        debug!("🚀 Chat.py-style OPTIMIZED: Processing {} tokens", context_pos);
+        debug!(
+            "🚀 Chat.py-style OPTIMIZED: Processing {} tokens",
+            context_pos
+        );
 
         // 🚀 OPTIMIZATION: Pre-compute and cache embeddings for the full sequence
         let embeddings_start = std::time::Instant::now();
         let _cached_embeddings = self.compute_embeddings(&tokens)?;
         let embeddings_time = embeddings_start.elapsed();
-        debug!("⚡ Cached embeddings took: {:?} for {} tokens", embeddings_time, context_pos);
+        debug!(
+            "⚡ Cached embeddings took: {:?} for {} tokens",
+            embeddings_time, context_pos
+        );
 
         // PHASE 1: CHUNKED PREFILL (chat.py architecture with embeddings optimization)
         let prefill_start = std::time::Instant::now();
@@ -361,11 +405,13 @@ impl QwenModel {
         debug!("⚡ Optimized chat.py infer took: {:?}", infer_time);
 
         let total_time = start_time.elapsed();
-        debug!("🎯 OPTIMIZED CHAT.PY TOTAL: {:?} (target: ~11ms for 87 t/s)", total_time);
-        
+        debug!(
+            "🎯 OPTIMIZED CHAT.PY TOTAL: {:?} (target: ~11ms for 87 t/s)",
+            total_time
+        );
+
         Ok(next_token)
     }
-
 
     /// Extract next token from logits (shared utility)
     fn extract_next_token(&self, logits: &Tensor) -> Result<i64, CandleError> {
@@ -373,95 +419,122 @@ impl QwenModel {
         let logits_vec = flat_logits.to_vec1::<f32>()?;
 
         // Use same tie-breaking logic as TDD test
-        let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &score)| (i, score)).collect();
+        let mut indexed_logits: Vec<(usize, f32)> = logits_vec
+            .iter()
+            .enumerate()
+            .map(|(i, &score)| (i, score))
+            .collect();
         indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
         let next_token = indexed_logits[0].0 as i64;
 
         // Show top predictions for debugging
         debug!("Top 5 extract_next_token predictions:");
         for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
-            let decoded = self.tokenizer.decode(&[*token_id as u32], false).unwrap_or("???".to_string());
-            debug!("  {}. Token {} ('{}'): {:.6}", rank + 1, token_id, decoded, score);
+            let decoded = self
+                .tokenizer
+                .decode(&[*token_id as u32], false)
+                .unwrap_or("???".to_string());
+            debug!(
+                "  {}. Token {} ('{}'): {:.6}",
+                rank + 1,
+                token_id,
+                decoded,
+                score
+            );
         }
 
         Ok(next_token)
     }
 
-
-
     /// Chat.py-style chunked prefill with embeddings caching optimization
-    fn run_chatpy_prefill(&mut self, tokens: &[i64], context_pos: usize) -> Result<(), CandleError> {
+    fn run_chatpy_prefill(
+        &mut self,
+        tokens: &[i64],
+        context_pos: usize,
+    ) -> Result<(), CandleError> {
         let batch_size = self.config.batch_size; // 64
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
-        
+
         // Process in 64-token chunks (CoreML model constraint)
         let mut batch_pos = 0;
         while batch_pos < context_pos {
             let batch_end = (batch_pos + batch_size).min(context_pos);
             let _current_batch_size = batch_end - batch_pos;
-            
+
             // Get current batch tokens
             let batch_tokens = &tokens[batch_pos..batch_end];
-            
+
             // Pad to full batch size (exactly like chat.py F.pad)
             let mut padded_batch = batch_tokens.to_vec();
             padded_batch.resize(batch_size, 0); // Pad with zeros
-            
+
             // 🚀 OPTIMIZATION: Try to reuse cached embeddings instead of recomputing
-            let hidden_states = if let Some(cached_embeddings) = self.get_cached_batch_embeddings(&padded_batch)? {
-                debug!("⚡ CACHE HIT: Reusing cached embeddings for batch at position {}", batch_pos);
+            let hidden_states = if let Some(cached_embeddings) =
+                self.get_cached_batch_embeddings(&padded_batch)?
+            {
+                debug!(
+                    "⚡ CACHE HIT: Reusing cached embeddings for batch at position {}",
+                    batch_pos
+                );
                 cached_embeddings
             } else {
-                debug!("💾 CACHE MISS: Computing embeddings for batch at position {}", batch_pos);
+                debug!(
+                    "💾 CACHE MISS: Computing embeddings for batch at position {}",
+                    batch_pos
+                );
                 // Fallback to direct embeddings computation
                 let batch_input = Tensor::from_vec(padded_batch.clone(), (1, batch_size), &device)?;
                 self.embeddings.forward(&[&batch_input])?
             };
-            
+
             // Generate position IDs for full batch size (like chat.py)
-            let position_ids_vec: Vec<i64> = (batch_pos as i64..(batch_pos + batch_size) as i64).collect();
+            let position_ids_vec: Vec<i64> =
+                (batch_pos as i64..(batch_pos + batch_size) as i64).collect();
             let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), &device)?;
-            
+
             // Use pre-computed causal mask slice (like chat.py batch_causal_mask)
             let batch_causal_mask = causal_mask.narrow(2, batch_pos, batch_size)?;
-            
+
             // Current pos for this batch
             let current_pos = Tensor::from_vec(vec![batch_pos as i64], (1,), &device)?;
-            
+
             // Run prefill with the working method
             let _output = self.run_ffn_prefill_with_inputs(
                 &hidden_states,
                 &position_ids,
                 &batch_causal_mask,
-                &current_pos
+                &current_pos,
             )?;
-            
+
             batch_pos = batch_end;
         }
-        
-        debug!("✅ Optimized chat.py prefill: Processed {} tokens in {} chunks", context_pos, (context_pos + batch_size - 1) / batch_size);
+
+        debug!(
+            "✅ Optimized chat.py prefill: Processed {} tokens in {} chunks",
+            context_pos,
+            context_pos.div_ceil(batch_size)
+        );
         Ok(())
     }
-
 
     /// Chat.py-style single token infer with embeddings caching optimization
     fn run_chatpy_infer(&mut self, tokens: &[i64], pos: usize) -> Result<i64, CandleError> {
         let context_length = self.config.context_length;
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
-        
+
         // 🚀 OPTIMIZATION: Get last token embedding from cached sequence
         let hidden_states = self.get_last_token_embedding_optimized(tokens)?;
-        
+
         // Create update mask (like chat.py)
         let mut update_mask_data = vec![0.0f32; context_length];
         update_mask_data[pos - 1] = 1.0; // Set position for update
         let update_mask = Tensor::from_vec(update_mask_data, (1, 1, context_length, 1), &device)?;
-        
+
         // Position IDs and causal mask slice (like chat.py)
         let position_ids = Tensor::from_vec(vec![(pos - 1) as i64], (1,), &device)?;
-        
+
         // Fix bounds checking for causal mask slicing
         let mask_pos = pos - 1;
         if mask_pos >= context_length {
@@ -472,27 +545,33 @@ impl QwenModel {
         }
         let single_causal_mask = causal_mask.narrow(2, mask_pos, 1)?; // Get slice for current position
         let current_pos = position_ids.clone();
-        
+
         // Run infer using the working method
         let infer_output = self.run_ffn_infer_with_inputs(
             &hidden_states,
             &update_mask,
             &position_ids,
             &single_causal_mask,
-            &current_pos
+            &current_pos,
         )?;
-        
+
         // Run LM head and extract token (like chat.py)
         let logits = self.run_lm_head_with_inputs(&infer_output)?;
         let next_token = self.extract_next_token(&logits)?;
-        
-        debug!("✅ Optimized chat.py infer: Generated token {} at position {}", next_token, pos);
+
+        debug!(
+            "✅ Optimized chat.py infer: Generated token {} at position {}",
+            next_token, pos
+        );
         Ok(next_token)
     }
 
-
     /// Performance benchmark for the current implementation
-    pub fn benchmark_implementations(&mut self, text: &str, iterations: usize) -> Result<(), CandleError> {
+    pub fn benchmark_implementations(
+        &mut self,
+        text: &str,
+        iterations: usize,
+    ) -> Result<(), CandleError> {
         println!("🏁 PERFORMANCE BENCHMARK: Chat.py-style Implementation");
         println!("Text: '{}'", text);
         println!("Iterations: {}", iterations);
@@ -525,16 +604,29 @@ impl QwenModel {
         if tokens_per_sec >= 70.0 {
             println!("🎯 TARGET ACHIEVED: {:.2} t/s >= 70 t/s ✅", tokens_per_sec);
         } else if tokens_per_sec >= 20.0 {
-            println!("🎯 PARTIAL SUCCESS: {:.2} t/s >= 20 t/s (minimum target) ⚠️", tokens_per_sec);
+            println!(
+                "🎯 PARTIAL SUCCESS: {:.2} t/s >= 20 t/s (minimum target) ⚠️",
+                tokens_per_sec
+            );
         } else {
             println!("🎯 TARGET MISSED: {:.2} t/s < 20 t/s ❌", tokens_per_sec);
         }
 
         // Consistency check
         let all_same = results.iter().all(|&token| token == results[0]);
-        println!("✅ Consistency: {} (all iterations produced {})", 
-                 if all_same { "CONSISTENT" } else { "INCONSISTENT" },
-                 if all_same { "same result" } else { "different results" });
+        println!(
+            "✅ Consistency: {} (all iterations produced {})",
+            if all_same {
+                "CONSISTENT"
+            } else {
+                "INCONSISTENT"
+            },
+            if all_same {
+                "same result"
+            } else {
+                "different results"
+            }
+        );
 
         Ok(())
     }
@@ -554,7 +646,10 @@ impl QwenModel {
         let context_length = self.config.context_length; // 512
         let device = &self.config.device;
 
-        debug!("Running prefill for {} tokens (padded to {} batch) to populate KV cache", sequence_length, batch_size);
+        debug!(
+            "Running prefill for {} tokens (padded to {} batch) to populate KV cache",
+            sequence_length, batch_size
+        );
 
         // Create position IDs for the full batch (0, 1, 2, ..., 63)
         // Note: We use the full batch size, not just sequence_length
@@ -575,9 +670,17 @@ impl QwenModel {
         let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
 
         // Run prefill with full batch embeddings (using granular method)
-        let _prefill_output = self.run_ffn_prefill_with_inputs(embeddings, &position_ids, &causal_mask, &current_pos)?;
+        let _prefill_output = self.run_ffn_prefill_with_inputs(
+            embeddings,
+            &position_ids,
+            &causal_mask,
+            &current_pos,
+        )?;
 
-        debug!("Prefill complete - KV cache populated for positions 0..{}", sequence_length - 1);
+        debug!(
+            "Prefill complete - KV cache populated for positions 0..{}",
+            sequence_length - 1
+        );
         Ok(())
     }
 
@@ -592,12 +695,17 @@ impl QwenModel {
         let context_length = self.config.context_length;
         let device = &self.config.device;
 
-        debug!("Running infer for position {} using SHARED state from prefill (FIXED: last token pos)", current_position);
+        debug!(
+            "Running infer for position {} using SHARED state from prefill (FIXED: last token pos)",
+            current_position
+        );
 
         // CRITICAL: We must use the SAME state that was populated by prefill!
         // Use the shared state that was populated during prefill
         if self.unified_state.is_none() {
-            return Err(CandleError::Msg("No unified state available - prefill must be run first".to_string()));
+            return Err(CandleError::Msg(
+                "No unified state available - prefill must be run first".to_string(),
+            ));
         }
         debug!("Using SHARED state populated by prefill (like working tests)");
 
@@ -607,13 +715,13 @@ impl QwenModel {
         let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
         let current_pos = position_ids.clone();
 
-        // Run infer to get hidden states using granular method  
+        // Run infer to get hidden states using granular method
         let hidden_states = self.run_ffn_infer_with_inputs(
             token_embedding,
             &update_mask,
             &position_ids,
             &causal_mask,
-            &current_pos
+            &current_pos,
         )?;
 
         debug!("Infer complete - processing through LM head");
@@ -642,45 +750,44 @@ impl QwenModel {
 
     /// Generate multiple tokens using temperature sampling with optional top-k
     /// Generate multiple tokens with correct position tracking
-pub fn generate_tokens(
-    &mut self,
-    text: &str,
-    max_tokens: usize,
-    temperature: f32,
-    _top_k: Option<usize>,
-) -> Result<Vec<i64>, CandleError> {
-    let mut generated_tokens = Vec::new();
-    let mut current_text = text.to_string();
-    
-    for _ in 0..max_tokens {
-        // Use the working forward_text method for each token
-        let next_token = self.forward_text(&current_text)?;
-        generated_tokens.push(next_token);
-        
-        // Stop if EOS
-        if next_token == 151645 {
-            break;
-        }
-        
-        // Update current_text by appending the new token
-        if let Ok(decoded) = self.tokenizer.decode(&[next_token as u32], false) {
-            current_text.push_str(&decoded);
-        } else {
-            // If decoding fails, stop generation
-            break;
-        }
-        
-        // For temperature sampling, we'd need to modify forward_text to accept temperature
-        // For now, this uses greedy sampling which is what forward_text does
-        if temperature > 0.0 {
-            // TODO: Implement temperature sampling support
-            // For now, fall back to greedy
-        }
-    }
-    
-    Ok(generated_tokens)
-}
+    pub fn generate_tokens(
+        &mut self,
+        text: &str,
+        max_tokens: usize,
+        temperature: f32,
+        _top_k: Option<usize>,
+    ) -> Result<Vec<i64>, CandleError> {
+        let mut generated_tokens = Vec::new();
+        let mut current_text = text.to_string();
 
+        for _ in 0..max_tokens {
+            // Use the working forward_text method for each token
+            let next_token = self.forward_text(&current_text)?;
+            generated_tokens.push(next_token);
+
+            // Stop if EOS
+            if next_token == 151645 {
+                break;
+            }
+
+            // Update current_text by appending the new token
+            if let Ok(decoded) = self.tokenizer.decode(&[next_token as u32], false) {
+                current_text.push_str(&decoded);
+            } else {
+                // If decoding fails, stop generation
+                break;
+            }
+
+            // For temperature sampling, we'd need to modify forward_text to accept temperature
+            // For now, this uses greedy sampling which is what forward_text does
+            if temperature > 0.0 {
+                // TODO: Implement temperature sampling support
+                // For now, fall back to greedy
+            }
+        }
+
+        Ok(generated_tokens)
+    }
 
     /// Get model configuration
     pub fn config(&self) -> &QwenConfig {
@@ -694,101 +801,138 @@ pub fn generate_tokens(
 
     // ========== GRANULAR PIPELINE METHODS ==========
     // These methods expose each step of the pipeline for testing and debugging
-    
+
     /// Run FFN prefill phase with exact inputs (for testing)
     pub fn run_ffn_prefill_with_inputs(
         &mut self,
         hidden_states: &Tensor,
-        position_ids: &Tensor, 
+        position_ids: &Tensor,
         causal_mask: &Tensor,
         current_pos: &Tensor,
     ) -> Result<Tensor, CandleError> {
         if self.unified_state.is_none() {
             self.initialize_states()?;
         }
-        
+
         let inputs = [hidden_states, position_ids, causal_mask, current_pos];
         let state = self.unified_state.as_mut().unwrap(); // Use the same unified state
         let output = self.ffn_prefill.predict_with_state(&inputs, state)?;
-        
+
         Ok(output)
     }
-    
+
     /// Run FFN infer phase with exact inputs (for testing)
     pub fn run_ffn_infer_with_inputs(
         &mut self,
         hidden_states: &Tensor,
         update_mask: &Tensor,
         position_ids: &Tensor,
-        causal_mask: &Tensor, 
+        causal_mask: &Tensor,
         current_pos: &Tensor,
     ) -> Result<Tensor, CandleError> {
         if self.unified_state.is_none() {
-            return Err(CandleError::Msg("No unified state available - prefill must be run first".to_string()));
+            return Err(CandleError::Msg(
+                "No unified state available - prefill must be run first".to_string(),
+            ));
         }
-    
+
         // CRITICAL FIX: Match Python reference implementation input order
         // Python infer inputs: hidden_states, update_mask, position_ids, causal_mask, current_pos
         // where current_pos should equal position_ids for proper state continuity
-        trace!("DEBUG: Infer inputs - position_ids: {:?}, current_pos: {:?}", 
-                 position_ids.to_vec1::<f32>().unwrap_or_default(), 
-                 current_pos.to_vec1::<f32>().unwrap_or_default());
+        trace!(
+            "DEBUG: Infer inputs - position_ids: {:?}, current_pos: {:?}",
+            position_ids.to_vec1::<f32>().unwrap_or_default(),
+            current_pos.to_vec1::<f32>().unwrap_or_default()
+        );
 
         // DEBUGGING: Validate all inputs before CoreML call
         trace!("INFER INPUT VALIDATION:");
-        trace!("  hidden_states: shape={:?}, sample={:?}", 
-                 hidden_states.shape(), 
-                 hidden_states.to_vec3::<f32>().unwrap_or_default()[0][0][..3.min(hidden_states.dim(2).unwrap_or(0))].to_vec());
+        trace!(
+            "  hidden_states: shape={:?}, sample={:?}",
+            hidden_states.shape(),
+            hidden_states.to_vec3::<f32>().unwrap_or_default()[0][0]
+                [..3.min(hidden_states.dim(2).unwrap_or(0))]
+                .to_vec()
+        );
         let update_nonzeros = if let Ok(flat) = update_mask.flatten_all() {
             if let Ok(vec) = flat.to_vec1::<f32>() {
                 vec.iter().filter(|&&x| x != 0.0).count()
-            } else { 0 }
-        } else { 0 };
-        trace!("  update_mask: shape={:?}, nonzeros={}", update_mask.shape(), update_nonzeros);
-        
-        trace!("  position_ids: shape={:?}, values={:?}", 
-                 position_ids.shape(),
-                 position_ids.to_vec1::<f32>().unwrap_or_default());
-        
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        trace!(
+            "  update_mask: shape={:?}, nonzeros={}",
+            update_mask.shape(),
+            update_nonzeros
+        );
+
+        trace!(
+            "  position_ids: shape={:?}, values={:?}",
+            position_ids.shape(),
+            position_ids.to_vec1::<f32>().unwrap_or_default()
+        );
+
         let causal_nonzeros = if let Ok(flat) = causal_mask.flatten_all() {
             if let Ok(vec) = flat.to_vec1::<f32>() {
                 vec.iter().filter(|&&x| x != 0.0).count()
-            } else { 0 }
-        } else { 0 };
-        trace!("  causal_mask: shape={:?}, nonzeros={}", causal_mask.shape(), causal_nonzeros);
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+        trace!(
+            "  causal_mask: shape={:?}, nonzeros={}",
+            causal_mask.shape(),
+            causal_nonzeros
+        );
 
-        let inputs = [hidden_states, update_mask, position_ids, causal_mask, current_pos];
+        let inputs = [
+            hidden_states,
+            update_mask,
+            position_ids,
+            causal_mask,
+            current_pos,
+        ];
         let state = self.unified_state.as_mut().unwrap(); // Use the SAME unified state as prefill
-        
+
         trace!("About to call CoreML infer model...");
         let output = self.ffn_infer.predict_with_state(&inputs, state)?;
-        
+
         // DEBUGGING: Check output immediately after CoreML call
-        let output_sample = output.to_vec3::<f32>().unwrap_or_default()[0][0][..5.min(output.dim(2).unwrap_or(0))].to_vec();
+        let output_sample = output.to_vec3::<f32>().unwrap_or_default()[0][0]
+            [..5.min(output.dim(2).unwrap_or(0))]
+            .to_vec();
         trace!("INFER OUTPUT VALIDATION:");
-        trace!("  output: shape={:?}, sample={:?}", output.shape(), output_sample);
-        
+        trace!(
+            "  output: shape={:?}, sample={:?}",
+            output.shape(),
+            output_sample
+        );
+
         if output_sample.iter().all(|&x| x == 0.0) {
             warn!("ZEROS DETECTED: CoreML infer model returned all zeros!");
         } else {
             trace!("NON-ZERO OUTPUT: CoreML infer model returned valid data");
         }
-        
+
         Ok(output)
     }
-    
+
     /// Run LM head with exact inputs (for testing)
     pub fn run_lm_head_with_inputs(&self, hidden_states: &Tensor) -> Result<Tensor, CandleError> {
         let lm_outputs = self.lm_head.forward_all(&[hidden_states])?;
         let combined_logits = self.combine_lm_head_outputs(lm_outputs)?;
         Ok(combined_logits)
     }
-    
+
     /// Get direct access to embeddings model (for testing)
     pub fn run_embeddings_with_inputs(&self, input_ids: &Tensor) -> Result<Tensor, CandleError> {
         self.embeddings.forward(&[input_ids])
     }
-    
 
     /// Direct access to CoreML infer model for granular testing
     pub fn debug_direct_infer_model_execution(
@@ -796,9 +940,11 @@ pub fn generate_tokens(
         inputs: &[&Tensor; 5],
     ) -> Result<Tensor, CandleError> {
         if self.unified_state.is_none() {
-            return Err(CandleError::Msg("No unified state available - prefill must be run first".to_string()));
+            return Err(CandleError::Msg(
+                "No unified state available - prefill must be run first".to_string(),
+            ));
         }
-        
+
         let state = self.unified_state.as_mut().unwrap();
         let output = self.ffn_infer.predict_with_state(inputs, state)?;
         Ok(output)

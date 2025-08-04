@@ -24,7 +24,7 @@
 //! ```
 
 use anyhow::{Error as E, Result};
-use candle_coreml::qwen::{QwenModel, QwenConfig};
+use candle_coreml::qwen::{QwenConfig, QwenModel};
 use clap::Parser;
 use std::io::{self, Write};
 use std::path::PathBuf;
@@ -37,7 +37,10 @@ const DEFAULT_MAX_TOKENS: usize = 50;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// Model repository on HuggingFace Hub
-    #[arg(long, default_value = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")]
+    #[arg(
+        long,
+        default_value = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4"
+    )]
     model_id: String,
 
     /// Model revision (branch/tag)
@@ -86,44 +89,49 @@ impl QwenChatWrapper {
         }
     }
 
-
     fn detokenize(&self, tokens: &[i64]) -> Result<String> {
         let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
-        self.model.tokenizer().decode(&token_ids, false)
+        self.model
+            .tokenizer()
+            .decode(&token_ids, false)
             .map_err(|e| E::msg(format!("Detokenization failed: {}", e)))
     }
 
     fn generate_response(&mut self, prompt: &str) -> Result<String> {
         let start_time = Instant::now();
-        
+
         if self.single_token_mode {
             // Single token mode - like our TDD test that works perfectly
             println!("🎯 Single-token mode: Using validated forward_text() method");
-            let next_token = self.model.forward_text(prompt)
+            let next_token = self
+                .model
+                .forward_text(prompt)
                 .map_err(|e| E::msg(format!("Single token generation failed: {}", e)))?;
-            
+
             let response = self.detokenize(&[next_token])?;
             let inference_time = start_time.elapsed();
-            
+
             println!("⚡ Generated '{}' in {:?}", response, inference_time);
             Ok(response)
         } else {
             // Multi-token mode - using the working generate_tokens method
             println!("🚀 Multi-token mode: Using validated generate_tokens() method");
             println!("📝 Input: '{}'", prompt);
-            
-            let generated_tokens = self.model.generate_tokens(
-                prompt, 
-                self.max_tokens, 
-                self.temperature, 
-                None
-            ).map_err(|e| E::msg(format!("Multi-token generation failed: {}", e)))?;
-            
+
+            let generated_tokens = self
+                .model
+                .generate_tokens(prompt, self.max_tokens, self.temperature, None)
+                .map_err(|e| E::msg(format!("Multi-token generation failed: {}", e)))?;
+
             let response = self.detokenize(&generated_tokens)?;
             let inference_time = start_time.elapsed();
-            
-            println!("⚡ Generated {} tokens in {:?}", generated_tokens.len(), inference_time);
-            
+
+            println!(
+                "⚡ Generated {} tokens in {:?}",
+                generated_tokens.len(),
+                inference_time
+            );
+
             // Stream-like output for better UX
             print!("🤖 ");
             for token in &generated_tokens {
@@ -134,13 +142,11 @@ impl QwenChatWrapper {
                 }
             }
             println!(); // New line after generation
-            
+
             Ok(response)
         }
     }
-
 }
-
 
 fn download_model(args: &Args) -> Result<PathBuf> {
     if let Some(path) = &args.model_path {
@@ -160,7 +166,10 @@ fn download_model(args: &Args) -> Result<PathBuf> {
         }
     }
 
-    println!("📥 Ensuring Qwen model from {} is available...", args.model_id);
+    println!(
+        "📥 Ensuring Qwen model from {} is available...",
+        args.model_id
+    );
 
     // Use the ensure_model_downloaded function from candle-coreml
     let model_dir = candle_coreml::ensure_model_downloaded(&args.model_id, false)
@@ -185,15 +194,20 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
     // Load QwenModel using the granular API
     println!("🔄 Loading QwenModel with granular API...");
     let start_time = Instant::now();
-    
+
     let qwen_config = QwenConfig::default();
     let qwen_model = QwenModel::load_from_directory(&model_dir, Some(qwen_config))
         .map_err(|e| E::msg(format!("Failed to load QwenModel: {}", e)))?;
-    
+
     println!("✅ QwenModel loaded in {:?}", start_time.elapsed());
 
     // Create chat wrapper
-    let mut qwen = QwenChatWrapper::new(qwen_model, args.temperature, args.max_tokens, args.single_token);
+    let mut qwen = QwenChatWrapper::new(
+        qwen_model,
+        args.temperature,
+        args.max_tokens,
+        args.single_token,
+    );
 
     // Interactive chat loop
     println!("\n💬 Chat started! Type 'quit' to exit.");
@@ -213,13 +227,13 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
 
         let mut input = String::new();
         let bytes_read = io::stdin().read_line(&mut input)?;
-        
+
         // Handle EOF (Ctrl+D or stdin closed)
         if bytes_read == 0 {
             println!("\n👋 Goodbye!");
             break;
         }
-        
+
         let input = input.trim();
 
         if input.is_empty() {

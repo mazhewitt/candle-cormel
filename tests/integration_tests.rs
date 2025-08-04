@@ -5,7 +5,9 @@
 #![allow(clippy::needless_return)]
 
 use candle_core::{DType, Device, Tensor};
-use candle_coreml::{download_model, ensure_model_downloaded, get_cached_model_path, Config, CoreMLModel};
+use candle_coreml::{
+    download_model, ensure_model_downloaded, get_cached_model_path, Config, CoreMLModel,
+};
 use std::path::PathBuf;
 
 /// Helper to get the path to OpenELM test model - downloads from HuggingFace if needed
@@ -17,7 +19,7 @@ fn get_openelm_model_path() -> Option<PathBuf> {
         return None;
     }
 
-    let cache_dir = download_model(model_id, true);
+    let cache_dir = ensure_model_downloaded(model_id, true);
 
     match cache_dir {
         Ok(dir) => {
@@ -197,7 +199,7 @@ fn get_mistral_model_path() -> Option<PathBuf> {
     eprintln!("💡 To use a local model next time, set: export MISTRAL_MODEL_PATH=/path/to/StatefulMistral7BInstructInt4.mlpackage");
 
     let model_id = "apple/mistral-coreml";
-    let cache_dir = download_model(model_id, true);
+    let cache_dir = ensure_model_downloaded(model_id, true);
 
     match cache_dir {
         Ok(dir) => {
@@ -825,7 +827,6 @@ fn test_openelm_baseline_text_completion() {
     println!("  ✅ This confirms our implementation is solid");
 }
 
-
 /// Test state parameter validation
 #[test]
 fn test_stateful_prediction_validation() {
@@ -923,15 +924,15 @@ fn test_mistral_baseline_completion() {
 
     // Download and load Apple Mistral model
     let model_id = "apple/mistral-coreml";
-    let mut cache_dir = ensure_model_downloaded(model_id, true)
-        .expect("Failed to download Apple Mistral model");
+    let mut cache_dir =
+        ensure_model_downloaded(model_id, true).expect("Failed to download Apple Mistral model");
     let mut model_path = cache_dir.join("StatefulMistral7BInstructInt4.mlpackage");
-    
+
     // Validate model package exists and has required manifest
     if !model_path.exists() {
         panic!("Model package not found at: {}", model_path.display());
     }
-    
+
     let mut manifest_path = model_path.join("Manifest.json");
     if !manifest_path.exists() {
         eprintln!("❌ Model package missing Manifest.json, re-downloading...");
@@ -942,14 +943,17 @@ fn test_mistral_baseline_completion() {
             }
         }
         // Download again
-        cache_dir = download_model(model_id, true)
-            .expect("Failed to re-download Apple Mistral model");
+        cache_dir =
+            download_model(model_id, true).expect("Failed to re-download Apple Mistral model");
         model_path = cache_dir.join("StatefulMistral7BInstructInt4.mlpackage");
-        
+
         // Check again
         manifest_path = model_path.join("Manifest.json");
         if !manifest_path.exists() {
-            panic!("Model package still missing Manifest.json after re-download: {}", manifest_path.display());
+            panic!(
+                "Model package still missing Manifest.json after re-download: {}",
+                manifest_path.display()
+            );
         }
     }
 
@@ -1430,6 +1434,3 @@ fn test_mistral_autoregressive_mlstate() {
     );
     println!("  🚀 Apple Mistral MLState fully validated for production use!");
 }
-
-
-
