@@ -49,13 +49,9 @@ impl MockMultiComponentQwen {
     fn demo_embeddings_component(&self) -> Result<Tensor> {
         if self.verbose {
             println!("🔧 Embeddings Component Demo");
+            println!("   Input: Token IDs [batch=1, seq_len={TEST_SEQUENCE_LENGTH}]");
             println!(
-                "   Input: Token IDs [batch=1, seq_len={}]",
-                TEST_SEQUENCE_LENGTH
-            );
-            println!(
-                "   Output: Hidden states [batch=1, seq_len={}, hidden_dim={}]",
-                TEST_SEQUENCE_LENGTH, HIDDEN_SIZE
+                "   Output: Hidden states [batch=1, seq_len={TEST_SEQUENCE_LENGTH}, hidden_dim={HIDDEN_SIZE}]"
             );
         }
 
@@ -110,14 +106,8 @@ impl MockMultiComponentQwen {
     fn demo_lm_head_component(&self, hidden_states: &Tensor) -> Result<Tensor> {
         if self.verbose {
             println!("🔧 LM Head Component Demo");
-            println!(
-                "   Input: Last position hidden state [batch=1, 1, hidden_dim={}]",
-                HIDDEN_SIZE
-            );
-            println!(
-                "   Output: Token logits [batch=1, 1, vocab_size={}]",
-                QWEN_VOCAB_SIZE
-            );
+            println!("   Input: Last position hidden state [batch=1, 1, hidden_dim={HIDDEN_SIZE}]");
+            println!("   Output: Token logits [batch=1, 1, vocab_size={QWEN_VOCAB_SIZE}]");
         }
 
         // Extract last position
@@ -150,31 +140,31 @@ impl MockMultiComponentQwen {
         let embeddings_start = Instant::now();
         let hidden_states = self.demo_embeddings_component()?;
         let embeddings_time = embeddings_start.elapsed();
-        println!("   Time: {:?}", embeddings_time);
+        println!("   Time: {embeddings_time:?}");
 
         // Step 2: FFN with causal masking
         println!("\n🧠 Step 2: Feed-Forward Network");
         let ffn_start = Instant::now();
         let processed_hidden = self.demo_ffn_component(&hidden_states)?;
         let ffn_time = ffn_start.elapsed();
-        println!("   Time: {:?}", ffn_time);
+        println!("   Time: {ffn_time:?}");
 
         // Step 3: LM Head
         println!("\n🎯 Step 3: Language Model Head");
         let lm_head_start = Instant::now();
         let _logits = self.demo_lm_head_component(&processed_hidden)?;
         let lm_head_time = lm_head_start.elapsed();
-        println!("   Time: {:?}", lm_head_time);
+        println!("   Time: {lm_head_time:?}");
 
         let total_time = total_start.elapsed();
 
         // Summary
         println!("\n📊 Pipeline Summary");
         println!("==================");
-        println!("• Embeddings:  {:?}", embeddings_time);
-        println!("• FFN:         {:?}", ffn_time);
-        println!("• LM Head:     {:?}", lm_head_time);
-        println!("• Total:       {:?}", total_time);
+        println!("• Embeddings:  {embeddings_time:?}");
+        println!("• FFN:         {ffn_time:?}");
+        println!("• LM Head:     {lm_head_time:?}");
+        println!("• Total:       {total_time:?}");
 
         println!("\n💡 Key Integration Patterns Demonstrated:");
         println!("  ✅ Multi-component model loading");

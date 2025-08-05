@@ -145,10 +145,7 @@ impl QwenBenchmark {
         let mut result = BenchmarkResult::new("ANE".to_string(), sequence_length);
 
         if verbose {
-            println!(
-                "🔧 Benchmarking ANE with sequence length {}",
-                sequence_length
-            );
+            println!("🔧 Benchmarking ANE with sequence length {sequence_length}");
         }
 
         // Create a simple test prompt
@@ -193,7 +190,7 @@ fn print_results(results: &[BenchmarkResult]) {
     }
 
     for (&seq_len, group) in results_by_length.iter() {
-        println!("\n🔢 Sequence Length: {} tokens", seq_len);
+        println!("\n🔢 Sequence Length: {seq_len} tokens");
         println!("────────────────────────────────");
 
         for result in group {
@@ -224,8 +221,8 @@ fn print_results(results: &[BenchmarkResult]) {
                 let throughput_gain = (ane.tokens_per_second / cpu.tokens_per_second - 1.0) * 100.0;
 
                 println!("\n⚡ ANE Performance Gain:");
-                println!("   • {}x faster than CPU", speedup);
-                println!("   • {:.1}% higher throughput", throughput_gain);
+                println!("   • {speedup}x faster than CPU");
+                println!("   • {throughput_gain:.1}% higher throughput");
             }
         }
     }
@@ -243,7 +240,7 @@ fn run_benchmark(args: &Args) -> Result<()> {
         .as_deref()
         .unwrap_or(DEFAULT_SEQUENCE_LENGTHS);
 
-    println!("Sequence lengths: {:?}", sequence_lengths);
+    println!("Sequence lengths: {sequence_lengths:?}");
     println!();
 
     // Load Qwen model
@@ -251,18 +248,18 @@ fn run_benchmark(args: &Args) -> Result<()> {
     println!("📥 Downloading model components from HuggingFace...");
 
     let model_path = model_downloader::ensure_model_downloaded(&args.model_id, args.verbose)
-        .map_err(|e| E::msg(format!("Failed to download model: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to download model: {e}")))?;
 
     let config = QwenConfig::default();
     let model = QwenModel::load_from_directory(&model_path, Some(config))
-        .map_err(|e| E::msg(format!("Failed to load model: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to load model: {e}")))?;
 
     let mut benchmark = QwenBenchmark::new(model);
     let mut all_results = Vec::new();
 
     // Run benchmarks
     for &seq_len in sequence_lengths {
-        println!("🧪 Testing sequence length: {}", seq_len);
+        println!("🧪 Testing sequence length: {seq_len}");
 
         // ANE benchmark (with state)
         match benchmark.benchmark_inference(seq_len, args.iterations, true, args.verbose) {
@@ -271,7 +268,7 @@ fn run_benchmark(args: &Args) -> Result<()> {
                 all_results.push(result);
             }
             Err(e) => {
-                println!("⚠️  ANE benchmark failed: {}", e);
+                println!("⚠️  ANE benchmark failed: {e}");
             }
         }
 
@@ -283,7 +280,7 @@ fn run_benchmark(args: &Args) -> Result<()> {
                     all_results.push(result);
                 }
                 Err(e) => {
-                    println!("⚠️  CPU benchmark failed: {}", e);
+                    println!("⚠️  CPU benchmark failed: {e}");
                 }
             }
         }

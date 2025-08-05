@@ -28,7 +28,7 @@ fn main() -> Result<()> {
     // Test with a small model that has LFS files
     let model_id = "microsoft/DialoGPT-small"; // Has LFS files like pytorch_model.bin
 
-    println!("📦 Testing with model: {}", model_id);
+    println!("📦 Testing with model: {model_id}");
 
     // Configure the clean downloader
     let config = CleanDownloadConfig::for_hf_model(model_id, &cache_base)
@@ -85,7 +85,7 @@ fn show_directory_structure(dir: &PathBuf, depth: usize) -> Result<()> {
         let indent = "  ".repeat(depth);
 
         if path.is_dir() {
-            println!("{}📁 {}/", indent, file_name);
+            println!("{indent}📁 {file_name}/");
             show_directory_structure(&path, depth + 1)?;
         } else {
             let metadata = std::fs::metadata(&path)?;
@@ -93,7 +93,7 @@ fn show_directory_structure(dir: &PathBuf, depth: usize) -> Result<()> {
 
             // Show file size in human-readable format
             let size_str = if size < 1024 {
-                format!("{} B", size)
+                format!("{size} B")
             } else if size < 1024 * 1024 {
                 format!("{:.1} KB", size as f64 / 1024.0)
             } else if size < 1024 * 1024 * 1024 {
@@ -102,7 +102,7 @@ fn show_directory_structure(dir: &PathBuf, depth: usize) -> Result<()> {
                 format!("{:.1} GB", size as f64 / (1024.0 * 1024.0 * 1024.0))
             };
 
-            println!("{}📄 {} ({})", indent, file_name, size_str);
+            println!("{indent}📄 {file_name} ({size_str})");
         }
     }
 

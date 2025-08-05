@@ -35,7 +35,7 @@ fn get_openelm_model_path() -> Option<PathBuf> {
             None
         }
         Err(e) => {
-            eprintln!("Failed to download OpenELM model: {}", e);
+            eprintln!("Failed to download OpenELM model: {e}");
             None
         }
     }
@@ -134,16 +134,13 @@ fn is_valid_mistral_model(mlpackage_path: &std::path::Path) -> bool {
         // Check if it's the actual file (>1GB) not an LFS pointer (<1KB)
         if let Ok(metadata) = std::fs::metadata(&weight_file) {
             let size_mb = metadata.len() as f64 / 1_000_000.0;
-            eprintln!("Found weight.bin: {:.1} MB", size_mb);
+            eprintln!("Found weight.bin: {size_mb:.1} MB");
 
             if metadata.len() > 1_000_000 {
                 // > 1MB means it's likely the real file
                 return true;
             } else {
-                eprintln!(
-                    "Weight file too small ({:.1} MB), likely an LFS pointer",
-                    size_mb
-                );
+                eprintln!("Weight file too small ({size_mb:.1} MB), likely an LFS pointer");
                 return false;
             }
         }
@@ -222,7 +219,7 @@ fn get_mistral_model_path() -> Option<PathBuf> {
             None
         }
         Err(e) => {
-            eprintln!("Failed to download Mistral model: {}", e);
+            eprintln!("Failed to download Mistral model: {e}");
             None
         }
     }
@@ -266,10 +263,10 @@ fn test_load_real_model() {
             Err(err) => {
                 let err_str = err.to_string();
                 if err_str.contains("Compile the model") {
-                    eprintln!("Skipping test: model needs to be compiled - {}", err_str);
+                    eprintln!("Skipping test: model needs to be compiled - {err_str}");
                     return;
                 } else {
-                    panic!("Failed to load CoreML model: {}", err);
+                    panic!("Failed to load CoreML model: {err}");
                 }
             }
         }
@@ -310,10 +307,10 @@ fn test_inference_cpu() {
         Err(err) => {
             let err_str = err.to_string();
             if err_str.contains("Compile the model") {
-                eprintln!("Skipping test: model needs to be compiled - {}", err_str);
+                eprintln!("Skipping test: model needs to be compiled - {err_str}");
                 return;
             } else {
-                panic!("Failed to load CoreML model: {}", err);
+                panic!("Failed to load CoreML model: {err}");
             }
         }
     };
@@ -418,10 +415,10 @@ fn test_inference_metal() {
         Err(err) => {
             let err_str = err.to_string();
             if err_str.contains("Compile the model") {
-                eprintln!("Skipping test: model needs to be compiled - {}", err_str);
+                eprintln!("Skipping test: model needs to be compiled - {err_str}");
                 return;
             } else {
-                panic!("Failed to load CoreML model: {}", err);
+                panic!("Failed to load CoreML model: {err}");
             }
         }
     };
@@ -473,10 +470,10 @@ fn test_device_validation_cuda_rejection() {
         Err(err) => {
             let err_str = err.to_string();
             if err_str.contains("Compile the model") {
-                eprintln!("Skipping test: model needs to be compiled - {}", err_str);
+                eprintln!("Skipping test: model needs to be compiled - {err_str}");
                 return;
             } else {
-                panic!("Failed to load CoreML model: {}", err);
+                panic!("Failed to load CoreML model: {err}");
             }
         }
     };
@@ -574,7 +571,7 @@ fn test_state_creation() {
 
                 let _state = state_result.unwrap();
                 // State should have proper debug formatting
-                let debug_str = format!("{:?}", _state);
+                let debug_str = format!("{_state:?}");
                 assert!(debug_str.contains("CoreMLState"));
             }
         }
@@ -775,10 +772,7 @@ fn test_openelm_baseline_text_completion() {
     let top_token_id = indexed_logits[0].0;
     let top_token_score = indexed_logits[0].1;
 
-    println!(
-        "🏆 Top prediction: Token {} with score {:.3}",
-        top_token_id, top_token_score
-    );
+    println!("🏆 Top prediction: Token {top_token_id} with score {top_token_score:.3}");
 
     // Show top 5 predictions for debugging
     println!("📊 Top 5 predictions:");
@@ -789,8 +783,7 @@ fn test_openelm_baseline_text_completion() {
     // Core assertions for baseline test
     assert!(
         top_token_score > 5.0,
-        "Top prediction should have high confidence (>5.0), got {:.3}",
-        top_token_score
+        "Top prediction should have high confidence (>5.0), got {top_token_score:.3}"
     );
 
     assert!(
@@ -800,15 +793,13 @@ fn test_openelm_baseline_text_completion() {
 
     // The critical test: token 11203 should be "dog" and should be the top prediction
     assert_eq!(top_token_id, 11203,
-        "BASELINE FAILURE: Expected 'dog' (token 11203) as top prediction for 'The quick brown fox jumped over the lazy', got token {}",
-        top_token_id);
+        "BASELINE FAILURE: Expected 'dog' (token 11203) as top prediction for 'The quick brown fox jumped over the lazy', got token {top_token_id}");
 
     // Additional statistical validations
     let logit_range = indexed_logits[0].1 - indexed_logits.last().unwrap().1;
     assert!(
         logit_range > 20.0,
-        "Should have good logit spread (>20.0), got {:.3}",
-        logit_range
+        "Should have good logit spread (>20.0), got {logit_range:.3}"
     );
 
     assert_eq!(
@@ -820,10 +811,7 @@ fn test_openelm_baseline_text_completion() {
     println!("🎉 BASELINE TEST PASSED!");
     println!("  ✅ OpenELM correctly predicts 'dog' for 'quick brown fox' completion");
     println!("  ✅ CoreML infrastructure working perfectly");
-    println!(
-        "  ✅ Confidence: {:.3}, Range: {:.3}",
-        top_token_score, logit_range
-    );
+    println!("  ✅ Confidence: {top_token_score:.3}, Range: {logit_range:.3}");
     println!("  ✅ This confirms our implementation is solid");
 }
 
@@ -939,7 +927,7 @@ fn test_mistral_baseline_completion() {
         // Force re-download by removing the corrupted cache
         if let Some(cached_path) = get_cached_model_path(model_id) {
             if let Err(e) = std::fs::remove_dir_all(&cached_path) {
-                eprintln!("Warning: Failed to remove corrupted cache: {}", e);
+                eprintln!("Warning: Failed to remove corrupted cache: {e}");
             }
         }
         // Download again
@@ -1030,10 +1018,7 @@ fn test_mistral_baseline_completion() {
         .fold(f32::NEG_INFINITY, |a, &b| a.max(b));
     let logits_mean = next_token_logits.iter().sum::<f32>() / next_token_logits.len() as f32;
 
-    println!(
-        "📊 Logits stats: min={:.3}, max={:.3}, mean={:.3}",
-        logits_min, logits_max, logits_mean
-    );
+    println!("📊 Logits stats: min={logits_min:.3}, max={logits_max:.3}, mean={logits_mean:.3}");
 
     // Find top predictions
     let mut indexed_logits: Vec<(usize, f32)> = next_token_logits
@@ -1046,10 +1031,7 @@ fn test_mistral_baseline_completion() {
     let top_token_id = indexed_logits[0].0;
     let top_token_score = indexed_logits[0].1;
 
-    println!(
-        "🏆 Top prediction: Token {} with score {:.3}",
-        top_token_id, top_token_score
-    );
+    println!("🏆 Top prediction: Token {top_token_id} with score {top_token_score:.3}");
 
     // Show top 5 predictions
     println!("📊 Top 5 predictions:");
@@ -1060,15 +1042,13 @@ fn test_mistral_baseline_completion() {
     // Validation assertions
     assert!(
         top_token_score > -20.0,
-        "Top prediction should have reasonable score (>-20.0), got {:.3}",
-        top_token_score
+        "Top prediction should have reasonable score (>-20.0), got {top_token_score:.3}"
     );
 
     let logit_range = indexed_logits[0].1 - indexed_logits.last().unwrap().1;
     assert!(
         logit_range > 10.0,
-        "Should have good logit spread (>10.0), got {:.3}",
-        logit_range
+        "Should have good logit spread (>10.0), got {logit_range:.3}"
     );
 
     assert!(
@@ -1100,7 +1080,7 @@ fn test_mistral_baseline_completion() {
     let fox_tokens = vec![415i64, 4996, 14198, 35935, 35308, 927, 279, 16053]; // "The quick brown fox jumps over the lazy" tokens
     let _generated_text = String::from("The quick brown fox jumps over the lazy");
 
-    println!("🔤 Input sequence: {:?}", fox_tokens);
+    println!("🔤 Input sequence: {fox_tokens:?}");
 
     // Process each token and get next prediction
     for (i, &token) in fox_tokens.iter().enumerate() {
@@ -1126,16 +1106,12 @@ fn test_mistral_baseline_completion() {
                 .unwrap()
                 .0;
 
-            println!(
-                "🎯 Next token prediction: {} (likely 'dog' or similar)",
-                top_token_id
-            );
+            println!("🎯 Next token prediction: {top_token_id} (likely 'dog' or similar)");
 
             // Basic validation: should predict a reasonable next token
             assert!(
                 top_token_id > 0 && top_token_id < 32768,
-                "Should predict valid token ID, got {}",
-                top_token_id
+                "Should predict valid token ID, got {top_token_id}"
             );
         }
     }
@@ -1146,11 +1122,8 @@ fn test_mistral_baseline_completion() {
     println!("  ✅ Apple Mistral model loads successfully");
     println!("  ✅ Stateless inference works with proper inputs");
     println!("  ✅ Produces reasonable logits distribution");
-    println!(
-        "  ✅ Top prediction: Token {} (score: {:.3})",
-        top_token_id, top_token_score
-    );
-    println!("  ✅ Logit range: {:.3}", logit_range);
+    println!("  ✅ Top prediction: Token {top_token_id} (score: {top_token_score:.3})");
+    println!("  ✅ Logit range: {logit_range:.3}");
     println!("  ✅ Ready for autoregressive MLState testing");
 }
 
@@ -1227,7 +1200,7 @@ fn test_mistral_autoregressive_mlstate() {
     // Generate 3 tokens to test autoregressive behavior
     for step in 0..3 {
         println!("\n--- Generation Step {} ---", step + 1);
-        println!("Current position: {}", step);
+        println!("Current position: {step}");
         println!("Input token: {}", current_tokens.last().unwrap());
 
         // Create input for current token
@@ -1263,10 +1236,7 @@ fn test_mistral_autoregressive_mlstate() {
         let next_token = indexed_logits[0].0 as i64;
         let confidence = indexed_logits[0].1;
 
-        println!(
-            "🎯 Predicted next token: {} (confidence: {:.3})",
-            next_token, confidence
-        );
+        println!("🎯 Predicted next token: {next_token} (confidence: {confidence:.3})");
         println!("📊 Top 3 predictions:");
         for (rank, (token_id, score)) in indexed_logits.iter().take(3).enumerate() {
             println!("  {}. Token {}: {:.3}", rank + 1, token_id, score);
@@ -1303,7 +1273,7 @@ fn test_mistral_autoregressive_mlstate() {
         }
     }
 
-    println!("\n✅ Generated sequence: {:?}", current_tokens);
+    println!("\n✅ Generated sequence: {current_tokens:?}");
 
     // Test 3: State persistence validation
     println!("\n🔍 Test 3: State persistence validation");
@@ -1342,7 +1312,7 @@ fn test_mistral_autoregressive_mlstate() {
     }
 
     println!("🔄 Original sequence: {:?}", &current_tokens[..3]);
-    println!("🔄 Fresh sequence:    {:?}", fresh_tokens);
+    println!("🔄 Fresh sequence:    {fresh_tokens:?}");
 
     // With deterministic models, sequences should be identical
     assert_eq!(
@@ -1428,9 +1398,6 @@ fn test_mistral_autoregressive_mlstate() {
     println!("  ✅ True autoregressive generation with single tokens");
     println!("  ✅ State persistence maintains context correctly");
     println!("  ✅ Multiple independent states work");
-    println!(
-        "  ✅ Generated coherent token sequence: {:?}",
-        current_tokens
-    );
+    println!("  ✅ Generated coherent token sequence: {current_tokens:?}");
     println!("  🚀 Apple Mistral MLState fully validated for production use!");
 }

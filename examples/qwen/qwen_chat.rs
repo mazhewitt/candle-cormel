@@ -94,7 +94,7 @@ impl QwenChatWrapper {
         self.model
             .tokenizer()
             .decode(&token_ids, false)
-            .map_err(|e| E::msg(format!("Detokenization failed: {}", e)))
+            .map_err(|e| E::msg(format!("Detokenization failed: {e}")))
     }
 
     fn generate_response(&mut self, prompt: &str) -> Result<String> {
@@ -106,22 +106,22 @@ impl QwenChatWrapper {
             let next_token = self
                 .model
                 .forward_text(prompt)
-                .map_err(|e| E::msg(format!("Single token generation failed: {}", e)))?;
+                .map_err(|e| E::msg(format!("Single token generation failed: {e}")))?;
 
             let response = self.detokenize(&[next_token])?;
             let inference_time = start_time.elapsed();
 
-            println!("⚡ Generated '{}' in {:?}", response, inference_time);
+            println!("⚡ Generated '{response}' in {inference_time:?}");
             Ok(response)
         } else {
             // Multi-token mode - using the working generate_tokens method
             println!("🚀 Multi-token mode: Using validated generate_tokens() method");
-            println!("📝 Input: '{}'", prompt);
+            println!("📝 Input: '{prompt}'");
 
             let generated_tokens = self
                 .model
                 .generate_tokens(prompt, self.max_tokens, self.temperature, None)
-                .map_err(|e| E::msg(format!("Multi-token generation failed: {}", e)))?;
+                .map_err(|e| E::msg(format!("Multi-token generation failed: {e}")))?;
 
             let response = self.detokenize(&generated_tokens)?;
             let inference_time = start_time.elapsed();
@@ -136,7 +136,7 @@ impl QwenChatWrapper {
             print!("🤖 ");
             for token in &generated_tokens {
                 if let Ok(token_text) = self.detokenize(&[*token]) {
-                    print!("{}", token_text);
+                    print!("{token_text}");
                     io::stdout().flush().unwrap();
                     std::thread::sleep(std::time::Duration::from_millis(50)); // Simulate streaming
                 }
@@ -173,7 +173,7 @@ fn download_model(args: &Args) -> Result<PathBuf> {
 
     // Use the ensure_model_downloaded function from candle-coreml
     let model_dir = candle_coreml::ensure_model_downloaded(&args.model_id, false)
-        .map_err(|e| E::msg(format!("Failed to download model: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to download model: {e}")))?;
 
     println!("✅ Model available at: {}", model_dir.display());
     Ok(model_dir)
@@ -200,7 +200,7 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
 
     let qwen_config = QwenConfig::default();
     let qwen_model = QwenModel::load_from_directory(&model_dir, Some(qwen_config))
-        .map_err(|e| E::msg(format!("Failed to load QwenModel: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to load QwenModel: {e}")))?;
 
     println!("✅ QwenModel loaded in {:?}", start_time.elapsed());
 
@@ -254,7 +254,7 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
             input.to_string()
         } else {
             // Multi-token mode - format as chat
-            format!("User: {}\nAssistant:", input)
+            format!("User: {input}\nAssistant:")
         };
 
         // Generate response
@@ -263,7 +263,7 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
                 println!(); // Extra line for readability
             }
             Err(e) => {
-                println!("❌ Generation failed: {}", e);
+                println!("❌ Generation failed: {e}");
             }
         }
     }
@@ -285,7 +285,7 @@ fn main() -> Result<()> {
 
     if args.verbose {
         println!("🔧 Verbose mode enabled");
-        println!("Config: {:#?}", args);
+        println!("Config: {args:#?}");
         println!();
     }
 

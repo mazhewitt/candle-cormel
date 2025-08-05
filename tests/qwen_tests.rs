@@ -78,30 +78,29 @@ mod architecture_tests {
         let test_prompts = ["Hello world", "The quick brown fox", "In the beginning"];
 
         for prompt in &test_prompts {
-            println!("\n📝 Testing prompt: '{}'", prompt);
+            println!("\n📝 Testing prompt: '{prompt}'");
 
             // This should work without panicking using our fixed architecture
             let result = qwen_model.forward_text(prompt);
             match result {
                 Ok(token) => {
-                    println!("🎯 Generated token: {}", token);
+                    println!("🎯 Generated token: {token}");
 
                     // Try to decode the token
                     if let Ok(decoded) = qwen_model.tokenizer().decode(&[token as u32], false) {
-                        println!("📖 Decoded: '{}'", decoded);
+                        println!("📖 Decoded: '{decoded}'");
                     } else {
-                        println!("⚠️ Token {} exists but couldn't decode", token);
+                        println!("⚠️ Token {token} exists but couldn't decode");
                     }
 
                     // Basic sanity check - token should be in valid range
                     assert!(
                         (0..200000).contains(&token),
-                        "Token {} should be in reasonable range",
-                        token
+                        "Token {token} should be in reasonable range"
                     );
                 }
                 Err(e) => {
-                    panic!("❌ QwenModel failed: {}", e);
+                    panic!("❌ QwenModel failed: {e}");
                 }
             }
         }
@@ -137,16 +136,16 @@ mod position_fix_tests {
 
         // Test the exact prompt that should predict "dog"
         let prompt = QUICK_BROWN_FOX_PROMPT;
-        println!("📝 Testing prompt: '{}'", prompt);
+        println!("📝 Testing prompt: '{prompt}'");
 
         // Also test a longer prompt that would trigger the /no_think issue
         let longer_prompt = "Tell me about Greece. I want to know about its history, culture, and geography. What makes it special?";
-        println!("📝 Also testing longer prompt: '{}'", longer_prompt);
+        println!("📝 Also testing longer prompt: '{longer_prompt}'");
 
         let tokens = qwen_model
             .tokenizer()
             .encode(longer_prompt, true)
-            .map_err(|e| anyhow::Error::msg(format!("Tokenization failed: {}", e)))?;
+            .map_err(|e| anyhow::Error::msg(format!("Tokenization failed: {e}")))?;
         println!(
             "🔢 Longer prompt tokenized to {} tokens",
             tokens.get_ids().len()
@@ -154,7 +153,7 @@ mod position_fix_tests {
 
         let next_token = qwen_model.forward_text(prompt)?;
 
-        println!("🎯 Prediction: token {}", next_token);
+        println!("🎯 Prediction: token {next_token}");
 
         // Test with the longer prompt (this would previously cause tensor indexing error)
         if tokens.get_ids().len() <= 50 {
@@ -162,17 +161,14 @@ mod position_fix_tests {
             println!("🧪 Testing longer prompt (this would previously fail)...");
             match qwen_model.forward_text(longer_prompt) {
                 Ok(long_token) => {
-                    println!("✅ Longer prompt works! Predicted token: {}", long_token);
+                    println!("✅ Longer prompt works! Predicted token: {long_token}");
                     if let Ok(decoded) = qwen_model.tokenizer().decode(&[long_token as u32], false)
                     {
-                        println!("📖 Decoded: '{}'", decoded);
+                        println!("📖 Decoded: '{decoded}'");
                     }
                 }
                 Err(e) => {
-                    println!(
-                        "⚠️  Longer prompt failed (expected for very long inputs): {}",
-                        e
-                    );
+                    println!("⚠️  Longer prompt failed (expected for very long inputs): {e}");
                 }
             }
         } else {
@@ -184,7 +180,7 @@ mod position_fix_tests {
 
         // Decode the token
         if let Ok(decoded) = qwen_model.tokenizer().decode(&[next_token as u32], false) {
-            println!("📖 Decoded: '{}'", decoded);
+            println!("📖 Decoded: '{decoded}'");
         }
 
         if next_token == EXPECTED_DOG_TOKEN {
@@ -192,8 +188,7 @@ mod position_fix_tests {
             Ok(())
         } else {
             println!(
-                "❌ Still predicting token {} instead of {} ('dog')",
-                next_token, EXPECTED_DOG_TOKEN
+                "❌ Still predicting token {next_token} instead of {EXPECTED_DOG_TOKEN} ('dog')"
             );
 
             // Check if it's at least different from the previous wrong prediction
@@ -234,32 +229,28 @@ mod prediction_tests {
         let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
 
         let prompt = QUICK_BROWN_FOX_PROMPT;
-        println!("📝 Prompt: '{}'", prompt);
+        println!("📝 Prompt: '{prompt}'");
 
         let predicted_token = qwen_model.forward_text(prompt)?;
         let decoded = qwen_model
             .tokenizer()
             .decode(&[predicted_token as u32], false)
-            .map_err(|e| anyhow::Error::msg(format!("Decode error: {}", e)))?;
+            .map_err(|e| anyhow::Error::msg(format!("Decode error: {e}")))?;
 
-        println!(
-            "🎯 Rust prediction: Token {} = '{}'",
-            predicted_token, decoded
-        );
+        println!("🎯 Rust prediction: Token {predicted_token} = '{decoded}'");
 
         // Check if it's "dog" (token 5562)
         if predicted_token == EXPECTED_DOG_TOKEN {
             println!("🎉 SUCCESS! Rust correctly predicts 'dog'");
         } else {
             println!(
-                "❌ Different prediction. Expected: {} ('dog'), Got: {} ('{}')",
-                EXPECTED_DOG_TOKEN, predicted_token, decoded
+                "❌ Different prediction. Expected: {EXPECTED_DOG_TOKEN} ('dog'), Got: {predicted_token} ('{decoded}')"
             );
 
             // Show what the tokenizer thinks about "dog"
             if let Ok(dog_tokens) = qwen_model.tokenizer().encode(" dog", false) {
                 let dog_token_ids: Vec<u32> = dog_tokens.get_ids().to_vec();
-                println!("🔍 ' dog' tokenizes to: {:?}", dog_token_ids);
+                println!("🔍 ' dog' tokenizes to: {dog_token_ids:?}");
             }
             panic!("Rust prediction did not match expected 'dog' token");
         }
@@ -295,13 +286,12 @@ mod integration_tests {
         // Assert that the completion contains "dog" or "lazy" (both have tied logits in the model)
         assert!(
             completion.to_lowercase().contains("dog") || completion.to_lowercase().contains("lazy"),
-            "Expected completion to contain 'dog' or 'lazy' (both have tied logit values), but got: '{}'",
-            completion
+            "Expected completion to contain 'dog' or 'lazy' (both have tied logit values), but got: '{completion}'"
         );
 
         println!("✅ Qwen pipeline test passed!");
-        println!("Prompt: {}", prompt);
-        println!("Completion: {}", completion);
+        println!("Prompt: {prompt}");
+        println!("Completion: {completion}");
 
         Ok(())
     }
@@ -324,15 +314,13 @@ mod extended_coverage_tests {
 
         // Test multiple state initializations (should not cause conflicts)
         for i in 1..=3 {
-            println!("State initialization attempt {}", i);
+            println!("State initialization attempt {i}");
 
             // This should work repeatedly without issues
             let result = model.initialize_states();
             assert!(
                 result.is_ok(),
-                "State initialization {} failed: {:?}",
-                i,
-                result
+                "State initialization {i} failed: {result:?}"
             );
         }
 
@@ -477,7 +465,7 @@ mod extended_coverage_tests {
 
             let token = response?;
             responses.push(token);
-            println!("  Response token: {}", token);
+            println!("  Response token: {token}");
         }
 
         // Verify we got different tokens (conversation progressed)

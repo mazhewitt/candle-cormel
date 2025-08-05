@@ -101,7 +101,7 @@ fn bench_tensor_operations(c: &mut Criterion) {
 
             // Benchmark tensor creation
             group.bench_with_input(
-                BenchmarkId::new("tensor_creation_i64", format!("{}x{}", batch, seq_len)),
+                BenchmarkId::new("tensor_creation_i64", format!("{batch}x{seq_len}")),
                 &shape,
                 |b, &(batch, seq_len)| {
                     b.iter(|| {
@@ -118,7 +118,7 @@ fn bench_tensor_operations(c: &mut Criterion) {
             // Benchmark tensor conversion to CoreML
             let tensor = Tensor::zeros(shape, candle_core::DType::I64, &device).unwrap();
             group.bench_with_input(
-                BenchmarkId::new("tensor_to_coreml", format!("{}x{}", batch, seq_len)),
+                BenchmarkId::new("tensor_to_coreml", format!("{batch}x{seq_len}")),
                 &tensor,
                 |b, tensor| {
                     b.iter(|| {
