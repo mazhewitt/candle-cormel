@@ -23,15 +23,10 @@
 //! ```
 
 use anyhow::{Error as E, Result};
-use candle_core::{Device, Tensor};
-use candle_coreml::{get_local_or_remote_file, Config as CoreMLConfig, CoreMLModel};
+use candle_coreml::{model_downloader, QwenConfig, QwenModel};
 use clap::Parser;
-use hf_hub::{api::sync::Api, Repo, RepoType};
-use std::path::PathBuf;
 use std::time::{Duration, Instant};
-use tokenizers::Tokenizer;
 
-const QWEN_VOCAB_SIZE: usize = 151936;
 const DEFAULT_ITERATIONS: usize = 10;
 const DEFAULT_SEQUENCE_LENGTHS: &[usize] = &[64, 128, 256, 512];
 
@@ -132,98 +127,44 @@ impl BenchmarkResult {
 }
 
 struct QwenBenchmark {
-    model: CoreMLModel,
-    tokenizer: Tokenizer,
+    model: QwenModel,
 }
 
 impl QwenBenchmark {
-    fn new(model: CoreMLModel, tokenizer: Tokenizer) -> Self {
-        Self { model, tokenizer }
+    fn new(model: QwenModel) -> Self {
+        Self { model }
     }
 
-    fn generate_test_tokens(&self, sequence_length: usize) -> Result<Vec<i64>> {
-        // Create a representative test sequence
-        let test_text =
-            "The quick brown fox jumps over the lazy dog. ".repeat(sequence_length / 10 + 1);
-
-        let encoding = self
-            .tokenizer
-            .encode(test_text.as_str(), true)
-            .map_err(|e| E::msg(format!("Tokenization failed: {}", e)))?;
-
-        let mut tokens: Vec<i64> = encoding
-            .get_ids()
-            .iter()
-            .map(|&id| id as i64)
-            .take(sequence_length)
-            .collect();
-
-        // Pad if necessary
-        while tokens.len() < sequence_length {
-            tokens.push(0); // PAD token
-        }
-
-        Ok(tokens)
-    }
 
     fn benchmark_inference(
-        &self,
+        &mut self,
         sequence_length: usize,
         iterations: usize,
-        use_state: bool,
+        _use_state: bool,
         verbose: bool,
     ) -> Result<BenchmarkResult> {
-        let device_type = if use_state {
-            "ANE (Stateful)"
-        } else {
-            "CPU (Stateless)"
-        };
-        let mut result = BenchmarkResult::new(device_type.to_string(), sequence_length);
+        let mut result = BenchmarkResult::new("ANE".to_string(), sequence_length);
 
         if verbose {
             println!(
-                "🔧 Benchmarking {} with sequence length {}",
-                device_type, sequence_length
+                "🔧 Benchmarking ANE with sequence length {}",
+                sequence_length
             );
         }
 
-        let device = Device::Cpu;
-        let test_tokens = self.generate_test_tokens(sequence_length)?;
+        // Create a simple test prompt  
+        let test_prompt = "The quick brown fox jumps over the lazy dog";
 
         // Warm-up run
-        let input_tensor = Tensor::from_vec(test_tokens.clone(), (1, sequence_length), &device)?;
-
-        if use_state {
-            let mut state = self
-                .model
-                .make_state()
-                .map_err(|e| E::msg(format!("Failed to create state: {}", e)))?;
-            let _ = self
-                .model
-                .predict_with_state(&[&input_tensor], &mut state)?;
-        } else {
-            let _ = self.model.forward(&[&input_tensor])?;
-        }
+        let _ = self.model.forward_text(test_prompt);
 
         // Benchmark iterations
         for i in 0..iterations {
-            let input_tensor =
-                Tensor::from_vec(test_tokens.clone(), (1, sequence_length), &device)?;
-
             let start_time = Instant::now();
-
-            if use_state {
-                let mut state = self
-                    .model
-                    .make_state()
-                    .map_err(|e| E::msg(format!("Failed to create state: {}", e)))?;
-                let _ = self
-                    .model
-                    .predict_with_state(&[&input_tensor], &mut state)?;
-            } else {
-                let _ = self.model.forward(&[&input_tensor])?;
-            }
-
+            
+            // Use forward_text for single token prediction (faster benchmark)
+            let _ = self.model.forward_text(test_prompt)?;
+            
             let elapsed = start_time.elapsed();
             result.add_measurement(elapsed);
 
@@ -237,44 +178,6 @@ impl QwenBenchmark {
     }
 }
 
-fn download_resources(args: &Args) -> Result<(PathBuf, Tokenizer)> {
-    if args.local {
-        let model_path = PathBuf::from("models/qwen/model.mlmodelc");
-        let tokenizer_path = PathBuf::from("models/qwen/tokenizer.json");
-
-        if !model_path.exists() || !tokenizer_path.exists() {
-            return Err(E::msg(
-                "Local model or tokenizer not found. Run without --local to download.",
-            ));
-        }
-
-        let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| E::msg(format!("Failed to load local tokenizer: {}", e)))?;
-
-        return Ok((model_path, tokenizer));
-    }
-
-    println!("📥 Downloading benchmark resources...");
-
-    let repo = Repo::with_revision(args.model_id.clone(), RepoType::Model, "main".to_string());
-    let api = Api::new()?;
-    let api_repo = api.repo(repo);
-
-    // Download model
-    let model_file = get_local_or_remote_file("model.mlmodelc", &api_repo)
-        .or_else(|_| get_local_or_remote_file("model.mlpackage", &api_repo))
-        .map_err(|e| E::msg(format!("Could not download model: {}", e)))?;
-
-    // Download tokenizer
-    let tokenizer_file = get_local_or_remote_file("tokenizer.json", &api_repo)
-        .map_err(|e| E::msg(format!("Could not download tokenizer: {}", e)))?;
-
-    let tokenizer = Tokenizer::from_file(&tokenizer_file)
-        .map_err(|e| E::msg(format!("Failed to load tokenizer: {}", e)))?;
-
-    println!("✅ Resources downloaded successfully");
-    Ok((model_file, tokenizer))
-}
 
 fn print_results(results: &[BenchmarkResult]) {
     println!("\n📊 Benchmark Results");
@@ -345,23 +248,18 @@ fn run_benchmark(args: &Args) -> Result<()> {
     println!("Sequence lengths: {:?}", sequence_lengths);
     println!();
 
-    // Download resources
-    let (model_path, tokenizer) = download_resources(args)?;
-
-    // Load model
-    println!("🔄 Loading CoreML model...");
-    let config = CoreMLConfig {
-        input_names: vec!["input_ids".to_string()],
-        output_name: "output".to_string(),
-        max_sequence_length: *sequence_lengths.iter().max().unwrap_or(&512),
-        vocab_size: QWEN_VOCAB_SIZE,
-        model_type: "qwen-benchmark".to_string(),
-    };
-
-    let model = CoreMLModel::load_from_file(&model_path, &config)
+    // Load Qwen model
+    println!("🔄 Loading Qwen model...");
+    println!("📥 Downloading model components from HuggingFace...");
+    
+    let model_path = model_downloader::ensure_model_downloaded(&args.model_id, args.verbose)
+        .map_err(|e| E::msg(format!("Failed to download model: {}", e)))?;
+    
+    let config = QwenConfig::default();
+    let model = QwenModel::load_from_directory(&model_path, Some(config))
         .map_err(|e| E::msg(format!("Failed to load model: {}", e)))?;
 
-    let benchmark = QwenBenchmark::new(model, tokenizer);
+    let mut benchmark = QwenBenchmark::new(model);
     let mut all_results = Vec::new();
 
     // Run benchmarks

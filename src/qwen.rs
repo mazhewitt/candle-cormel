@@ -97,7 +97,7 @@ impl QwenModel {
             model_type: "qwen-ffn".to_string(),
         };
 
-        let ffn_path = model_dir.join("qwen_FFN_PF_lut8_chunk_01of01.mlmodelc");
+        let ffn_path = model_dir.join("qwen_FFN_PF_lut6_chunk_01of01.mlmodelc");
 
         // FFN Prefill function (for initial sequence processing)
         debug!("Loading FFN prefill component from {}", ffn_path.display());
@@ -120,7 +120,7 @@ impl QwenModel {
             model_type: "qwen-lm-head".to_string(),
         };
 
-        let lm_head_path = model_dir.join("qwen_lm_head_lut8.mlmodelc");
+        let lm_head_path = model_dir.join("qwen_lm_head_lut6.mlmodelc");
         debug!("Loading LM head component from {}", lm_head_path.display());
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)?;
 

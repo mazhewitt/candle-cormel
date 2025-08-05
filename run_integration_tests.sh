@@ -64,6 +64,28 @@ echo "🚀 Starting integration tests..."
 echo "   Using --test-threads=1 for Core ML thread safety"
 echo ""
 
+# Function to clean up CoreML caches
+cleanup_coreml_caches() {
+    echo "🧹 Cleaning up CoreML temporary caches..."
+    # Clean up the e5rt cache directories that accumulate
+    find ~/Library/Caches -name "integration_tests-*" -type d 2>/dev/null | while read cache_dir; do
+        if [[ -d "$cache_dir" ]]; then
+            echo "   Removing: $(basename "$cache_dir") ($(du -sh "$cache_dir" 2>/dev/null | cut -f1 || echo "unknown size"))"
+            rm -rf "$cache_dir" 2>/dev/null || true
+        fi
+    done
+}
+
+# Set up cleanup trap to run on script exit
+trap cleanup_coreml_caches EXIT
+
+# Set a consistent cache directory to avoid multiple caches
+export TMPDIR="/tmp/candle-coreml-tests"
+mkdir -p "$TMPDIR"
+
+echo "🗂️  Using consistent cache directory: $TMPDIR"
+echo ""
+
 # Run the tests with proper flags
 # --test-threads=1: Required for Core ML thread safety (prevents SIGSEGV)
 # --nocapture: Show test output for progress monitoring
@@ -77,3 +99,4 @@ echo "💡 Tips:"
 echo "   • Models are cached in ~/Library/Caches/candle-coreml/"
 echo "   • Run './run_unit_tests.sh' for fast tests without models"
 echo "   • Use 'cargo test <test_name> -- --ignored --nocapture --test-threads=1' for individual tests"
+echo "   • CoreML temporary caches are automatically cleaned up"
