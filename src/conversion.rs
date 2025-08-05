@@ -1,7 +1,10 @@
 //! Tensor conversion utilities for CoreML integration
 
 use candle_core::{Device, Error as CandleError, Tensor};
+
+#[cfg(target_os = "macos")]
 use half::f16;
+#[cfg(target_os = "macos")]
 use tracing::debug;
 
 #[cfg(target_os = "macos")]

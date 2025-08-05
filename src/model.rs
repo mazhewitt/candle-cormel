@@ -9,6 +9,8 @@ use crate::conversion::{
 };
 use candle_core::{Device, Error as CandleError, Tensor};
 use std::path::Path;
+
+#[cfg(target_os = "macos")]
 use tracing::{debug, info};
 
 #[cfg(target_os = "macos")]
@@ -538,6 +540,7 @@ impl CoreMLModel {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "macos")]
     use super::*;
 
     #[test]
