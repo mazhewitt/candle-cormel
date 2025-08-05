@@ -295,6 +295,7 @@ pub fn extract_all_outputs(
     })
 }
 
+#[cfg(target_os = "macos")]
 pub fn extract_output(
     prediction: &ProtocolObject<dyn MLFeatureProvider>,
     output_name: &str,
@@ -315,6 +316,56 @@ pub fn extract_output(
         // Use the shared conversion function with proper Float16 handling
         convert_mlmultiarray_to_tensor(&marray, input_device)
     })
+}
+
+// Non-macOS fallback implementations
+// These functions provide stub implementations that return appropriate errors
+// when CoreML functionality is not available on the target platform
+
+#[cfg(not(target_os = "macos"))]
+/// Placeholder type for MLMultiArray on non-macOS platforms
+pub type MLMultiArrayStub = ();
+
+#[cfg(not(target_os = "macos"))]
+/// Placeholder type for MLDictionaryFeatureProvider on non-macOS platforms  
+pub type MLFeatureProviderStub = ();
+
+#[cfg(not(target_os = "macos"))]
+pub fn tensor_to_mlmultiarray(_tensor: &Tensor) -> Result<MLMultiArrayStub, CandleError> {
+    Err(CandleError::Msg(
+        "CoreML tensor conversion is only available on macOS".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn create_multi_feature_provider(
+    _input_names: &[String],
+    _arrays: &[MLMultiArrayStub],
+) -> Result<MLFeatureProviderStub, CandleError> {
+    Err(CandleError::Msg(
+        "CoreML feature provider is only available on macOS".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn extract_output(
+    _prediction: &MLFeatureProviderStub,
+    _output_name: &str,
+    _input_device: &Device,
+) -> Result<Tensor, CandleError> {
+    Err(CandleError::Msg(
+        "CoreML extraction is only available on macOS".to_string(),
+    ))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn extract_all_outputs(
+    _prediction: &MLFeatureProviderStub,
+    _input_device: &Device,
+) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
+    Err(CandleError::Msg(
+        "CoreML extraction is only available on macOS".to_string(),
+    ))
 }
 
 #[cfg(test)]
@@ -754,7 +805,7 @@ mod tests {
         fn test_conversion_functions_not_available() {
             // This test just ensures the module compiles on non-macOS platforms
             // The actual conversion functions are only available on macOS
-            info!("Conversion functions are only available on macOS");
+            println!("Conversion functions are only available on macOS");
         }
     }
 }

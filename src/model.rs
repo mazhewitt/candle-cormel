@@ -1,10 +1,12 @@
 //! Core CoreML model implementation
 
 use crate::config::Config;
+use crate::state::CoreMLState;
+
+#[cfg(target_os = "macos")]
 use crate::conversion::{
     create_multi_feature_provider, extract_all_outputs, extract_output, tensor_to_mlmultiarray,
 };
-use crate::state::CoreMLState;
 use candle_core::{Device, Error as CandleError, Tensor};
 use std::path::Path;
 use tracing::{debug, info};
