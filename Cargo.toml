@@ -110,9 +110,6 @@ harness = false
 name = "simple_performance"
 path = "bin/simple_performance.rs"
 
-[[bin]]
-name = "profile_coreml_overhead"
-path = "bin/profile_coreml_overhead.rs"
 
 [[bin]]
 name = "component_profiler"
