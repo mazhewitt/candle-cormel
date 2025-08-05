@@ -1,4 +1,0 @@
-name: 02_embeddings_output
-shape: (1, 64, 1024)
-dtype: float32
-min: -0.1181640625, max: 0.09033203125, mean: -1.6790938389021903e-05

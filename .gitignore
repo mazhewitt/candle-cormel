@@ -24,3 +24,13 @@ test_models/
 
 # Coverage
 coverage*
+
+# Debug files
+debug_*.rs
+test_*.rs
+profile_*.rs
+time_*.rs
+*_debug.py
+test_tensors/
+*.npy
+rust_embeddings.npy

@@ -1,4 +1,0 @@
-name: 06_final_logits
-shape: (151936,)
-dtype: float32
-min: -21.84375, max: 18.25, mean: -4.781017780303955
