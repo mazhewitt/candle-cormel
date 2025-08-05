@@ -2,7 +2,7 @@
 
 use candle_core::{Device, Error as CandleError, Tensor};
 use half::f16;
-use tracing::{debug, warn};
+use tracing::debug;
 
 #[cfg(target_os = "macos")]
 use objc2_core_ml::{MLMultiArray, MLMultiArrayDataType};
@@ -72,6 +72,7 @@ pub fn convert_mlmultiarray_to_tensor(
                     debug!("Detected Float16 data type (65552), using proper half-precision conversion");
 
                     // Get raw bytes from MLMultiArray
+                    #[allow(deprecated)]
                     let data_ptr = marray.dataPointer();
                     let byte_slice =
                         std::slice::from_raw_parts(data_ptr.as_ptr().cast::<u8>(), count * 2); // 2 bytes per f16
@@ -86,9 +87,9 @@ pub fn convert_mlmultiarray_to_tensor(
                     }
                 } else {
                     // For other unknown types, try floatValue as fallback
-                    warn!(
-                        "Unknown MLMultiArray data type: {} (raw: {}), using floatValue fallback",
-                        format!("{:?}", data_type),
+                    debug!(
+                        "Unknown MLMultiArray data type: {:?} (raw: {}), using floatValue fallback",
+                        data_type,
                         data_type_raw
                     );
 
@@ -455,6 +456,7 @@ mod tests {
 
             // Write actual f16 binary data into the MLMultiArray memory
             unsafe {
+                #[allow(deprecated)]
                 let data_ptr = array.dataPointer();
                 let byte_ptr = data_ptr.as_ptr() as *mut u8;
 

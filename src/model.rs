@@ -539,7 +539,6 @@ impl CoreMLModel {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use candle_core::{Device, Tensor};
 
     #[test]
     #[cfg(target_os = "macos")]

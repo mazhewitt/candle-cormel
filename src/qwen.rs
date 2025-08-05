@@ -12,7 +12,7 @@ use tokenizers::Tokenizer;
 use tracing::{debug, trace, warn};
 
 /// Qwen model constants
-pub const QWEN_VOCAB_SIZE: usize = 151936;
+pub const QWEN_VOCAB_SIZE: usize = 151_936;
 pub const QWEN_HIDDEN_SIZE: usize = 1024;
 pub const QWEN_BATCH_SIZE: usize = 64; // CoreML model only accepts this specific shape
 pub const QWEN_CONTEXT_LENGTH: usize = 512;
@@ -64,13 +64,13 @@ impl QwenModel {
 
         // Read directory entries
         let entries = std::fs::read_dir(model_dir)
-            .map_err(|e| CandleError::Msg(format!("Failed to read model directory: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Failed to read model directory: {e}")))?;
 
         // Find files matching the pattern
         let mut matching_files = Vec::new();
         for entry in entries {
             let entry = entry
-                .map_err(|e| CandleError::Msg(format!("Failed to read directory entry: {}", e)))?;
+                .map_err(|e| CandleError::Msg(format!("Failed to read directory entry: {e}")))?;
             let filename = entry.file_name();
             let filename_str = filename.to_string_lossy();
 
@@ -117,7 +117,7 @@ impl QwenModel {
         // Load tokenizer
         let tokenizer_path = model_dir.join("tokenizer.json");
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| CandleError::Msg(format!("Failed to load tokenizer: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Failed to load tokenizer: {e}")))?;
 
         // Configure and load embeddings
         let embeddings_config = CoreMLConfig {
@@ -240,7 +240,7 @@ impl QwenModel {
         let encoding = self
             .tokenizer
             .encode(text, true)
-            .map_err(|e| CandleError::Msg(format!("Tokenization failed: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Tokenization failed: {e}")))?;
 
         let tokens: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
 
@@ -402,12 +402,11 @@ impl QwenModel {
                             meaningful_end
                         );
                         return Ok(Some(batch_embeddings));
-                    } else {
-                        debug!(
-                            "⚠️ EMBEDDINGS CACHE MISS: Cached dims {:?} insufficient for batch_size {}",
-                            cached_dims, batch_size
-                        );
                     }
+                    debug!(
+                        "⚠️ EMBEDDINGS CACHE MISS: Cached dims {:?} insufficient for batch_size {}",
+                        cached_dims, batch_size
+                    );
                 }
             }
         }
@@ -600,8 +599,7 @@ impl QwenModel {
         let mask_pos = pos - 1;
         if mask_pos >= context_length {
             return Err(CandleError::Msg(format!(
-                "Position {} exceeds causal mask context length {}. Input may be too long for chunked processing.",
-                mask_pos, context_length
+                "Position {mask_pos} exceeds causal mask context length {context_length}. Input may be too long for chunked processing."
             )));
         }
         let single_causal_mask = causal_mask.narrow(2, mask_pos, 1)?; // Get slice for current position
@@ -634,8 +632,8 @@ impl QwenModel {
         iterations: usize,
     ) -> Result<(), CandleError> {
         println!("🏁 PERFORMANCE BENCHMARK: Chat.py-style Implementation");
-        println!("Text: '{}'", text);
-        println!("Iterations: {}", iterations);
+        println!("Text: '{text}'");
+        println!("Iterations: {iterations}");
         println!("================================");
 
         // Benchmark current forward_text implementation (chat.py-style)
@@ -645,10 +643,10 @@ impl QwenModel {
             let token = self.forward_text(text)?;
             results.push(token);
             if i == 0 {
-                println!("🚀 Result: token {}", token);
+                println!("🚀 Result: token {token}");
                 // Decode the token to show what it predicts
                 if let Ok(decoded) = self.tokenizer.decode(&[token as u32], false) {
-                    println!("   Decoded: '{}'", decoded);
+                    println!("   Decoded: '{decoded}'");
                 }
             }
         }
@@ -657,20 +655,19 @@ impl QwenModel {
         let tokens_per_sec = 1000.0 / avg_time.as_millis() as f64;
 
         println!("🚀 CURRENT IMPLEMENTATION (Chat.py-style):");
-        println!("   Total time: {:?}", total_time);
-        println!("   Average per call: {:?}", avg_time);
-        println!("   Tokens/second: {:.2}", tokens_per_sec);
+        println!("   Total time: {total_time:?}");
+        println!("   Average per call: {avg_time:?}");
+        println!("   Tokens/second: {tokens_per_sec:.2}");
 
         // Performance target assessment
         if tokens_per_sec >= 70.0 {
-            println!("🎯 TARGET ACHIEVED: {:.2} t/s >= 70 t/s ✅", tokens_per_sec);
+            println!("🎯 TARGET ACHIEVED: {tokens_per_sec:.2} t/s >= 70 t/s ✅");
         } else if tokens_per_sec >= 20.0 {
             println!(
-                "🎯 PARTIAL SUCCESS: {:.2} t/s >= 20 t/s (minimum target) ⚠️",
-                tokens_per_sec
+                "🎯 PARTIAL SUCCESS: {tokens_per_sec:.2} t/s >= 20 t/s (minimum target) ⚠️"
             );
         } else {
-            println!("🎯 TARGET MISSED: {:.2} t/s < 20 t/s ❌", tokens_per_sec);
+            println!("🎯 TARGET MISSED: {tokens_per_sec:.2} t/s < 20 t/s ❌");
         }
 
         // Consistency check
@@ -806,7 +803,7 @@ impl QwenModel {
         let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
         self.tokenizer
             .decode(&token_ids, false)
-            .map_err(|e| CandleError::Msg(format!("Failed to decode tokens: {}", e)))
+            .map_err(|e| CandleError::Msg(format!("Failed to decode tokens: {e}")))
     }
 
     /// Generate multiple tokens using temperature sampling with optional top-k
@@ -827,7 +824,7 @@ impl QwenModel {
             generated_tokens.push(next_token);
 
             // Stop if EOS
-            if next_token == 151645 {
+            if next_token == 151_645 {
                 break;
             }
 
