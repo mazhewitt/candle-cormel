@@ -148,10 +148,26 @@ impl CoreMLModel {
                                 ))),
                             }
                         } else {
-                            Err(CandleError::Msg(format!(
-                                "Failed to load CoreML model: {:?}",
-                                err
-                            )))
+                            // Check for common CoreML version compatibility issues
+                            let err_msg = format!("{:?}", err);
+                            if err_msg.contains("compiler major version")
+                                && err_msg.contains("more recent than this framework")
+                            {
+                                Err(CandleError::Msg(format!(
+                                    "CoreML version compatibility issue: {}\n\
+                                    This model was compiled with a newer CoreML compiler than this system supports.\n\
+                                    Solutions:\n\
+                                    • Update to a newer macOS version\n\
+                                    • Use models compiled for your CoreML framework version\n\
+                                    • Set RUST_LOG=debug for more details",
+                                    err_msg
+                                )))
+                            } else {
+                                Err(CandleError::Msg(format!(
+                                    "Failed to load CoreML model: {:?}",
+                                    err
+                                )))
+                            }
                         }
                     }
                 }
