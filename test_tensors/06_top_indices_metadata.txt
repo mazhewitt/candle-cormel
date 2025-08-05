@@ -1,5 +1,0 @@
-name: 06_top_indices
-shape: (10,)
-dtype: int64
-values: [15678  5562 38835  8251  6301   282 59881 21454 53292 52269]
-min: 282, max: 59881, mean: 26180.5

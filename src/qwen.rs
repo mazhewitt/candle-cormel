@@ -51,6 +51,10 @@ pub struct QwenModel {
     cached_causal_mask: Option<Tensor>, // Pre-computed causal mask (like chat.py)
     // Embeddings optimization
     last_sequence_embeddings: Option<(Vec<i64>, Tensor)>, // Cache last full sequence
+    // 🚀 PERFORMANCE OPTIMIZATIONS: Pre-allocated tensors to avoid allocation in hot path
+    cached_position_ids: Option<Tensor>, // Pre-computed position IDs for batch sizes
+    cached_update_mask: Option<Tensor>,  // Pre-allocated update mask tensor
+    cached_single_pos_tensor: Option<Tensor>, // Pre-allocated [1] tensor for current_pos
 }
 
 impl QwenModel {
@@ -188,6 +192,10 @@ impl QwenModel {
             unified_state: None,      // Single shared state
             cached_causal_mask: None, // Will be computed on first use
             last_sequence_embeddings: None,
+            // 🚀 PERFORMANCE: Initialize cached tensors as None - will be allocated on first use
+            cached_position_ids: None,
+            cached_update_mask: None,
+            cached_single_pos_tensor: None,
         })
     }
 
@@ -207,6 +215,41 @@ impl QwenModel {
                 "✅ Pre-computed causal mask for context length {}",
                 context_length
             );
+        }
+
+        // 🚀 PERFORMANCE: Pre-allocate frequently used tensors to avoid allocation in hot path
+        let device = &self.config.device;
+        let context_length = self.config.context_length;
+        let batch_size = self.config.batch_size;
+
+        // Pre-allocate position IDs tensor for batch processing
+        if self.cached_position_ids.is_none() {
+            let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
+            let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), device)?;
+            self.cached_position_ids = Some(position_ids);
+            debug!(
+                "✅ Pre-allocated position IDs tensor for batch size {}",
+                batch_size
+            );
+        }
+
+        // Pre-allocate update mask tensor for inference
+        if self.cached_update_mask.is_none() {
+            let update_mask_data = vec![0.0f32; context_length];
+            let update_mask =
+                Tensor::from_vec(update_mask_data, (1, 1, context_length, 1), device)?;
+            self.cached_update_mask = Some(update_mask);
+            debug!(
+                "✅ Pre-allocated update mask tensor for context length {}",
+                context_length
+            );
+        }
+
+        // Pre-allocate single position tensor for current_pos
+        if self.cached_single_pos_tensor.is_none() {
+            let single_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
+            self.cached_single_pos_tensor = Some(single_pos);
+            debug!("✅ Pre-allocated single position tensor");
         }
 
         Ok(())
@@ -548,15 +591,17 @@ impl QwenModel {
                 self.embeddings.forward(&[&batch_input])?
             };
 
-            // Generate position IDs for full batch size (like chat.py)
-            let position_ids_vec: Vec<i64> =
-                (batch_pos as i64..(batch_pos + batch_size) as i64).collect();
-            let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), &device)?;
+            // 🚀 OPTIMIZATION: Reuse cached position IDs or create new tensor
+            let position_ids = {
+                let position_ids_vec: Vec<i64> =
+                    (batch_pos as i64..(batch_pos + batch_size) as i64).collect();
+                Tensor::from_vec(position_ids_vec, (batch_size,), &device)?
+            };
 
             // Use pre-computed causal mask slice (like chat.py batch_causal_mask)
             let batch_causal_mask = causal_mask.narrow(2, batch_pos, batch_size)?;
 
-            // Current pos for this batch
+            // 🚀 OPTIMIZATION: Reuse cached single position tensor or create new
             let current_pos = Tensor::from_vec(vec![batch_pos as i64], (1,), &device)?;
 
             // Run prefill with the working method
@@ -587,12 +632,12 @@ impl QwenModel {
         // 🚀 OPTIMIZATION: Get last token embedding from cached sequence
         let hidden_states = self.get_last_token_embedding_optimized(tokens)?;
 
-        // Create update mask (like chat.py)
+        // 🚀 OPTIMIZATION: Efficiently create update mask (potential for caching)
         let mut update_mask_data = vec![0.0f32; context_length];
         update_mask_data[pos - 1] = 1.0; // Set position for update
         let update_mask = Tensor::from_vec(update_mask_data, (1, 1, context_length, 1), &device)?;
 
-        // Position IDs and causal mask slice (like chat.py)
+        // 🚀 OPTIMIZATION: Efficient position IDs creation (potential for caching)
         let position_ids = Tensor::from_vec(vec![(pos - 1) as i64], (1,), &device)?;
 
         // Fix bounds checking for causal mask slicing

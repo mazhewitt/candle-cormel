@@ -1,5 +1,0 @@
-name: 04_infer_input_token
-shape: (1, 1)
-dtype: int32
-values: [[15678]]
-min: 15678, max: 15678, mean: 15678.0

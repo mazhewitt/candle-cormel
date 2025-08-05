@@ -1,4 +1,0 @@
-name: 02_embeddings_input
-shape: (1, 64)
-dtype: int32
-min: 0, max: 38835, mean: 1696.109375

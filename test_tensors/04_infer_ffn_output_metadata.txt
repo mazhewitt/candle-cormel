@@ -1,4 +1,0 @@
-name: 04_infer_ffn_output
-shape: (1, 1, 1024)
-dtype: float32
-min: -49.625, max: 21.90625, mean: 0.05710815638303757

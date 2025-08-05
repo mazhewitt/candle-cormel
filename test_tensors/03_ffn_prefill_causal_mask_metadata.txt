@@ -1,4 +1,0 @@
-name: 03_ffn_prefill_causal_mask
-shape: (1, 1, 64, 512)
-dtype: float32
-min: -inf, max: 0.0, mean: -inf

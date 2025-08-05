@@ -72,7 +72,7 @@ jobs:
       run: |
         echo "Testing basic examples..."
         # Only test examples that don't require large model downloads
-        timeout 30s cargo run --example debug_mlstate || echo "debug_mlstate failed or timed out (expected without models)"
+        # debug_mlstate example was removed during cleanup
         timeout 30s cargo run --example clean_download_example || echo "clean_download_example failed or timed out (expected without network)"
       continue-on-error: true
 
