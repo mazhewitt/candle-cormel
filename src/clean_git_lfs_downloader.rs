@@ -207,20 +207,13 @@ fn scan_directory_for_lfs(
 /// Check if a file is an LFS pointer file
 fn check_lfs_pointer_file(file_path: &Path, _repo_root: &Path) -> Result<LfsPointer> {
     // Read first 1024 bytes (LFS pointers must be < 1024 bytes)
-    let mut file = fs::File::open(file_path).map_err(|e| {
-        E::msg(format!(
-            "Failed to open file {}: {e}",
-            file_path.display()
-        ))
-    })?;
+    let mut file = fs::File::open(file_path)
+        .map_err(|e| E::msg(format!("Failed to open file {}: {e}", file_path.display())))?;
 
     let mut buffer = [0; 1024];
-    let bytes_read = file.read(&mut buffer).map_err(|e| {
-        E::msg(format!(
-            "Failed to read file {}: {e}",
-            file_path.display()
-        ))
-    })?;
+    let bytes_read = file
+        .read(&mut buffer)
+        .map_err(|e| E::msg(format!("Failed to read file {}: {e}", file_path.display())))?;
 
     let content = std::str::from_utf8(&buffer[..bytes_read])
         .map_err(|_| E::msg("File is not valid UTF-8"))?;
@@ -368,9 +361,7 @@ pub fn verify_download_completeness(
     for expected_file in expected_files {
         let file_path = model_path.join(expected_file);
         if !file_path.exists() {
-            return Err(E::msg(format!(
-                "Expected file not found: {expected_file}"
-            )));
+            return Err(E::msg(format!("Expected file not found: {expected_file}")));
         }
 
         // Check that it's not still an LFS pointer

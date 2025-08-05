@@ -663,9 +663,7 @@ impl QwenModel {
         if tokens_per_sec >= 70.0 {
             println!("🎯 TARGET ACHIEVED: {tokens_per_sec:.2} t/s >= 70 t/s ✅");
         } else if tokens_per_sec >= 20.0 {
-            println!(
-                "🎯 PARTIAL SUCCESS: {tokens_per_sec:.2} t/s >= 20 t/s (minimum target) ⚠️"
-            );
+            println!("🎯 PARTIAL SUCCESS: {tokens_per_sec:.2} t/s >= 20 t/s (minimum target) ⚠️");
         } else {
             println!("🎯 TARGET MISSED: {tokens_per_sec:.2} t/s < 20 t/s ❌");
         }
