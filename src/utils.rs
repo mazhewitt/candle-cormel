@@ -244,7 +244,7 @@ pub mod multi_component {
         pub fn embeddings_config(mut self, model_type: &str) -> CoreMLConfig {
             self.base_config.input_names = vec!["input_ids".to_string()];
             self.base_config.output_name = "hidden_states".to_string();
-            self.base_config.model_type = format!("{}-embeddings", model_type);
+            self.base_config.model_type = format!("{model_type}-embeddings");
             self.base_config
         }
 
@@ -255,7 +255,7 @@ pub mod multi_component {
                 self.base_config.input_names.push("causal_mask".to_string());
             }
             self.base_config.output_name = "output_hidden_states".to_string();
-            self.base_config.model_type = format!("{}-ffn", model_type);
+            self.base_config.model_type = format!("{model_type}-ffn");
             self.base_config
         }
 
@@ -263,7 +263,7 @@ pub mod multi_component {
         pub fn lm_head_config(mut self, model_type: &str) -> CoreMLConfig {
             self.base_config.input_names = vec!["hidden_states".to_string()];
             self.base_config.output_name = "logits".to_string();
-            self.base_config.model_type = format!("{}-lm-head", model_type);
+            self.base_config.model_type = format!("{model_type}-lm-head");
             self.base_config
         }
     }
@@ -276,11 +276,11 @@ pub mod multi_component {
         let mut chunks = Vec::new();
 
         for i in 1..=num_chunks {
-            let key = format!("logits{}", i);
+            let key = format!("logits{i}");
             if let Some(chunk) = outputs.get(&key) {
                 chunks.push(chunk.clone());
             } else {
-                return Err(CandleError::Msg(format!("Missing logits chunk: {}", key)));
+                return Err(CandleError::Msg(format!("Missing logits chunk: {key}")));
             }
         }
 

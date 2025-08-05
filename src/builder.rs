@@ -1,13 +1,13 @@
-//! CoreML model builder for convenient model loading
+//! `CoreML` model builder for convenient model loading
 
 use crate::config::Config;
 use crate::CoreMLModel;
 use candle_core::Error as CandleError;
 use std::path::{Path, PathBuf};
 
-/// Builder for CoreML models
+/// Builder for `CoreML` models
 ///
-/// This provides an interface for loading CoreML models with configuration
+/// This provides an interface for loading `CoreML` models with configuration
 /// management and device selection.
 pub struct CoreMLModelBuilder {
     config: Config,
@@ -23,7 +23,7 @@ impl CoreMLModelBuilder {
         }
     }
 
-    /// Load a CoreML model from HuggingFace or local files
+    /// Load a `CoreML` model from `HuggingFace` or local files
     pub fn load_from_hub(
         model_id: &str,
         model_filename: Option<&str>,
@@ -33,7 +33,7 @@ impl CoreMLModelBuilder {
         use hf_hub::{api::sync::Api, Repo, RepoType};
 
         let api =
-            Api::new().map_err(|e| CandleError::Msg(format!("Failed to create HF API: {}", e)))?;
+            Api::new().map_err(|e| CandleError::Msg(format!("Failed to create HF API: {e}")))?;
         let repo = api.repo(Repo::with_revision(
             model_id.to_string(),
             RepoType::Model,
@@ -43,20 +43,20 @@ impl CoreMLModelBuilder {
         // Load config
         let config_path = match config_filename {
             Some(filename) => get_local_or_remote_file(filename, &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get config file: {}", e)))?,
+                .map_err(|e| CandleError::Msg(format!("Failed to get config file: {e}")))?,
             None => get_local_or_remote_file("config.json", &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get config.json: {}", e)))?,
+                .map_err(|e| CandleError::Msg(format!("Failed to get config.json: {e}")))?
         };
 
         let config_str = std::fs::read_to_string(config_path)
-            .map_err(|e| CandleError::Msg(format!("Failed to read config file: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Failed to read config file: {e}")))?;
         let config: Config = serde_json::from_str(&config_str)
-            .map_err(|e| CandleError::Msg(format!("Failed to parse config: {}", e)))?;
+            .map_err(|e| CandleError::Msg(format!("Failed to parse config: {e}")))?;
 
         // Get model file
         let model_path = match model_filename {
             Some(filename) => get_local_or_remote_file(filename, &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get model file: {}", e)))?,
+                .map_err(|e| CandleError::Msg(format!("Failed to get model file: {e}")))?,
             None => {
                 // Try common CoreML model filenames
                 for filename in &["model.mlmodelc", "model.mlpackage"] {

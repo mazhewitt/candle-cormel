@@ -82,7 +82,7 @@ pub fn get_cached_model_path(model_id: &str) -> Option<PathBuf> {
     let cache_base = dirs::cache_dir()?.join("candle-coreml");
 
     let model_cache_name = model_id.replace('/', "--");
-    let model_path = cache_base.join(format!("clean-{}", model_cache_name));
+    let model_path = cache_base.join(format!("clean-{model_cache_name}"));
 
     if model_path.exists() && model_path.is_dir() {
         Some(model_path)
@@ -114,7 +114,7 @@ pub fn ensure_model_downloaded(model_id: &str, verbose: bool) -> Result<PathBuf>
         Ok(cached_path)
     } else {
         if verbose {
-            println!("📥 Model {} not cached, downloading...", model_id);
+            println!("📥 Model {model_id} not cached, downloading...");
         }
         download_model(model_id, verbose)
     }

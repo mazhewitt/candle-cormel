@@ -29,7 +29,7 @@ pub use utils::{mask, multi_component, sampling};
 
 use std::path::PathBuf;
 
-/// Helper function to get a file locally first, then download from HuggingFace Hub if needed.
+/// Helper function to get a file locally first, then download from `HuggingFace` Hub if needed.
 /// Follows the same pattern as quantized-t5 example.
 pub fn get_local_or_remote_file(
     filename: &str,

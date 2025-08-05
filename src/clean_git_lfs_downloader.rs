@@ -30,7 +30,7 @@ impl CleanDownloadConfig {
     /// Create config for downloading a HF model to cache
     pub fn for_hf_model(model_id: &str, cache_base: &Path) -> Self {
         let model_cache_name = model_id.replace('/', "--");
-        let target_dir = cache_base.join(format!("clean-{}", model_cache_name));
+        let target_dir = cache_base.join(format!("clean-{model_cache_name}"));
 
         Self {
             model_id: model_id.to_string(),
@@ -91,7 +91,7 @@ pub fn download_hf_model_clean(config: &CleanDownloadConfig) -> Result<PathBuf> 
                 println!("🗑️  Removing .git directory");
             }
             fs::remove_dir_all(&git_dir)
-                .map_err(|e| E::msg(format!("Failed to remove .git directory: {}", e)))?;
+                .map_err(|e| E::msg(format!("Failed to remove .git directory: {e}")))?;
         }
     }
 
@@ -107,7 +107,7 @@ fn clone_hf_repo_git2(config: &CleanDownloadConfig) -> Result<PathBuf> {
     let repo_url = format!("https://huggingface.co/{}", config.model_id);
 
     if config.verbose {
-        println!("📥 Cloning repository: {}", repo_url);
+        println!("📥 Cloning repository: {repo_url}");
     }
 
     // Remove existing directory if it exists
@@ -116,13 +116,13 @@ fn clone_hf_repo_git2(config: &CleanDownloadConfig) -> Result<PathBuf> {
             println!("🗑️  Removing existing directory");
         }
         fs::remove_dir_all(&config.target_dir)
-            .map_err(|e| E::msg(format!("Failed to remove existing directory: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to remove existing directory: {e}")))?;
     }
 
     // Create parent directory
     if let Some(parent) = config.target_dir.parent() {
         fs::create_dir_all(parent)
-            .map_err(|e| E::msg(format!("Failed to create parent directory: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to create parent directory: {e}")))?;
     }
 
     // Clone with git2
@@ -135,7 +135,7 @@ fn clone_hf_repo_git2(config: &CleanDownloadConfig) -> Result<PathBuf> {
 
     let _repo = builder
         .clone(&repo_url, &config.target_dir)
-        .map_err(|e| E::msg(format!("Git clone failed: {}", e)))?;
+        .map_err(|e| E::msg(format!("Git clone failed: {e}")))?;
 
     if config.verbose {
         println!("✅ Repository cloned successfully");
@@ -179,10 +179,10 @@ fn scan_directory_for_lfs(
     _verbose: bool,
 ) -> Result<()> {
     let entries = fs::read_dir(dir)
-        .map_err(|e| E::msg(format!("Failed to read directory {}: {}", dir.display(), e)))?;
+        .map_err(|e| E::msg(format!("Failed to read directory {}: {e}", dir.display())))?;
 
     for entry in entries {
-        let entry = entry.map_err(|e| E::msg(format!("Failed to read directory entry: {}", e)))?;
+        let entry = entry.map_err(|e| E::msg(format!("Failed to read directory entry: {e}")))?;
         let path = entry.path();
 
         if path.is_dir() {
@@ -209,18 +209,16 @@ fn check_lfs_pointer_file(file_path: &Path, _repo_root: &Path) -> Result<LfsPoin
     // Read first 1024 bytes (LFS pointers must be < 1024 bytes)
     let mut file = fs::File::open(file_path).map_err(|e| {
         E::msg(format!(
-            "Failed to open file {}: {}",
-            file_path.display(),
-            e
+            "Failed to open file {}: {e}",
+            file_path.display()
         ))
     })?;
 
     let mut buffer = [0; 1024];
     let bytes_read = file.read(&mut buffer).map_err(|e| {
         E::msg(format!(
-            "Failed to read file {}: {}",
-            file_path.display(),
-            e
+            "Failed to read file {}: {e}",
+            file_path.display()
         ))
     })?;
 
@@ -255,7 +253,7 @@ fn parse_lfs_pointer(content: &str, file_path: PathBuf) -> Result<LfsPointer> {
         } else if let Some(stripped) = line.strip_prefix("size ") {
             size = stripped
                 .parse()
-                .map_err(|e| E::msg(format!("Invalid size in LFS pointer: {}", e)))?;
+                .map_err(|e| E::msg(format!("Invalid size in LFS pointer: {e}")))?;
         }
     }
 
@@ -289,7 +287,7 @@ fn download_lfs_content(lfs_pointers: &[LfsPointer], model_id: &str, verbose: bo
 
     // Setup HuggingFace API
     let api = hf_hub::api::sync::Api::new()
-        .map_err(|e| E::msg(format!("Failed to create HF API: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to create HF API: {e}")))?;
     let repo = api.model(model_id.to_string());
 
     for (i, pointer) in lfs_pointers.iter().enumerate() {
@@ -321,7 +319,7 @@ fn download_lfs_content(lfs_pointers: &[LfsPointer], model_id: &str, verbose: bo
         let relative_path = pointer
             .file_path
             .strip_prefix(repo_root)
-            .map_err(|e| E::msg(format!("Failed to get relative path: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to get relative path: {e}")))?;
 
         let relative_path_str = relative_path.to_string_lossy();
 
@@ -330,7 +328,7 @@ fn download_lfs_content(lfs_pointers: &[LfsPointer], model_id: &str, verbose: bo
             Ok(downloaded_path) => {
                 // Copy the downloaded content over the pointer file
                 fs::copy(&downloaded_path, &pointer.file_path)
-                    .map_err(|e| E::msg(format!("Failed to replace pointer file: {}", e)))?;
+                    .map_err(|e| E::msg(format!("Failed to replace pointer file: {e}")))?;
 
                 if verbose {
                     println!(
@@ -341,11 +339,10 @@ fn download_lfs_content(lfs_pointers: &[LfsPointer], model_id: &str, verbose: bo
             }
             Err(e) => {
                 if verbose {
-                    println!("    ⚠️  Failed to download {}: {}", relative_path_str, e);
+                    println!("    ⚠️  Failed to download {relative_path_str}: {e}");
                 }
                 return Err(E::msg(format!(
-                    "Failed to download LFS file {}: {}",
-                    relative_path_str, e
+                    "Failed to download LFS file {relative_path_str}: {e}"
                 )));
             }
         }
@@ -372,24 +369,22 @@ pub fn verify_download_completeness(
         let file_path = model_path.join(expected_file);
         if !file_path.exists() {
             return Err(E::msg(format!(
-                "Expected file not found: {}",
-                expected_file
+                "Expected file not found: {expected_file}"
             )));
         }
 
         // Check that it's not still an LFS pointer
         if is_lfs_pointer_file(&file_path)? {
             return Err(E::msg(format!(
-                "File {} is still an LFS pointer",
-                expected_file
+                "File {expected_file} is still an LFS pointer"
             )));
         }
 
         if verbose {
             let size = fs::metadata(&file_path)
-                .map_err(|e| E::msg(format!("Failed to get file metadata: {}", e)))?
+                .map_err(|e| E::msg(format!("Failed to get file metadata: {e}")))?
                 .len();
-            println!("  ✅ {} ({} bytes)", expected_file, size);
+            println!("  ✅ {expected_file} ({size} bytes)");
         }
     }
 
