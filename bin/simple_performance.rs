@@ -17,7 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     {
         let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
 
-        println!("📦 Loading model: {}", model_id);
+        println!("📦 Loading model: {model_id}");
         let model_dir = candle_coreml::ensure_model_downloaded(model_id, false)?;
         let mut model = QwenModel::load_from_directory(&model_dir, None)?;
         println!("✅ Model loaded");

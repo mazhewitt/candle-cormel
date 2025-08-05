@@ -75,7 +75,7 @@ fn tokenize_text(
 ) -> Result<(Vec<i64>, Vec<i64>)> {
     let encoding = tokenizer
         .encode(text, true)
-        .map_err(|e| E::msg(format!("Tokenization failed: {}", e)))?;
+        .map_err(|e| E::msg(format!("Tokenization failed: {e}")))?;
 
     let mut input_ids: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
 
@@ -103,10 +103,10 @@ fn download_tokenizer(api: &hf_hub::api::sync::ApiRepo) -> Result<Tokenizer> {
 
     let tokenizer_file = api
         .get("tokenizer.json")
-        .map_err(|e| E::msg(format!("Failed to download tokenizer.json: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to download tokenizer.json: {e}")))?;
 
     let tokenizer = Tokenizer::from_file(&tokenizer_file)
-        .map_err(|e| E::msg(format!("Failed to load tokenizer: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to load tokenizer: {e}")))?;
 
     println!("✅ Tokenizer loaded successfully");
     Ok(tokenizer)
@@ -116,8 +116,7 @@ fn download_tokenizer(api: &hf_hub::api::sync::ApiRepo) -> Result<Tokenizer> {
 fn get_local_model_path() -> PathBuf {
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
     PathBuf::from(format!(
-        "{}/models/ane-distilbert/DistilBERT_fp16.mlpackage",
-        manifest_dir
+        "{manifest_dir}/models/ane-distilbert/DistilBERT_fp16.mlpackage"
     ))
 }
 
@@ -204,12 +203,12 @@ fn download_additional_model_files(api: &hf_hub::api::sync::ApiRepo, verbose: bo
         match api.get(file_path) {
             Ok(_) => {
                 if verbose {
-                    println!("✅ Downloaded: {}", file_path);
+                    println!("✅ Downloaded: {file_path}");
                 }
             }
             Err(e) => {
                 if verbose {
-                    println!("⚠️  Could not download {}: {}", file_path, e);
+                    println!("⚠️  Could not download {file_path}: {e}");
                 }
             }
         }
@@ -249,14 +248,11 @@ fn compile_model_if_needed(model_path: PathBuf, verbose: bool) -> Result<PathBuf
                     &compiled_model_path.to_string_lossy()
                 ])
                 .output()
-                .map_err(|e| E::msg(format!("Failed to run coremlc: {}. Make sure Xcode command line tools are installed.", e)))?;
+                .map_err(|e| E::msg(format!("Failed to run coremlc: {e}. Make sure Xcode command line tools are installed.")))?;
 
             if !output.status.success() {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                println!(
-                    "⚠️  Compilation failed, using .mlpackage directly: {}",
-                    stderr
-                );
+                println!("⚠️  Compilation failed, using .mlpackage directly: {stderr}");
                 Ok(model_path) // Use the original .mlpackage
             } else {
                 println!("✅ CoreML model compiled successfully");
@@ -399,11 +395,11 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
     // Load model
     let start = Instant::now();
     let model = CoreMLModel::load_from_file(&model_path, &config)
-        .map_err(|e| E::msg(format!("Failed to load CoreML model: {}", e)))?;
+        .map_err(|e| E::msg(format!("Failed to load CoreML model: {e}")))?;
     let loading_time = start.elapsed();
 
-    println!("✅ Model loaded in {:?}", loading_time);
-    println!("📋 Config: {:?}", config);
+    println!("✅ Model loaded in {loading_time:?}");
+    println!("📋 Config: {config:?}");
 
     // Prepare input using real or dummy tokenization
     let device = Device::Cpu;
@@ -417,7 +413,7 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
         if args.verbose {
             // Show first 10 tokens for debugging
             let token_preview: Vec<i64> = ids.iter().take(10).cloned().collect();
-            println!("🔍 Token IDs (first 10): {:?}", token_preview);
+            println!("🔍 Token IDs (first 10): {token_preview:?}");
 
             // Try to decode them back to check tokenization
             if let Ok(encoding) = tokenizer.encode(args.text.as_str(), true) {
@@ -427,7 +423,7 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
                     .take(10)
                     .map(|s| s.to_string())
                     .collect();
-                println!("🔍 Tokens (first 10): {:?}", tokens);
+                println!("🔍 Tokens (first 10): {tokens:?}");
             }
         }
 
@@ -476,10 +472,10 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
 
     let output = model
         .forward(&[&input_ids_tensor, &attention_mask_tensor])
-        .map_err(|e| E::msg(format!("Inference failed: {}", e)))?;
+        .map_err(|e| E::msg(format!("Inference failed: {e}")))?;
 
     let inference_time = start.elapsed();
-    println!("✅ Inference completed in {:?}", inference_time);
+    println!("✅ Inference completed in {inference_time:?}");
     println!("📊 Output shape: {:?}", output.shape());
 
     // Process sentiment classification results
@@ -488,7 +484,7 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
             let logits = &output_data[0];
 
             if args.verbose {
-                println!("🔍 Raw logits: {:?}", logits);
+                println!("🔍 Raw logits: {logits:?}");
             }
 
             // Standard SST-2 mapping: index 0=negative, index 1=positive
@@ -559,8 +555,8 @@ fn run_coreml_inference(args: &Args) -> Result<()> {
     }
 
     println!("\n💡 Performance Summary:");
-    println!("  • Loading time: {:?}", loading_time);
-    println!("  • Inference time: {:?}", inference_time);
+    println!("  • Loading time: {loading_time:?}");
+    println!("  • Inference time: {inference_time:?}");
     println!("  • Total time: {:?}", loading_time + inference_time);
 
     Ok(())

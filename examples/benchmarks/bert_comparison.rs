@@ -91,7 +91,7 @@ impl BenchmarkResult {
         println!("Warm inference:   {:?}", self.warm_inference);
         println!("Throughput:       {:.1} tokens/sec", self.throughput);
         if let Some(mem) = self.memory_mb {
-            println!("Memory usage:     {:.1} MB", mem);
+            println!("Memory usage:     {mem:.1} MB");
         }
     }
 
@@ -102,10 +102,7 @@ impl BenchmarkResult {
 }
 
 fn benchmark_candle_bert(device: &Device, args: &Args, seq_len: usize) -> Result<BenchmarkResult> {
-    println!(
-        "🔧 Benchmarking Candle BERT on {:?} (seq_len: {})",
-        device, seq_len
-    );
+    println!("🔧 Benchmarking Candle BERT on {device:?} (seq_len: {seq_len})");
 
     let start = Instant::now();
 
@@ -154,7 +151,7 @@ fn benchmark_candle_bert(device: &Device, args: &Args, seq_len: usize) -> Result
     let throughput = total_tokens as f64 / total_time.as_secs_f64();
 
     Ok(BenchmarkResult {
-        name: format!("Candle-{:?}", device),
+        name: format!("Candle-{device:?}"),
         sequence_length: seq_len,
         loading_time,
         cold_inference,
@@ -168,7 +165,7 @@ fn benchmark_candle_bert(device: &Device, args: &Args, seq_len: usize) -> Result
 fn benchmark_coreml_bert(args: &Args, seq_len: usize) -> Result<BenchmarkResult> {
     use candle_coreml::{Config as CoreMLConfig, CoreMLModel};
 
-    println!("🍎 Benchmarking CoreML BERT (seq_len: {})", seq_len);
+    println!("🍎 Benchmarking CoreML BERT (seq_len: {seq_len})");
 
     let start = Instant::now();
 
@@ -221,10 +218,9 @@ fn benchmark_coreml_bert(args: &Args, seq_len: usize) -> Result<BenchmarkResult>
                 if pattern.contains(".mlpackage") {
                     let base_path = pattern.replace("/Data/com.apple.CoreML/model.mlmodel", "");
                     let _ = api.get(&format!(
-                        "{}/Data/com.apple.CoreML/weights/weight.bin",
-                        base_path
+                        "{base_path}/Data/com.apple.CoreML/weights/weight.bin"
                     ));
-                    let _ = api.get(&format!("{}/Manifest.json", base_path));
+                    let _ = api.get(&format!("{base_path}/Manifest.json"));
                 }
 
                 found_model_file = Some(model_file);
@@ -242,7 +238,7 @@ fn benchmark_coreml_bert(args: &Args, seq_len: usize) -> Result<BenchmarkResult>
         // If this is an .mlmodel file, compile it
         if model_file.extension().and_then(|s| s.to_str()) == Some("mlmodel") {
             let model_name = mlpackage_name.unwrap_or("bert");
-            let compiled_model_name = format!("{}.mlmodelc", model_name);
+            let compiled_model_name = format!("{model_name}.mlmodelc");
 
             let mlpackage_dir = if model_file.to_string_lossy().contains(".mlpackage") {
                 model_file
@@ -278,11 +274,11 @@ fn benchmark_coreml_bert(args: &Args, seq_len: usize) -> Result<BenchmarkResult>
                         &compiled_model_path.to_string_lossy(),
                     ])
                     .output()
-                    .map_err(|e| E::msg(format!("Failed to run coremlc: {}", e)))?;
+                    .map_err(|e| E::msg(format!("Failed to run coremlc: {e}")))?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(E::msg(format!("CoreML compilation failed: {}", stderr)));
+                    return Err(E::msg(format!("CoreML compilation failed: {stderr}")));
                 }
 
                 println!("✅ CoreML model compiled successfully");
@@ -369,21 +365,20 @@ fn benchmark_coreml_bert(args: &Args, seq_len: usize) -> Result<BenchmarkResult>
 fn load_local_bert_model(device: &Device) -> Result<(BertModel, Tokenizer)> {
     // Load from local files (for testing without internet)
     let manifest_dir = env!("CARGO_MANIFEST_DIR");
-    let model_dir = format!("{}/bert-model-test", manifest_dir);
+    let model_dir = format!("{manifest_dir}/bert-model-test");
 
-    let config_path = format!("{}/config.json", model_dir);
-    let tokenizer_path = format!("{}/tokenizer.json", model_dir);
-    let weights_path = format!("{}/model.safetensors", model_dir);
+    let config_path = format!("{model_dir}/config.json");
+    let tokenizer_path = format!("{model_dir}/tokenizer.json");
+    let weights_path = format!("{model_dir}/model.safetensors");
 
     let config: Config = serde_json::from_slice(
         &std::fs::read(&config_path)
-            .map_err(|e| E::msg(format!("Failed to read config from {}: {}", config_path, e)))?,
+            .map_err(|e| E::msg(format!("Failed to read config from {config_path}: {e}")))?,
     )?;
 
     let tokenizer = Tokenizer::from_file(&tokenizer_path).map_err(|e| {
         E::msg(format!(
-            "Failed to load tokenizer from {}: {}",
-            tokenizer_path, e
+            "Failed to load tokenizer from {tokenizer_path}: {e}"
         ))
     })?;
 
@@ -428,7 +423,7 @@ fn print_comparison_summary(results: &[BenchmarkResult]) {
     seq_lengths.dedup();
 
     for seq_len in seq_lengths {
-        println!("\n📏 Sequence Length: {}", seq_len);
+        println!("\n📏 Sequence Length: {seq_len}");
         println!("┌─────────────┬─────────────┬─────────────┬─────────────┬─────────────┐");
         println!("│ Backend     │ Loading     │ Cold Inf.   │ Warm Inf.   │ Throughput  │");
         println!("├─────────────┼─────────────┼─────────────┼─────────────┼─────────────┤");
@@ -495,7 +490,7 @@ fn main() -> Result<()> {
     let mut all_results = Vec::new();
 
     for &seq_len in &sequence_lengths {
-        println!("\n🔄 Testing sequence length: {}", seq_len);
+        println!("\n🔄 Testing sequence length: {seq_len}");
 
         // Test CPU
         if let Ok(result) = benchmark_candle_bert(&Device::Cpu, &args, seq_len) {
@@ -523,7 +518,7 @@ fn main() -> Result<()> {
                 }
                 Err(e) => {
                     if args.verbose {
-                        println!("⚠️  CoreML benchmark failed: {}", e);
+                        println!("⚠️  CoreML benchmark failed: {e}");
                     }
                 }
             }

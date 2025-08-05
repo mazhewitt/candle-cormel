@@ -68,7 +68,7 @@ fn benchmark_tensor_conversion(shape: &[usize], iterations: usize) -> Result<Con
     let round_trip = avg_tensor_to_ml + avg_ml_to_tensor;
 
     Ok(ConversionResult {
-        tensor_size: format!("{:?}", shape),
+        tensor_size: format!("{shape:?}"),
         elements,
         tensor_to_ml_time: avg_tensor_to_ml,
         ml_to_tensor_time: avg_ml_to_tensor,

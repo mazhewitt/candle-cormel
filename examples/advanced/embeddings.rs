@@ -146,10 +146,9 @@ fn generate_coreml_embeddings(sentences: &[String], args: &Args) -> Result<Vec<E
                 if pattern.contains(".mlpackage") {
                     let base_path = pattern.replace("/Data/com.apple.CoreML/model.mlmodel", "");
                     let _ = api.get(&format!(
-                        "{}/Data/com.apple.CoreML/weights/weight.bin",
-                        base_path
+                        "{base_path}/Data/com.apple.CoreML/weights/weight.bin"
                     ));
-                    let _ = api.get(&format!("{}/Manifest.json", base_path));
+                    let _ = api.get(&format!("{base_path}/Manifest.json"));
                 }
 
                 found_model_file = Some(model_file);
@@ -167,7 +166,7 @@ fn generate_coreml_embeddings(sentences: &[String], args: &Args) -> Result<Vec<E
         // If this is an .mlmodel file, compile it
         if model_file.extension().and_then(|s| s.to_str()) == Some("mlmodel") {
             let model_name = mlpackage_name.unwrap_or("bert");
-            let compiled_model_name = format!("{}.mlmodelc", model_name);
+            let compiled_model_name = format!("{model_name}.mlmodelc");
 
             let mlpackage_dir = if model_file.to_string_lossy().contains(".mlpackage") {
                 model_file
@@ -203,11 +202,11 @@ fn generate_coreml_embeddings(sentences: &[String], args: &Args) -> Result<Vec<E
                         &compiled_model_path.to_string_lossy()
                     ])
                     .output()
-                    .map_err(|e| E::msg(format!("Failed to run coremlc: {}. Make sure Xcode command line tools are installed.", e)))?;
+                    .map_err(|e| E::msg(format!("Failed to run coremlc: {e}. Make sure Xcode command line tools are installed.")))?;
 
                 if !output.status.success() {
                     let stderr = String::from_utf8_lossy(&output.stderr);
-                    return Err(E::msg(format!("CoreML compilation failed: {}", stderr)));
+                    return Err(E::msg(format!("CoreML compilation failed: {stderr}")));
                 }
 
                 println!("✅ CoreML model compiled successfully");
@@ -254,7 +253,7 @@ fn generate_coreml_embeddings(sentences: &[String], args: &Args) -> Result<Vec<E
 
     for sentence in sentences {
         if args.verbose {
-            println!("Processing: \"{}\"", sentence);
+            println!("Processing: \"{sentence}\"");
         }
 
         let start = Instant::now();
@@ -314,7 +313,7 @@ fn generate_candle_embeddings(
     device: &Device,
     args: &Args,
 ) -> Result<Vec<EmbeddingResult>> {
-    println!("🔧 Generating embeddings with Candle {:?}...", device);
+    println!("🔧 Generating embeddings with Candle {device:?}...");
 
     // This would load a proper Candle BERT model
     // For demo purposes, we'll create dummy embeddings
@@ -333,7 +332,7 @@ fn generate_candle_embeddings(
         results.push(EmbeddingResult {
             sentence: sentence.clone(),
             embedding,
-            backend: format!("Candle-{:?}", device),
+            backend: format!("Candle-{device:?}"),
             inference_time,
         });
     }
@@ -362,7 +361,7 @@ fn print_similarity_matrix(results: &[EmbeddingResult]) {
 
         for result_b in results.iter().skip(i + 1) {
             let similarity = result_a.cosine_similarity(result_b);
-            print!("{:8.3}", similarity);
+            print!("{similarity:8.3}");
         }
         println!();
     }
@@ -393,7 +392,7 @@ fn compare_backends(sentences: &[String], args: &Args) -> Result<()> {
     {
         match generate_coreml_embeddings(sentences, args) {
             Ok(results) => all_results.extend(results),
-            Err(e) => println!("⚠️  CoreML failed: {}", e),
+            Err(e) => println!("⚠️  CoreML failed: {e}"),
         }
     }
 
@@ -449,7 +448,7 @@ fn compare_backends(sentences: &[String], args: &Args) -> Result<()> {
 
 fn load_sentences_from_file(path: &str) -> Result<Vec<String>> {
     let content = std::fs::read_to_string(path)
-        .map_err(|e| E::msg(format!("Failed to read file {}: {}", path, e)))?;
+        .map_err(|e| E::msg(format!("Failed to read file {path}: {e}")))?;
 
     Ok(content
         .lines()
@@ -473,7 +472,7 @@ fn save_embeddings(results: &[EmbeddingResult], path: &str) -> Result<()> {
         let embedding_str = result
             .embedding
             .iter()
-            .map(|x| format!("{:.6}", x))
+            .map(|x| format!("{x:.6}"))
             .collect::<Vec<_>>()
             .join(",");
 
@@ -489,7 +488,7 @@ fn save_embeddings(results: &[EmbeddingResult], path: &str) -> Result<()> {
         writeln!(file, "# Sentence {}: \"{}\"", i, result.sentence)?;
     }
 
-    println!("💾 Embeddings saved to: {}", path);
+    println!("💾 Embeddings saved to: {path}");
     Ok(())
 }
 

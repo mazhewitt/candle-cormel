@@ -190,8 +190,7 @@ fn bench_end_to_end_comparison(c: &mut Criterion) {
                     let efficiency = (rust_tps / PYTHON_BASELINE_TPS) * 100.0;
 
                     eprintln!(
-                        "🦀 Rust: {:.1} t/s | 🐍 Python: {:.1} t/s | Efficiency: {:.1}%",
-                        rust_tps, PYTHON_BASELINE_TPS, efficiency
+                        "🦀 Rust: {rust_tps:.1} t/s | 🐍 Python: {PYTHON_BASELINE_TPS:.1} t/s | Efficiency: {efficiency:.1}%"
                     );
 
                     // Check if we got the expected token
@@ -212,7 +211,7 @@ fn bench_end_to_end_comparison(c: &mut Criterion) {
 
         // Test different batch sizes to see scaling
         for &num_tokens in &[1, 5, 10, 25] {
-            group.bench_function(&format!("generate_{}_tokens", num_tokens), |b| {
+            group.bench_function(&format!("generate_{num_tokens}_tokens"), |b| {
                 b.iter(|| {
                     let start = Instant::now();
                     let result = model.generate_tokens(

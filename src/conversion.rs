@@ -207,8 +207,7 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
             }
         }
         Err(err) => Err(CandleError::Msg(format!(
-            "Failed to create MLMultiArray: {:?}",
-            err
+            "Failed to create MLMultiArray: {err:?}"
         ))),
     }
 }
@@ -241,7 +240,7 @@ pub fn create_multi_feature_provider(
                 dict.as_ref(),
             )
         }
-        .map_err(|e| CandleError::Msg(format!("CoreML initWithDictionary_error: {:?}", e)))
+        .map_err(|e| CandleError::Msg(format!("CoreML initWithDictionary_error: {e:?}")))
     })
 }
 
@@ -267,11 +266,11 @@ pub fn extract_all_outputs(
             let value = prediction
                 .featureValueForName(&feature_name)
                 .ok_or_else(|| {
-                    CandleError::Msg(format!("Output '{}' not found", feature_name_str))
+                    CandleError::Msg(format!("Output '{feature_name_str}' not found"))
                 })?;
 
             let marray = value.multiArrayValue().ok_or_else(|| {
-                CandleError::Msg(format!("Output '{}' is not MLMultiArray", feature_name_str))
+                CandleError::Msg(format!("Output '{feature_name_str}' is not MLMultiArray"))
             })?;
 
             // Get shape
@@ -286,8 +285,7 @@ pub fn extract_all_outputs(
             // Use the shared conversion function with proper Float16 handling
             let tensor = convert_mlmultiarray_to_tensor(&marray, input_device).map_err(|e| {
                 CandleError::Msg(format!(
-                    "Failed to create output tensor '{}': {}",
-                    feature_name_str, e
+                    "Failed to create output tensor '{feature_name_str}': {e}"
                 ))
             })?;
 
@@ -310,10 +308,10 @@ pub fn extract_output(
         let name = NSString::from_str(output_name);
         let value = prediction
             .featureValueForName(&name)
-            .ok_or_else(|| CandleError::Msg(format!("Output '{}' not found", output_name)))?;
+            .ok_or_else(|| CandleError::Msg(format!("Output '{output_name}' not found")))?;
 
         let marray = value.multiArrayValue().ok_or_else(|| {
-            CandleError::Msg(format!("Output '{}' is not MLMultiArray", output_name))
+            CandleError::Msg(format!("Output '{output_name}' is not MLMultiArray"))
         })?;
 
         // Use the shared conversion function with proper Float16 handling
@@ -637,12 +635,11 @@ mod tests {
             for &val in &tensor_data {
                 if val != 0.0 {
                     // Skip zero check since it's finite
-                    assert!(!val.is_nan(), "No NaN values should be present: {}", val);
+                    assert!(!val.is_nan(), "No NaN values should be present: {val}");
                     // MAX/MIN are finite extreme values, not infinity
                     assert!(
                         val.is_finite() || val == f32::MAX || val == f32::MIN,
-                        "Values should be finite or expected extremes: {}",
-                        val
+                        "Values should be finite or expected extremes: {val}"
                     );
                 }
             }

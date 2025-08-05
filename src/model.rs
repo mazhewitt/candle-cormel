@@ -118,7 +118,7 @@ impl CoreMLModel {
                     }
                     Err(err) => {
                         // If direct loading fails, try compiling first
-                        let err_msg = format!("{:?}", err);
+                        let err_msg = format!("{err:?}");
                         if err_msg.contains("Compile the model") {
                             debug!("Model requires compilation, compiling now");
                             #[allow(deprecated)]
@@ -141,35 +141,31 @@ impl CoreMLModel {
                                             })
                                         }
                                         Err(compile_err) => Err(CandleError::Msg(format!(
-                                            "Failed to load compiled CoreML model: {:?}",
-                                            compile_err
+                                            "Failed to load compiled CoreML model: {compile_err:?}"
                                         ))),
                                     }
                                 }
                                 Err(compile_err) => Err(CandleError::Msg(format!(
-                                    "Failed to compile CoreML model: {:?}. Original error: {:?}",
-                                    compile_err, err
+                                    "Failed to compile CoreML model: {compile_err:?}. Original error: {err:?}"
                                 ))),
                             }
                         } else {
                             // Check for common CoreML version compatibility issues
-                            let err_msg = format!("{:?}", err);
+                            let err_msg = format!("{err:?}");
                             if err_msg.contains("compiler major version")
                                 && err_msg.contains("more recent than this framework")
                             {
                                 Err(CandleError::Msg(format!(
-                                    "CoreML version compatibility issue: {}\n\
+                                    "CoreML version compatibility issue: {err_msg}\n\
                                     This model was compiled with a newer CoreML compiler than this system supports.\n\
                                     Solutions:\n\
                                     • Update to a newer macOS version\n\
                                     • Use models compiled for your CoreML framework version\n\
-                                    • Set RUST_LOG=debug for more details",
-                                    err_msg
+                                    • Set RUST_LOG=debug for more details"
                                 )))
                             } else {
                                 Err(CandleError::Msg(format!(
-                                    "Failed to load CoreML model: {:?}",
-                                    err
+                                    "Failed to load CoreML model: {err:?}"
                                 )))
                             }
                         }
@@ -490,7 +486,7 @@ impl CoreMLModel {
             // Function name is now handled during model loading via MLModelConfiguration
             self.inner
                 .predictionFromFeatures_error(protocol_provider)
-                .map_err(|e| CandleError::Msg(format!("CoreML prediction error: {:?}", e)))
+                .map_err(|e| CandleError::Msg(format!("CoreML prediction error: {e:?}")))
         })
     }
 
@@ -533,7 +529,7 @@ impl CoreMLModel {
 
             self.inner
                 .predictionFromFeatures_usingState_error(protocol_provider, state.inner())
-                .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {:?}", e)))
+                .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {e:?}")))
         })
     }
 }

@@ -101,10 +101,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             single_embeddings_output = Some(result);
         }
         let embeddings_single_avg = start.elapsed().as_micros() as f64 / iterations as f64;
-        println!(
-            "🎯 Embeddings (single token): {:.1}µs",
-            embeddings_single_avg
-        );
+        println!("🎯 Embeddings (single token): {embeddings_single_avg:.1}µs");
 
         // 2. FFN - single token
         if let Some(ref single_emb_output) = single_embeddings_output {
@@ -116,7 +113,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 single_ffn_output = Some(result);
             }
             let ffn_single_avg = start.elapsed().as_millis() as f64 / iterations as f64;
-            println!("🧠 FFN (single token): {:.1}ms", ffn_single_avg);
+            println!("🧠 FFN (single token): {ffn_single_avg:.1}ms");
 
             // 3. LM Head - single token
             if let Some(ref single_ffn_out) = single_ffn_output {
@@ -126,12 +123,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     let _result = model.lm_head.forward(&[single_ffn_out])?;
                 }
                 let lm_head_single_avg = start.elapsed().as_millis() as f64 / iterations as f64;
-                println!("📝 LM Head (single token): {:.1}ms", lm_head_single_avg);
+                println!("📝 LM Head (single token): {lm_head_single_avg:.1}ms");
 
                 // Total single token time
                 let total_single =
                     (embeddings_single_avg / 1000.0) + ffn_single_avg + lm_head_single_avg;
-                println!("⚡ Total single token (computed): {:.1}ms", total_single);
+                println!("⚡ Total single token (computed): {total_single:.1}ms");
             }
         }
 
@@ -159,10 +156,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let conversion_overhead = start.elapsed().as_nanos() as f64 / iterations as f64;
-        println!(
-            "🔄 Tensor→MLMultiArray conversion: {:.1}ns per call",
-            conversion_overhead
-        );
+        println!("🔄 Tensor→MLMultiArray conversion: {conversion_overhead:.1}ns per call");
 
         // Test feature provider creation
         let iterations = 1000;
@@ -180,10 +174,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let provider_overhead = start.elapsed().as_nanos() as f64 / iterations as f64;
-        println!(
-            "🎭 Feature provider creation: {:.1}ns per call",
-            provider_overhead
-        );
+        println!("🎭 Feature provider creation: {provider_overhead:.1}ns per call");
 
         println!("\n🎯 Bottleneck Conclusions:");
         println!("{}", "=".repeat(60));

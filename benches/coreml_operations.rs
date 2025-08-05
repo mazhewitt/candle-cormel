@@ -62,7 +62,7 @@ fn bench_tensor_conversion(c: &mut Criterion) {
             // Benchmark I64 tensor conversion (token IDs)
             let i64_tensor = Tensor::zeros((batch, seq_len), DType::I64, &device).unwrap();
             group.bench_with_input(
-                BenchmarkId::new("i64_to_mlarray", format!("{}x{}", batch, seq_len)),
+                BenchmarkId::new("i64_to_mlarray", format!("{batch}x{seq_len}")),
                 &i64_tensor,
                 |b, tensor| {
                     b.iter(|| {
@@ -75,7 +75,7 @@ fn bench_tensor_conversion(c: &mut Criterion) {
             // Benchmark F32 tensor conversion (embeddings/logits)
             let f32_tensor = Tensor::zeros((batch, seq_len), DType::F32, &device).unwrap();
             group.bench_with_input(
-                BenchmarkId::new("f32_to_mlarray", format!("{}x{}", batch, seq_len)),
+                BenchmarkId::new("f32_to_mlarray", format!("{batch}x{seq_len}")),
                 &f32_tensor,
                 |b, tensor| {
                     b.iter(|| {
@@ -108,7 +108,7 @@ fn bench_feature_provider_creation(c: &mut Criterion) {
             let ml_arrays = vec![ml_array];
 
             group.bench_with_input(
-                BenchmarkId::new("create_provider", format!("{}x{}", batch, seq_len)),
+                BenchmarkId::new("create_provider", format!("{batch}x{seq_len}")),
                 &(&input_names, &ml_arrays),
                 |b, (names, arrays)| {
                     b.iter(|| {
@@ -139,7 +139,7 @@ fn bench_coreml_prediction(c: &mut Criterion) {
             let input_tensor = Tensor::from_vec(input_data, (batch, seq_len), &device).unwrap();
 
             group.bench_with_input(
-                BenchmarkId::new("forward_pass", format!("{}x{}", batch, seq_len)),
+                BenchmarkId::new("forward_pass", format!("{batch}x{seq_len}")),
                 &input_tensor,
                 |b, tensor| {
                     b.iter(|| {

@@ -89,12 +89,10 @@ mod mask_tests {
                     assert_eq!(
                         value,
                         f32::NEG_INFINITY,
-                        "Position ({},{}) should be -inf",
-                        i,
-                        j
+                        "Position ({i},{j}) should be -inf"
                     );
                 } else {
-                    assert_eq!(value, 0.0, "Position ({},{}) should be 0.0", i, j);
+                    assert_eq!(value, 0.0, "Position ({i},{j}) should be 0.0");
                 }
             }
         }

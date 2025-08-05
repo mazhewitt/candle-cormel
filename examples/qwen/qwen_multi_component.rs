@@ -77,7 +77,7 @@ impl MultiComponentQwen {
 
         let cache_dir = download_model(&args.model_id, args.verbose).map_err(|e| {
             E::msg(format!(
-                "🔧 Failed to download model: {}\n\
+                "🔧 Failed to download model: {e}\n\
                 \n\
                 This might be because:\n\
                 • Network connectivity issues\n\
@@ -87,8 +87,7 @@ impl MultiComponentQwen {
                 💡 Alternative: Use the patterns demo that shows the same concepts:\n\
                    cargo run --example qwen_demo_patterns\n\
                 \n\
-                Original error: {}",
-                e, e
+                Original error: {e}"
             ))
         })?;
 
@@ -109,7 +108,7 @@ impl MultiComponentQwen {
 
         // Load tokenizer
         let tokenizer = Tokenizer::from_file(&tokenizer_path)
-            .map_err(|e| E::msg(format!("Failed to load tokenizer: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to load tokenizer: {e}")))?;
 
         // Configure and load embeddings model
         let embeddings_config = CoreMLConfig {
@@ -121,7 +120,7 @@ impl MultiComponentQwen {
         };
 
         let embeddings = CoreMLModel::load_from_file(&embeddings_path, &embeddings_config)
-            .map_err(|e| E::msg(format!("Failed to load embeddings model: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to load embeddings model: {e}")))?;
 
         // Configure and load FFN model (requires MLState for KV-cache)
         let ffn_config = CoreMLConfig {
@@ -138,7 +137,7 @@ impl MultiComponentQwen {
         };
 
         let ffn = CoreMLModel::load_from_file(&ffn_path, &ffn_config)
-            .map_err(|e| E::msg(format!("Failed to load FFN model: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to load FFN model: {e}")))?;
 
         // Configure and load LM head model (has 16 logits outputs that need concatenation)
         let lm_head_config = CoreMLConfig {
@@ -150,7 +149,7 @@ impl MultiComponentQwen {
         };
 
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)
-            .map_err(|e| E::msg(format!("Failed to load LM head model: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to load LM head model: {e}")))?;
 
         if args.verbose {
             println!("✅ All model components loaded successfully");
@@ -175,7 +174,7 @@ impl MultiComponentQwen {
         let encoding = self
             .tokenizer
             .encode(text, true)
-            .map_err(|e| E::msg(format!("Tokenization failed: {}", e)))?;
+            .map_err(|e| E::msg(format!("Tokenization failed: {e}")))?;
 
         let tokens: Vec<i64> = encoding.get_ids().iter().map(|&id| id as i64).collect();
 
@@ -194,7 +193,7 @@ impl MultiComponentQwen {
         let ids: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
         self.tokenizer
             .decode(&ids, true)
-            .map_err(|e| E::msg(format!("Detokenization failed: {}", e)))
+            .map_err(|e| E::msg(format!("Detokenization failed: {e}")))
     }
 
     /// Process tokens one by one during prefill (discovered architecture)
@@ -211,7 +210,7 @@ impl MultiComponentQwen {
         // Process each token individually through the pipeline
         for (pos, &token) in input_tokens.iter().enumerate() {
             if self.verbose {
-                println!("  🔸 Processing token {} at position {}", token, pos);
+                println!("  🔸 Processing token {token} at position {pos}");
             }
 
             // Step 1: Convert single token to embeddings (embeddings accepts length 1)
@@ -303,19 +302,18 @@ impl MultiComponentQwen {
         let mut full_logits = Vec::with_capacity(QWEN_VOCAB_SIZE);
 
         for i in 1..=16 {
-            let logits_key = format!("logits{}", i);
+            let logits_key = format!("logits{i}");
             if let Some(chunk_tensor) = all_outputs.get(&logits_key) {
                 let chunk_vec = chunk_tensor.to_vec3::<f32>()?;
                 if !chunk_vec.is_empty() && !chunk_vec[0].is_empty() {
                     full_logits.extend_from_slice(&chunk_vec[0][0]);
                 } else {
                     return Err(E::msg(format!(
-                        "Invalid logits chunk shape for {}",
-                        logits_key
+                        "Invalid logits chunk shape for {logits_key}"
                     )));
                 }
             } else {
-                return Err(E::msg(format!("Missing logits chunk: {}", logits_key)));
+                return Err(E::msg(format!("Missing logits chunk: {logits_key}")));
             }
         }
 
@@ -398,7 +396,7 @@ impl MultiComponentQwen {
 
             // Decode and display the new token
             if let Ok(token_text) = self.detokenize(&[next_token]) {
-                print!("{}", token_text);
+                print!("{token_text}");
                 io::stdout().flush().unwrap();
                 generated_text.push_str(&token_text);
             }
@@ -480,7 +478,7 @@ async fn run_multi_component_chat(args: &Args) -> Result<()> {
             }
             Ok(_) => {}
             Err(e) => {
-                println!("❌ Error reading input: {}", e);
+                println!("❌ Error reading input: {e}");
                 break;
             }
         }
@@ -497,10 +495,7 @@ async fn run_multi_component_chat(args: &Args) -> Result<()> {
         }
 
         // Format as chat prompt (using Qwen chat template)
-        let prompt = format!(
-            "<|im_start|>user\n{}<|im_end|>\n<|im_start|>assistant\n",
-            input
-        );
+        let prompt = format!("<|im_start|>user\n{input}<|im_end|>\n<|im_start|>assistant\n");
 
         // Generate response
         match model.generate(&prompt, args.max_tokens, args.temperature) {
@@ -508,7 +503,7 @@ async fn run_multi_component_chat(args: &Args) -> Result<()> {
                 println!(); // Extra line for readability
             }
             Err(e) => {
-                println!("❌ Generation failed: {}", e);
+                println!("❌ Generation failed: {e}");
             }
         }
     }
@@ -528,7 +523,7 @@ async fn main() -> Result<()> {
 
     if args.verbose {
         println!("🔧 Verbose mode enabled");
-        println!("Config: {:#?}", args);
+        println!("Config: {args:#?}");
         println!();
     }
 

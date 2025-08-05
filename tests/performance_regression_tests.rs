@@ -108,13 +108,12 @@ fn test_single_token_performance() {
 
     match result {
         Ok(token) => {
-            println!("✅ Generated token: {} in {:?}", token, elapsed);
+            println!("✅ Generated token: {token} in {elapsed:?}");
 
             // Validate correctness
             assert_eq!(
                 token, EXPECTED_DOG_TOKEN,
-                "Expected 'dog' token ({}), got {}",
-                EXPECTED_DOG_TOKEN, token
+                "Expected 'dog' token ({EXPECTED_DOG_TOKEN}), got {token}"
             );
 
             // Validate performance
@@ -139,7 +138,7 @@ fn test_single_token_performance() {
             );
         }
         Err(e) => {
-            panic!("❌ Single token generation failed: {}", e);
+            panic!("❌ Single token generation failed: {e}");
         }
     }
 }
@@ -218,7 +217,7 @@ fn test_batch_generation_performance() {
                 }
             }
             Err(e) => {
-                panic!("❌ Batch generation failed for prompt '{}': {}", prompt, e);
+                panic!("❌ Batch generation failed for prompt '{prompt}': {e}");
             }
         }
     }
@@ -246,14 +245,10 @@ fn test_consistency_with_chat_py() {
 
     assert_eq!(
         token, EXPECTED_DOG_TOKEN,
-        "Rust implementation generated token {} but chat.py expects {} ('dog')",
-        token, EXPECTED_DOG_TOKEN
+        "Rust implementation generated token {token} but chat.py expects {EXPECTED_DOG_TOKEN} ('dog')"
     );
 
-    println!(
-        "✅ Canonical prediction matches chat.py: token {} ('dog')",
-        token
-    );
+    println!("✅ Canonical prediction matches chat.py: token {token} ('dog')");
 
     // Test deterministic behavior (should generate same token multiple times with temp=0)
     println!("Testing deterministic behavior...");
@@ -263,8 +258,7 @@ fn test_consistency_with_chat_py() {
 
     assert!(
         tokens.iter().all(|&t| t == EXPECTED_DOG_TOKEN),
-        "Non-deterministic behavior detected: tokens={:?}",
-        tokens
+        "Non-deterministic behavior detected: tokens={tokens:?}"
     );
 
     println!("✅ Deterministic behavior confirmed");
@@ -290,7 +284,7 @@ fn test_memory_efficiency() {
     let tokens_per_iter = 20;
 
     for i in 1..=num_iterations {
-        println!("Memory test iteration {}/{}", i, num_iterations);
+        println!("Memory test iteration {i}/{num_iterations}");
 
         let start = Instant::now();
         let result = model.generate_tokens(prompt, tokens_per_iter, 0.7, None);
@@ -314,7 +308,7 @@ fn test_memory_efficiency() {
                 );
             }
             Err(e) => {
-                panic!("❌ Memory test failed in iteration {}: {}", i, e);
+                panic!("❌ Memory test failed in iteration {i}: {e}");
             }
         }
     }
@@ -370,10 +364,7 @@ fn test_concurrent_generation_safety() {
     let avg_performance =
         all_metrics.iter().map(|m| m.tokens_per_second).sum::<f32>() / all_metrics.len() as f32;
 
-    println!(
-        "📊 Average performance across rapid generations: {:.2} t/s",
-        avg_performance
-    );
+    println!("📊 Average performance across rapid generations: {avg_performance:.2} t/s");
 
     // Check that no generation was excessively slow
     let min_performance = all_metrics
@@ -384,8 +375,7 @@ fn test_concurrent_generation_safety() {
 
     assert!(
         min_performance > 0.1,
-        "Minimum performance too low: {:.2} t/s",
-        min_performance
+        "Minimum performance too low: {min_performance:.2} t/s"
     );
 
     println!("✅ Rapid sequential generation test passed");
@@ -436,18 +426,9 @@ mod non_macos_tests {
 pub fn print_performance_summary() {
     println!("\n📋 Performance Test Summary:");
     println!("════════════════════════════");
-    println!(
-        "🎯 Target: Match chat.py baseline ({:.0} t/s)",
-        CHAT_PY_BASELINE_TOKENS_PER_SECOND
-    );
-    println!(
-        "✅ Acceptable: > {:.1} t/s (single token)",
-        BATCH_GENERATION_MIN_TOKENS_PER_SEC
-    );
-    println!(
-        "⚡ Maximum single token time: {}ms",
-        SINGLE_TOKEN_MAX_TIME_MS
-    );
+    println!("🎯 Target: Match chat.py baseline ({CHAT_PY_BASELINE_TOKENS_PER_SECOND:.0} t/s)");
+    println!("✅ Acceptable: > {BATCH_GENERATION_MIN_TOKENS_PER_SEC:.1} t/s (single token)");
+    println!("⚡ Maximum single token time: {SINGLE_TOKEN_MAX_TIME_MS}ms");
     println!("🔄 Tests validate: speed, accuracy, memory, consistency");
     println!(
         "🚀 Run with: cargo test --test performance_regression_tests -- --ignored --nocapture"
