@@ -135,7 +135,6 @@ impl QwenBenchmark {
         Self { model }
     }
 
-
     fn benchmark_inference(
         &mut self,
         sequence_length: usize,
@@ -152,7 +151,7 @@ impl QwenBenchmark {
             );
         }
 
-        // Create a simple test prompt  
+        // Create a simple test prompt
         let test_prompt = "The quick brown fox jumps over the lazy dog";
 
         // Warm-up run
@@ -161,10 +160,10 @@ impl QwenBenchmark {
         // Benchmark iterations
         for i in 0..iterations {
             let start_time = Instant::now();
-            
+
             // Use forward_text for single token prediction (faster benchmark)
             let _ = self.model.forward_text(test_prompt)?;
-            
+
             let elapsed = start_time.elapsed();
             result.add_measurement(elapsed);
 
@@ -177,7 +176,6 @@ impl QwenBenchmark {
         Ok(result)
     }
 }
-
 
 fn print_results(results: &[BenchmarkResult]) {
     println!("\n📊 Benchmark Results");
@@ -251,10 +249,10 @@ fn run_benchmark(args: &Args) -> Result<()> {
     // Load Qwen model
     println!("🔄 Loading Qwen model...");
     println!("📥 Downloading model components from HuggingFace...");
-    
+
     let model_path = model_downloader::ensure_model_downloaded(&args.model_id, args.verbose)
         .map_err(|e| E::msg(format!("Failed to download model: {}", e)))?;
-    
+
     let config = QwenConfig::default();
     let model = QwenModel::load_from_directory(&model_path, Some(config))
         .map_err(|e| E::msg(format!("Failed to load model: {}", e)))?;
