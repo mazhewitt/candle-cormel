@@ -522,6 +522,7 @@ async fn test_qwen_constants() {
 #[cfg(not(target_os = "macos"))]
 mod non_macos_tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[tokio::test]
     async fn test_qwen_requires_macos() {
