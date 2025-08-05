@@ -89,8 +89,7 @@ pub fn convert_mlmultiarray_to_tensor(
                     // For other unknown types, try floatValue as fallback
                     debug!(
                         "Unknown MLMultiArray data type: {:?} (raw: {}), using floatValue fallback",
-                        data_type,
-                        data_type_raw
+                        data_type, data_type_raw
                     );
 
                     for i in 0..count {

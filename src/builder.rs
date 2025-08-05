@@ -45,7 +45,7 @@ impl CoreMLModelBuilder {
             Some(filename) => get_local_or_remote_file(filename, &repo)
                 .map_err(|e| CandleError::Msg(format!("Failed to get config file: {e}")))?,
             None => get_local_or_remote_file("config.json", &repo)
-                .map_err(|e| CandleError::Msg(format!("Failed to get config.json: {e}")))?
+                .map_err(|e| CandleError::Msg(format!("Failed to get config.json: {e}")))?,
         };
 
         let config_str = std::fs::read_to_string(config_path)
