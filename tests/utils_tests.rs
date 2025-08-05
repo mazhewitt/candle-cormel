@@ -438,6 +438,6 @@ mod non_macos_tests {
 
         // This test mainly ensures the module compiles on non-macOS platforms
         // Most actual functionality testing requires macOS and CoreML support
-        assert!(true, "Utils module should be accessible on all platforms");
+        // Test passes if it compiles and runs on all platforms
     }
 }

@@ -427,7 +427,7 @@ mod non_macos_tests {
         // Ensure performance tests are appropriately gated for macOS
         // This test ensures the test structure is sound on all platforms
         println!("Performance tests require macOS with CoreML support");
-        assert!(true, "Test structure should be accessible on all platforms");
+        // Test passes if it compiles and runs on all platforms
     }
 }
 
