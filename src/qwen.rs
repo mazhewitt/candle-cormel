@@ -54,6 +54,58 @@ pub struct QwenModel {
 }
 
 impl QwenModel {
+    /// Auto-detect model file with given prefix and suffix patterns
+    fn find_model_file<P: AsRef<Path>>(
+        model_dir: P,
+        prefix: &str,
+        suffix: &str,
+    ) -> Result<std::path::PathBuf, CandleError> {
+        let model_dir = model_dir.as_ref();
+
+        // Read directory entries
+        let entries = std::fs::read_dir(model_dir)
+            .map_err(|e| CandleError::Msg(format!("Failed to read model directory: {}", e)))?;
+
+        // Find files matching the pattern
+        let mut matching_files = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| CandleError::Msg(format!("Failed to read directory entry: {}", e)))?;
+            let filename = entry.file_name();
+            let filename_str = filename.to_string_lossy();
+
+            if filename_str.starts_with(prefix) && filename_str.ends_with(suffix) {
+                matching_files.push(entry.path());
+            }
+        }
+
+        match matching_files.len() {
+            0 => Err(CandleError::Msg(format!(
+                "No model file found matching pattern: {}*{} in directory: {}",
+                prefix,
+                suffix,
+                model_dir.display()
+            ))),
+            1 => {
+                let path = &matching_files[0];
+                debug!("Auto-detected model file: {}", path.display());
+                Ok(path.clone())
+            }
+            _ => {
+                // Multiple matches - prefer the first one but warn
+                let path = &matching_files[0];
+                warn!(
+                    "Multiple model files found matching {}*{}: {:?}. Using: {}",
+                    prefix,
+                    suffix,
+                    matching_files,
+                    path.display()
+                );
+                Ok(path.clone())
+            }
+        }
+    }
+
     /// Load Qwen model from the specified directory
     pub fn load_from_directory<P: AsRef<Path>>(
         model_dir: P,
@@ -97,7 +149,8 @@ impl QwenModel {
             model_type: "qwen-ffn".to_string(),
         };
 
-        let ffn_path = model_dir.join("qwen_FFN_PF_lut6_chunk_01of01.mlmodelc");
+        // Auto-detect FFN model file (handles different LUT versions)
+        let ffn_path = Self::find_model_file(model_dir, "qwen_FFN_PF_", "_chunk_01of01.mlmodelc")?;
 
         // FFN Prefill function (for initial sequence processing)
         debug!("Loading FFN prefill component from {}", ffn_path.display());
@@ -120,7 +173,8 @@ impl QwenModel {
             model_type: "qwen-lm-head".to_string(),
         };
 
-        let lm_head_path = model_dir.join("qwen_lm_head_lut6.mlmodelc");
+        // Auto-detect LM head model file (handles different LUT versions)
+        let lm_head_path = Self::find_model_file(model_dir, "qwen_lm_head_", ".mlmodelc")?;
         debug!("Loading LM head component from {}", lm_head_path.display());
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)?;
 
