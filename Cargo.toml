@@ -1,6 +1,6 @@
 [package]
 name = "candle-coreml"
-version = "0.2.1"
+version = "0.2.2"
 edition = "2021"
 description = "CoreML inference engine for Candle tensors - provides Apple CoreML/ANE integration with real tokenization, safety fixes, and model calibration awareness"
 repository = "https://github.com/mazhewitt/candle-cormel"
