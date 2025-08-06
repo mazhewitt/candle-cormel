@@ -70,6 +70,24 @@ impl QwenModel {
         let entries = std::fs::read_dir(model_dir)
             .map_err(|e| CandleError::Msg(format!("Failed to read model directory: {e}")))?;
 
+        // Define possible extensions to search for
+        let extensions = if suffix.ends_with(".mlmodelc") {
+            vec![".mlmodelc", ".mlpackage"]
+        } else {
+            vec![suffix]
+        };
+
+        // Define possible prefixes to search for (handle both qwen_ and qwen-typo-fixer_ patterns)
+        let prefixes = if prefix == "qwen_" {
+            vec!["qwen_", "qwen-typo-fixer_"]
+        } else {
+            vec![prefix]
+        };
+
+        debug!("Searching for model files in: {}", model_dir.display());
+        debug!("Prefixes: {:?}", prefixes);
+        debug!("Extensions: {:?}", extensions);
+
         // Find files matching the pattern
         let mut matching_files = Vec::new();
         for entry in entries {
@@ -78,14 +96,33 @@ impl QwenModel {
             let filename = entry.file_name();
             let filename_str = filename.to_string_lossy();
 
-            if filename_str.starts_with(prefix) && filename_str.ends_with(suffix) {
-                matching_files.push(entry.path());
+            // Check if filename matches any prefix/extension combination
+            for &test_prefix in &prefixes {
+                for &test_extension in &extensions {
+                    let test_suffix =
+                        if suffix.ends_with(".mlmodelc") && test_extension == ".mlpackage" {
+                            // For .mlmodelc patterns, replace with .mlpackage
+                            suffix.replace(".mlmodelc", ".mlpackage")
+                        } else {
+                            suffix.to_string()
+                        };
+
+                    if filename_str.starts_with(test_prefix) && filename_str.ends_with(&test_suffix)
+                    {
+                        debug!(
+                            "Found matching file: {} (prefix: {}, suffix: {})",
+                            filename_str, test_prefix, test_suffix
+                        );
+                        matching_files.push(entry.path());
+                        break;
+                    }
+                }
             }
         }
 
         match matching_files.len() {
             0 => Err(CandleError::Msg(format!(
-                "No model file found matching pattern: {}*{} in directory: {}",
+                "No model file found matching pattern: {}*{} (or variants) in directory: {}",
                 prefix,
                 suffix,
                 model_dir.display()
@@ -96,8 +133,11 @@ impl QwenModel {
                 Ok(path.clone())
             }
             _ => {
-                // Multiple matches - prefer the first one but warn
-                let path = &matching_files[0];
+                // Multiple matches - prefer .mlpackage over .mlmodelc if available
+                let path = matching_files
+                    .iter()
+                    .find(|p| p.to_string_lossy().ends_with(".mlpackage"))
+                    .unwrap_or(&matching_files[0]);
                 warn!(
                     "Multiple model files found matching {}*{}: {:?}. Using: {}",
                     prefix,
@@ -111,12 +151,26 @@ impl QwenModel {
     }
 
     /// Load Qwen model from the specified directory
+    /// Automatically checks for coreml/ subdirectory and supports both .mlmodelc and .mlpackage formats
     pub fn load_from_directory<P: AsRef<Path>>(
         model_dir: P,
         config: Option<QwenConfig>,
     ) -> Result<Self, CandleError> {
         let config = config.unwrap_or_default();
         let model_dir = model_dir.as_ref();
+
+        // Check if there's a coreml/ subdirectory with CoreML models
+        let coreml_subdir = model_dir.join("coreml");
+        let actual_model_dir = if coreml_subdir.exists() && coreml_subdir.is_dir() {
+            debug!("Found coreml/ subdirectory, using it for model loading");
+            &coreml_subdir
+        } else {
+            debug!(
+                "Using main directory for model loading: {}",
+                model_dir.display()
+            );
+            model_dir
+        };
 
         // Load tokenizer
         let tokenizer_path = model_dir.join("tokenizer.json");
@@ -132,7 +186,8 @@ impl QwenModel {
             model_type: "qwen-embeddings".to_string(),
         };
 
-        let embeddings_path = model_dir.join("qwen_embeddings.mlmodelc");
+        let embeddings_path =
+            Self::find_model_file(actual_model_dir, "qwen_", "embeddings.mlmodelc")?;
         debug!(
             "Loading embeddings component from {}",
             embeddings_path.display()
@@ -154,7 +209,8 @@ impl QwenModel {
         };
 
         // Auto-detect FFN model file (handles different LUT versions)
-        let ffn_path = Self::find_model_file(model_dir, "qwen_FFN_PF_", "_chunk_01of01.mlmodelc")?;
+        let ffn_path =
+            Self::find_model_file(actual_model_dir, "qwen_FFN_PF_", "_chunk_01of01.mlmodelc")?;
 
         // FFN Prefill function (for initial sequence processing)
         debug!("Loading FFN prefill component from {}", ffn_path.display());
@@ -178,7 +234,7 @@ impl QwenModel {
         };
 
         // Auto-detect LM head model file (handles different LUT versions)
-        let lm_head_path = Self::find_model_file(model_dir, "qwen_lm_head_", ".mlmodelc")?;
+        let lm_head_path = Self::find_model_file(actual_model_dir, "qwen_lm_head_", ".mlmodelc")?;
         debug!("Loading LM head component from {}", lm_head_path.display());
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)?;
 
