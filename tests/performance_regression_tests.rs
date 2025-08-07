@@ -83,7 +83,9 @@ fn get_qwen_model_path() -> Option<PathBuf> {
 // Helper to create QwenModel for testing
 fn create_test_qwen_model() -> Option<QwenModel> {
     let model_path = get_qwen_model_path()?;
-    let config = QwenConfig::default();
+    // Use the correct model configuration for the standard ANEMLL model
+    let config =
+        QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4").ok()?;
 
     QwenModel::load_from_directory(&model_path, Some(config)).ok()
 }

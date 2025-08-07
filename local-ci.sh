@@ -125,7 +125,13 @@ echo ""
 # Step 8: Example Tests
 print_header "EXAMPLE TESTS"
 print_step "Testing basic examples..."
-timeout 30s cargo run --example clean_download_example || print_warning "clean_download_example failed or timed out (expected without network)"
+print_warning "Skipping clean_download_example (downloads large models)"
+
+print_step "Testing lightweight examples..."
+# Test examples that don't require model downloads
+timeout 10s cargo run --example debug_tensor_creation 2>/dev/null || print_warning "debug_tensor_creation failed (expected without models)"
+
+echo "To test download example manually, run: cargo run --example clean_download_example"
 print_success "Example tests completed"
 echo ""
 

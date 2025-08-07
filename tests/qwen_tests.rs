@@ -15,7 +15,6 @@
 //! - comprehensive_qwen_tests.rs
 
 use anyhow::Result;
-use candle_core::Device;
 use candle_coreml::{
     ensure_model_downloaded,
     qwen::{QwenConfig, QwenModel},
@@ -51,7 +50,8 @@ fn check_coreml_compatibility() -> bool {
 // Helper functions for test utilities
 async fn create_test_model() -> Option<QwenModel> {
     let model_dir = ensure_model_downloaded(MODEL_ID, true).ok()?;
-    let config = QwenConfig::default();
+    // Use the correct model configuration for the specific model being tested
+    let config = QwenConfig::for_model_id(MODEL_ID).ok()?;
     QwenModel::load_from_directory(&model_dir, Some(config)).ok()
 }
 
@@ -69,7 +69,8 @@ mod architecture_tests {
         println!("🎉 Testing fixed QwenModel architecture");
 
         let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-        let config = QwenConfig::default();
+        // Use the correct model configuration for this specific model
+        let config = QwenConfig::for_model_id(MODEL_ID)?;
         let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
 
         println!("✅ QwenModel loaded successfully");
@@ -129,7 +130,8 @@ mod position_fix_tests {
         println!("🔧 Testing QwenModel with position fix");
 
         let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-        let config = QwenConfig::default();
+        // Use the correct model configuration for this specific model
+        let config = QwenConfig::for_model_id(MODEL_ID)?;
         let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
 
         println!("✅ QwenModel loaded");
@@ -225,7 +227,8 @@ mod prediction_tests {
         println!("🎯 Testing Rust QwenModel prediction for 'dog' completion");
 
         let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-        let config = QwenConfig::default();
+        // Use the correct model configuration for this specific model
+        let config = QwenConfig::for_model_id(MODEL_ID)?;
         let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
 
         let prompt = QUICK_BROWN_FOX_PROMPT;
@@ -274,8 +277,9 @@ mod integration_tests {
         // Download the Qwen model
         let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
 
-        // Load the complete Qwen model using the full pipeline
-        let mut qwen_model = QwenModel::load_from_directory(&model_dir, None)?;
+        // Load the complete Qwen model using the full pipeline with correct config
+        let config = QwenConfig::for_model_id(MODEL_ID)?;
+        let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
 
         // Test the classic "The quick brown fox jumps over the lazy" completion
         let prompt = QUICK_BROWN_FOX_PROMPT;
@@ -411,14 +415,10 @@ mod extended_coverage_tests {
     async fn test_custom_configurations() -> Result<()> {
         let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
 
-        // Test with custom configuration
-        let custom_config = QwenConfig {
-            vocab_size: 151936,  // Qwen default
-            hidden_size: 1024,   // Qwen default
-            context_length: 512, // Qwen default
-            batch_size: 64,      // Qwen default
-            device: Device::Cpu, // Force CPU for testing
-        };
+        // Test with custom configuration - use the new API
+        let custom_config =
+            QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")
+                .unwrap_or_else(|_| QwenConfig::default());
 
         let model_result = QwenModel::load_from_directory(&model_dir, Some(custom_config));
         assert!(
@@ -484,27 +484,35 @@ mod extended_coverage_tests {
 async fn test_qwen_config_defaults() {
     let config = QwenConfig::default();
 
-    assert_eq!(config.vocab_size, candle_coreml::qwen::QWEN_VOCAB_SIZE);
-    assert_eq!(config.hidden_size, candle_coreml::qwen::QWEN_HIDDEN_SIZE);
-    assert_eq!(config.batch_size, candle_coreml::qwen::QWEN_BATCH_SIZE);
-    assert_eq!(
-        config.context_length,
-        candle_coreml::qwen::QWEN_CONTEXT_LENGTH
-    );
+    // Test using new accessor methods instead of deprecated fields
+    assert_eq!(config.vocab_size(), 151936); // Default Qwen vocab size
+    assert_eq!(config.hidden_size(), 1024); // Default Qwen hidden size
+    assert_eq!(config.batch_size(), 1); // Default batch size
+    assert_eq!(config.context_length(), 512); // Default context length
 
-    println!("✅ QwenConfig defaults validated");
+    println!("✅ QwenConfig defaults validated using new accessor methods");
 }
 
 #[tokio::test]
-async fn test_qwen_constants() {
-    use candle_coreml::qwen::*;
+async fn test_model_config_system() {
+    use candle_coreml::{ModelConfig, QwenConfig};
 
-    assert_eq!(QWEN_VOCAB_SIZE, 151936);
-    assert_eq!(QWEN_HIDDEN_SIZE, 1024);
-    assert_eq!(QWEN_BATCH_SIZE, 64);
-    assert_eq!(QWEN_CONTEXT_LENGTH, 512);
+    // Test that we can load builtin model configurations
+    let standard_config =
+        ModelConfig::get_builtin_config("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4");
+    assert!(
+        standard_config.is_some(),
+        "Standard ANEMLL config should be available"
+    );
 
-    println!("✅ Qwen constants validated");
+    // Test QwenConfig creation from model ID
+    let qwen_config = QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4");
+    assert!(
+        qwen_config.is_ok(),
+        "Should be able to create QwenConfig from model ID"
+    );
+
+    println!("✅ Model config system validated");
 }
 
 #[cfg(not(target_os = "macos"))]

@@ -1,17 +1,25 @@
 pub mod builder;
+pub mod builtin_configs;
 pub mod clean_git_lfs_downloader;
 pub mod config;
 pub mod conversion;
+#[cfg(test)]
+pub mod infer_shape_test;
 pub mod model;
+pub mod model_config;
 pub mod model_downloader;
 pub mod qwen;
+#[cfg(test)]
+pub mod qwen_shapes_test;
 pub mod state;
 pub mod utils;
 
 pub use builder::CoreMLModelBuilder;
+pub use builtin_configs::{get_builtin_config, list_builtin_models};
 pub use config::Config;
 pub use model::CoreMLModel;
-pub use qwen::{QwenConfig, QwenModel};
+pub use model_config::{ComponentConfig, ModelConfig, NamingConfig, ShapeConfig, TensorConfig};
+pub use qwen::{ModelNamingConfig, QwenConfig, QwenModel};
 pub use state::CoreMLState;
 
 // Main unified downloader API (recommended)
