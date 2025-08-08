@@ -130,6 +130,8 @@ Many tests require downloaded models, which are automatically cached:
 
 Models are downloaded automatically via `ensure_model_downloaded()` on first use.
 
+Note: The library now requires explicit file_path configuration for multi-component models (no filename discovery/globbing). Built-in test configs already conform to this requirement.
+
 **⏱️ Model Loading Times**: Each model requires compilation on first load:
 - **Download**: ~30s for large models (cached afterward)
 - **Compilation**: 30-60s per model (optimizes for your hardware: ANE/GPU/CPU)

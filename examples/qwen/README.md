@@ -35,15 +35,6 @@ examples/qwen/
 
 ## 🔧 Usage Examples
 
-### Integration Patterns Demo (Working Now!)
-```bash
-# 🌟 Demo of multi-component integration patterns (WORKS IMMEDIATELY)
-cargo run --example qwen_demo_patterns
-
-# With verbose output to see detailed component flow
-cargo run --example qwen_demo_patterns -- --verbose
-```
-
 ### Multi-Component Qwen Chat (With Real Models)
 ```bash
 # 🔧 Full Anemll multi-component implementation (requires model download)
@@ -56,7 +47,7 @@ cargo run --example qwen_multi_component -- --verbose --temperature 0.8
 cargo run --example qwen_multi_component -- --help
 ```
 
-*Note: The multi-component chat requires downloading large model files. If you encounter download issues, use the patterns demo above to see the integration approach.*
+*Note: The multi-component chat requires downloading large model files. If you encounter download issues, ensure your ModelConfig uses explicit file_path values for each component and see CUSTOM_MODEL_GUIDE.md for setup details.*
 
 ### Single-Model Interface (Reference)
 ```bash
@@ -76,11 +67,11 @@ Our implementation follows the Anemll pattern exactly:
    - Input: Token IDs [batch, seq_len]
    - Output: Hidden states [batch, seq_len, hidden_dim]
 
-2. **FFN Model** (`qwen_FFN_PF_lut6_chunk_01of01.mlmodelc`)
+2. **FFN Model** (`qwen_FFN_PF_lut8_chunk_01of01.mlmodelc`)
    - Input: Hidden states + causal mask
    - Output: Processed hidden states [batch, seq_len, hidden_dim]
 
-3. **LM Head Model** (`qwen_lm_head_lut6.mlmodelc`)
+3. **LM Head Model** (`qwen_lm_head_lut8.mlmodelc`)
    - Input: Last position hidden state [batch, 1, hidden_dim]
    - Output: Token logits [batch, 1, vocab_size]
 
@@ -97,16 +88,15 @@ The Anemll approach demonstrates advanced CoreML usage:
 - **ANE Targeting**: Specific optimizations for Apple Neural Engine
 - **Flexible Deployment**: Modular components for different use cases
 
-## 🔍 Model File Mapping
+## 🔍 Model File Components and Filenames
 
-Based on the Anemll repository structure, the actual model files are:
+The core components and expected filenames are:
 
-### Available Model Files
-- `qwen_embeddings.mlmodelc` - Token embeddings 
-- `qwen_FFN_PF_lut6_chunk_01of01.mlmodelc` - Feed-forward network
-- `qwen_lm_head.mlmodelc` or `qwen_lm_head_lut6.mlmodelc` - Language model head
+- `qwen_embeddings.mlmodelc` — Token embeddings 
+- `qwen_FFN_PF_lut8_chunk_01of01.mlmodelc` — Feed-forward/transformer core
+- `qwen_lm_head_lut8.mlmodelc` — Language model head
 
-*Note: Our implementation attempts to download these files. If specific files aren't available, the examples will show appropriate error messages with suggestions for alternative approaches.*
+Built-in configs reference these exact filenames and will auto-download the components from HuggingFace on first run. For custom/local models, configure explicit file_path values per component; filename discovery/globbing is not supported.
 
 ## 🎨 Integration Patterns Demonstrated
 
