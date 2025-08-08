@@ -8,12 +8,12 @@ pub mod infer_shape_test;
 pub mod model;
 pub mod model_config;
 pub mod model_downloader;
+pub mod pipeline;
 pub mod qwen;
 #[cfg(test)]
 pub mod qwen_shapes_test;
 pub mod state;
 pub mod utils;
-pub mod pipeline;
 
 pub use builder::CoreMLModelBuilder;
 pub use builtin_configs::{get_builtin_config, list_builtin_models};

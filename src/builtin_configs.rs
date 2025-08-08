@@ -53,7 +53,7 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
   },
   "components": {
     "embeddings": {
-      "file_pattern": "*_embeddings.mlmodelc",
+  "file_path": "qwen_embeddings.mlmodelc",
       "inputs": {
         "input_ids": {
           "name": "input_ids",
@@ -71,7 +71,7 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
       "functions": []
     },
     "ffn_prefill": {
-      "file_pattern": "*_FFN_PF_*_chunk_*.mlmodelc",
+  "file_path": "qwen_FFN_PF_lut8_chunk_01of01.mlmodelc",
       "inputs": {
         "hidden_states": {
           "name": "hidden_states",
@@ -104,7 +104,7 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
       "functions": ["prefill", "infer"]
     },
     "ffn_infer": {
-      "file_pattern": "*_FFN_PF_*_chunk_*.mlmodelc",
+  "file_path": "qwen_FFN_PF_lut8_chunk_01of01.mlmodelc",
       "inputs": {
         "hidden_states": {
           "name": "hidden_states",
@@ -137,7 +137,7 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
       "functions": ["infer"]
     },
     "lm_head": {
-      "file_pattern": "*_lm_head_*.mlmodelc",
+  "file_path": "qwen_lm_head_lut8.mlmodelc",
       "inputs": {
         "hidden_states": {
           "name": "hidden_states",
@@ -156,9 +156,9 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
     }
   },
   "naming": {
-    "embeddings_pattern": "*_embeddings.mlmodelc",
-    "ffn_prefill_pattern": "*_FFN_PF_*_chunk_*.mlmodelc",
-    "lm_head_pattern": "*_lm_head_*.mlmodelc"
+  "embeddings_pattern": null,
+  "ffn_prefill_pattern": null,
+  "lm_head_pattern": null
   }
 }"#;
 
@@ -281,9 +281,9 @@ const TYPO_FIXER_CONFIG: &str = r#"{
     }
   },
   "naming": {
-    "embeddings_pattern": "qwen-typo-fixer_embeddings.mlpackage",
-    "lm_head_pattern": "qwen-typo-fixer_lm_head_lut*.mlpackage",
-    "ffn_prefill_pattern": "qwen-typo-fixer_FFN_PF_lut*_chunk_*.mlpackage"
+  "embeddings_pattern": null,
+  "lm_head_pattern": null,
+  "ffn_prefill_pattern": null
   }
 }"#;
 

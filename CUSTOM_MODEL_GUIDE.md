@@ -1,6 +1,328 @@
 # Custom Qwen ANEMLL Model Configuration Guide
 
 This guide explains how to configure your own Qwen ANEMLL model with custom shapes using the Python shape discovery tool and integrate it with the candle-coreml library.
+## Prerequisites
+
+- Python 3.7+ with `coremltools` installed
+- Your custom ANEMLL model files (.mlpackage or .mlmodelc)
+
+### Installing Dependencies
+
+```bash
+pip install coremltools
+```
+## Overview
+
+The candle-coreml library supports any ANEMLL model architecture through a configuration system that defines:
+
+1. **Model shapes** (batch_size, context_length, hidden_size, vocab_size)
+2. **Component mappings** (embeddings, FFN, LM head)
+3. **Input/output tensor specifications**
+4. **Explicit file paths** (no globbing or discovery)
+
+## Step 1: Discover Model Shapes
+
+Use the Python discovery tool to extract shape information from your CoreML model files.
+
+### Basic Usage
+
+For a single model directory:
+
+```bash
+python tools/discover_shapes.py \
+  --model-dir /path/to/your/custom-qwen-model \
+  --output configs/custom-qwen.json \
+  --verbose
+```
+For multiple models in a directory:
+
+```bash
+python tools/discover_shapes.py \
+  --scan-directory /path/to/models/directory \
+  --output-dir configs/ \
+  --verbose
+```
+### Example Output
+
+The tool will generate a configuration file like this:
+
+```json
+{
+  "model_info": {
+    "path": "/path/to/your/custom-qwen-model",
+    "model_type": "qwen",
+    "discovered_at": "2025-01-15T10:30:00.123456"
+  },
+  "shapes": {
+    "batch_size": 1,
+    "context_length": 256,
+    "hidden_size": 1024,
+    "vocab_size": 151669
+  },
+  "components": {
+    "embeddings": {
+      "file_path": "/path/to/your/custom-qwen-model/custom_embeddings.mlpackage",
+      "inputs": {
+        "input_ids": {
+          "name": "input_ids",
+          "shape": [1, 1],
+          "data_type": "INT32"
+        }
+      },
+      "outputs": {
+        "hidden_states": {
+          "name": "hidden_states",
+          "shape": [1, 1, 1024],
+          "data_type": "FLOAT16"
+        }
+      },
+      "functions": []
+    },
+    "ffn_infer": {
+      "file_path": "/path/to/your/custom-qwen-model/custom_FFN_lut4_chunk_01of01.mlpackage",
+      "inputs": {
+        "hidden_states": {
+          "name": "hidden_states",
+          "shape": [1, 1, 1024],
+          "data_type": "FLOAT16"
+        },
+        "position_ids": {
+          "name": "position_ids",
+          "shape": [1],
+          "data_type": "INT32"
+        },
+        "causal_mask": {
+          "name": "causal_mask",
+          "shape": [1, 1, 1, 256],
+          "data_type": "FLOAT16"
+        },
+        "current_pos": {
+          "name": "current_pos",
+          "shape": [1],
+          "data_type": "INT32"
+        }
+      },
+      "outputs": {
+        "output_hidden_states": {
+          "name": "output_hidden_states",
+          "shape": [1, 1, 1024],
+          "data_type": "FLOAT16"
+        }
+      },
+      "functions": []
+    },
+    "lm_head": {
+      "file_path": "/path/to/your/custom-qwen-model/custom_lm_head_lut6.mlpackage",
+      "inputs": {
+        "hidden_states": {
+          "name": "hidden_states",
+          "shape": [1, 1, 1024],
+          "data_type": "FLOAT16"
+        }
+      },
+      "outputs": {
+        "logits1": {
+          "name": "logits1",
+          "shape": [1, 1, 9480],
+          "data_type": "FLOAT32"
+        },
+        "logits2": {
+          "name": "logits2",
+          "shape": [1, 1, 9480],
+          "data_type": "FLOAT32"
+        },
+        "logits16": {
+          "name": "logits16",
+          "shape": [1, 1, 9479],
+          "data_type": "FLOAT32"
+        }
+      },
+      "functions": []
+    }
+  },
+  "naming": {
+    "embeddings_pattern": null,
+    "ffn_infer_pattern": null,
+    "lm_head_pattern": null
+  }
+}
+```
+## Step 2: Understanding the Configuration
+
+### Model Shapes
+
+...
+
+### Component Types
+
+...
+
+### Multipart Logits
+
+...
+
+## Step 3: Integration with candle-coreml
+
+### Runtime Configuration (Recommended)
+
+Load your model configuration at runtime:
+
+```rust
+use candle_coreml::{QwenModel, QwenConfig, ModelConfig};
+use std::path::Path;
+
+// Load configuration from JSON file
+let config_path = "configs/custom-qwen.json";
+let model_config = ModelConfig::load_from_file(config_path)?;
+
+// Create QwenConfig from the loaded configuration
+let qwen_config = QwenConfig::from_model_config(model_config);
+
+// Load the model
+let model_dir = Path::new("/path/to/your/custom-qwen-model");
+let mut qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config))?;
+
+// Use the model
+let result = qwen_model.forward_text("Your input text here")?;
+```
+### Built-in Configuration
+
+Add your model configuration to the built-in registry:
+
+```rust
+// In src/builtin_configs.rs
+
+const CUSTOM_QWEN_CONFIG: &str = r#"{
+  "model_info": {
+    "model_id": "your-org/custom-qwen-model",
+    "model_type": "qwen"
+  },
+  "shapes": {
+    "batch_size": 1,
+    "context_length": 256,
+    "hidden_size": 1024,
+    "vocab_size": 151669
+  },
+  // ... rest of your configuration
+}"#;
+
+// Add to BUILTIN_CONFIGS registry
+if let Ok(config) = serde_json::from_str(CUSTOM_QWEN_CONFIG) {
+    configs.insert("your-org/custom-qwen-model", config);
+}
+```
+Then use it by model ID:
+
+```rust
+let qwen_config = QwenConfig::for_model_id("your-org/custom-qwen-model")?;
+let mut qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config))?;
+```
+## Step 4: Model-Specific Considerations
+
+### Single-Token vs Batch Processing Models
+
+...
+
+### FFN Component Variations
+
+...
+
+## Step 5: Validation and Testing
+
+### Validate Configuration
+
+...
+
+### Test Integration
+
+...
+
+## Step 6: Common Model Patterns
+
+### Pattern 1: Fine-tuned Single-Token Model
+
+...
+
+### Pattern 2: Standard ANEMLL Model
+
+...
+
+### Pattern 3: Custom Context Length
+
+...
+
+## Troubleshooting
+
+### Common Issues
+
+...
+
+### Debug Mode
+
+...
+
+### Manual Configuration Fixes
+
+...
+
+## Example Integration
+
+Here's a complete example showing how to integrate a custom model:
+
+```rust
+use anyhow::Result;
+use candle_coreml::{QwenModel, QwenConfig, ModelConfig};
+use std::path::Path;
+
+fn load_custom_model() -> Result<QwenModel> {
+  // Load model configuration
+  let config_path = "configs/my-custom-qwen.json";
+  let model_config = ModelConfig::load_from_file(config_path)?;
+    
+  // Create QwenConfig
+  let qwen_config = QwenConfig::from_model_config(model_config);
+    
+  // Verify configuration
+  println!("Model Configuration:");
+  println!("  Batch Size: {}", qwen_config.batch_size());
+  println!("  Context Length: {}", qwen_config.context_length());
+  println!("  Hidden Size: {}", qwen_config.hidden_size());
+  println!("  Vocab Size: {}", qwen_config.vocab_size());
+  println!("  Multipart Logits: {}", qwen_config.has_multipart_logits());
+    
+  // Load model
+  let model_dir = Path::new("models/my-custom-qwen");
+  let qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config))?;
+    
+  Ok(qwen_model)
+}
+
+fn main() -> Result<()> {
+  let mut model = load_custom_model()?;
+    
+  // Test the model
+  let input_text = "The quick brown fox";
+  let result = model.forward_text(input_text)?;
+  println!("Generated token: {}", result);
+    
+  Ok(())
+}
+```
+## Best Practices
+
+1. **Always use the discovery tool first** - It provides the most accurate configuration
+2. **Validate configurations** - Test with small inputs before production use
+3. **Version control configurations** - Keep JSON files in your repository
+4. **Document custom models** - Include model purpose, training details, and expected behavior
+5. **Test edge cases** - Verify behavior with empty inputs, maximum context length, etc.
+6. **Monitor performance** - Custom shapes may have different performance characteristics
+
+## Contributing
+
+If you create configurations for commonly used models, consider contributing them to the built-in registry via pull request. This helps the community and ensures your models work out-of-the-box for other users.
+# Custom Qwen ANEMLL Model Configuration Guide
+
+This guide explains how to configure your own Qwen ANEMLL model with custom shapes using the Python shape discovery tool and integrate it with the candle-coreml library.
 
 ## Prerequisites
 

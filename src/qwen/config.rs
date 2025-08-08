@@ -240,7 +240,10 @@ impl QwenConfig {
                         debug!("🔧 SHAPE FIX: Using infer position_ids tensor (shape [1])");
                         return self.create_infer_position_ids_tensor(positions[0] as usize);
                     } else {
-                        debug!("⚠️ SHAPE WARNING: ffn_infer position_ids shape is not [1]: {:?}", infer_shape);
+                        debug!(
+                            "⚠️ SHAPE WARNING: ffn_infer position_ids shape is not [1]: {:?}",
+                            infer_shape
+                        );
                     }
                 } else {
                     debug!("⚠️ SHAPE WARNING: No shape found for ffn_infer position_ids");

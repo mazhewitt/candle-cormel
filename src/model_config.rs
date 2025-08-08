@@ -42,7 +42,6 @@ pub struct ShapeConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ComponentConfig {
     pub file_path: Option<String>,
-    pub file_pattern: Option<String>,
     pub inputs: HashMap<String, TensorConfig>,
     pub outputs: HashMap<String, TensorConfig>,
     pub functions: Vec<String>,
@@ -62,12 +61,15 @@ pub struct TensorConfig {
 /// Model file naming patterns for component discovery
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct NamingConfig {
-    pub embeddings_pattern: String,
-    #[serde(default)]
+    // Deprecated: patterns removed; explicit file paths are required per component
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub embeddings_pattern: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ffn_prefill_pattern: Option<String>,
-    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub ffn_infer_pattern: Option<String>,
-    pub lm_head_pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lm_head_pattern: Option<String>,
 }
 
 impl ModelConfig {
@@ -117,10 +119,10 @@ impl ModelConfig {
             },
             components: HashMap::new(),
             naming: NamingConfig {
-                embeddings_pattern: "*_embeddings.mlmodelc".to_string(),
-                ffn_prefill_pattern: Some("*_FFN_PF_*_chunk_*.mlmodelc".to_string()),
+                embeddings_pattern: None,
+                ffn_prefill_pattern: None,
                 ffn_infer_pattern: None,
-                lm_head_pattern: "*_lm_head_*.mlmodelc".to_string(),
+                lm_head_pattern: None,
             },
         }
     }
@@ -211,11 +213,7 @@ impl ModelConfig {
         }
 
         // Fallback to the first key if any
-        lm_head
-            .outputs
-            .keys()
-            .next()
-            .map(|k| k.to_string())
+        lm_head.outputs.keys().next().map(|k| k.to_string())
     }
 
     /// Validate the configuration for consistency
@@ -359,7 +357,6 @@ mod tests {
             "embeddings".to_string(),
             ComponentConfig {
                 file_path: None,
-                file_pattern: Some("*_embeddings.mlmodelc".to_string()),
                 inputs: embeddings_inputs,
                 outputs: embeddings_outputs,
                 functions: vec![],
@@ -392,7 +389,6 @@ mod tests {
             "lm_head".to_string(),
             ComponentConfig {
                 file_path: None,
-                file_pattern: Some("*_lm_head_*.mlmodelc".to_string()),
                 inputs: lm_head_inputs,
                 outputs: lm_head_outputs,
                 functions: vec![],
@@ -415,10 +411,10 @@ mod tests {
             },
             components,
             naming: NamingConfig {
-                embeddings_pattern: "*_embeddings.mlmodelc".to_string(),
-                ffn_prefill_pattern: Some("*_FFN_PF_*_chunk_*.mlmodelc".to_string()),
+                embeddings_pattern: None,
+                ffn_prefill_pattern: None,
                 ffn_infer_pattern: None,
-                lm_head_pattern: "*_lm_head_*.mlmodelc".to_string(),
+                lm_head_pattern: None,
             },
         }
     }
@@ -504,8 +500,8 @@ mod tests {
         let config = create_test_config();
         assert!(config.validate().is_ok());
 
-    // Internal wiring should be consistent in this synthetic setup
-    assert!(config.validate_internal_wiring().is_ok());
+        // Internal wiring should be consistent in this synthetic setup
+        assert!(config.validate_internal_wiring().is_ok());
 
         // Test missing component
         let mut invalid_config = config.clone();

@@ -38,7 +38,6 @@ mod tests {
             "embeddings".to_string(),
             ComponentConfig {
                 file_path: None,
-                file_pattern: None,
                 inputs: embeddings_inputs,
                 outputs: embeddings_outputs,
                 functions: vec!["main".to_string()],
@@ -95,7 +94,6 @@ mod tests {
             "ffn_prefill".to_string(),
             ComponentConfig {
                 file_path: None,
-                file_pattern: None,
                 inputs: ffn_prefill_inputs,
                 outputs: ffn_prefill_outputs,
                 functions: vec!["prefill".to_string()],
@@ -128,7 +126,6 @@ mod tests {
             "lm_head".to_string(),
             ComponentConfig {
                 file_path: None,
-                file_pattern: None,
                 inputs: lm_head_inputs,
                 outputs: lm_head_outputs,
                 functions: vec!["main".to_string()],
@@ -151,10 +148,10 @@ mod tests {
             },
             components,
             naming: crate::model_config::NamingConfig {
-                embeddings_pattern: "*_embeddings.mlmodelc".to_string(),
-                ffn_prefill_pattern: Some("*_FFN_PF_*_chunk_*.mlmodelc".to_string()),
+                embeddings_pattern: None,
+                ffn_prefill_pattern: None,
                 ffn_infer_pattern: None,
-                lm_head_pattern: "*_lm_head_*.mlmodelc".to_string(),
+                lm_head_pattern: None,
             },
         }
     }
