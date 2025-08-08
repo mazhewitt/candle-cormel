@@ -93,7 +93,7 @@ impl ModelNamingConfig {
             // Standard ANEMLL pattern
             vec!["qwen_".to_string()]
         } else {
-            // Direct pattern like "custom_embeddings.mlpackage"
+            // Direct pattern like "qwen-typo-fixer_embeddings.mlpackage"
             let base_name = model_config
                 .naming
                 .embeddings_pattern
@@ -104,7 +104,8 @@ impl ModelNamingConfig {
         };
 
         let embeddings_suffix = if model_config.naming.embeddings_pattern.contains('_') {
-            // Extract suffix after first underscore: "*_embeddings.mlmodelc" -> "embeddings.mlmodelc"
+            // Extract suffix after first underscore: "*_embeddings.mlmodelc" -> "embeddings.mlmodelc"  
+            // OR "qwen-typo-fixer_embeddings.mlpackage" -> "embeddings.mlpackage"
             model_config
                 .naming
                 .embeddings_pattern
@@ -115,13 +116,51 @@ impl ModelNamingConfig {
             model_config.naming.embeddings_pattern.clone()
         };
 
-        // For FFN: actual file is "qwen_FFN_PF_lut8_chunk_01of01.mlmodelc"
-        let ffn_prefixes = vec!["qwen_".to_string()];
-        let ffn_suffix = "FFN_PF_lut8_chunk_01of01.mlmodelc".to_string();
+        // For FFN: Use the actual pattern from model config instead of hardcoded lut8
+        // Pattern like "qwen-typo-fixer_FFN_PF_lut*_chunk_*.mlpackage"
+        let (ffn_prefixes, ffn_suffix) = if let Some(ffn_pattern) = &model_config.naming.ffn_prefill_pattern {
+            let ffn_prefixes = if ffn_pattern.starts_with('*') {
+                vec!["qwen_".to_string()]
+            } else {
+                let base_name = ffn_pattern
+                    .split('_')
+                    .next()
+                    .unwrap_or("qwen");
+                vec![format!("{}_", base_name)]
+            };
 
-        // For LM head: actual file is "qwen_lm_head_lut8.mlmodelc"
-        let lm_head_prefixes = vec!["qwen_".to_string()];
-        let lm_head_suffix = "lm_head_lut8.mlmodelc".to_string();
+            let ffn_suffix = if let Some((_, suffix)) = ffn_pattern.split_once('_') {
+                // "qwen-typo-fixer_FFN_PF_lut*_chunk_*.mlpackage" -> "FFN_PF_lut*_chunk_*.mlpackage"
+                suffix.to_string()
+            } else {
+                ffn_pattern.clone()
+            };
+            (ffn_prefixes, ffn_suffix)
+        } else {
+            // Fallback to default if no FFN pattern specified
+            (vec!["qwen_".to_string()], "FFN_PF_lut8_chunk_01of01.mlmodelc".to_string())
+        };
+
+        // For LM head: Use the actual pattern from model config
+        // Pattern like "qwen-typo-fixer_lm_head_lut*.mlpackage"  
+        let lm_head_prefixes = if model_config.naming.lm_head_pattern.starts_with('*') {
+            vec!["qwen_".to_string()]
+        } else {
+            let base_name = model_config
+                .naming
+                .lm_head_pattern
+                .split('_')
+                .next()
+                .unwrap_or("qwen");
+            vec![format!("{}_", base_name)]
+        };
+
+        let lm_head_suffix = if let Some((_, suffix)) = model_config.naming.lm_head_pattern.split_once('_') {
+            // "qwen-typo-fixer_lm_head_lut*.mlpackage" -> "lm_head_lut*.mlpackage"
+            suffix.to_string()
+        } else {
+            model_config.naming.lm_head_pattern.clone()
+        };
 
         Self {
             embeddings_prefixes,

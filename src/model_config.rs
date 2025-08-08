@@ -46,6 +46,9 @@ pub struct ComponentConfig {
     pub inputs: HashMap<String, TensorConfig>,
     pub outputs: HashMap<String, TensorConfig>,
     pub functions: Vec<String>,
+    /// Optional deterministic input order; if absent, caller must provide correct order.
+    #[serde(default)]
+    pub input_order: Option<Vec<String>>,
 }
 
 /// Configuration for a tensor (shape and data type)
@@ -192,6 +195,29 @@ impl ModelConfig {
         }
     }
 
+    /// Select the primary logits output name for the LM head.
+    /// Preference order: "logits1" (multipart), then "logits", otherwise the first available key.
+    pub fn lm_head_primary_output_name(&self) -> Option<String> {
+        let lm_head = self.components.get("lm_head")?;
+
+        // Prefer explicit multipart naming starting with logits1
+        if lm_head.outputs.contains_key("logits1") {
+            return Some("logits1".to_string());
+        }
+
+        // Common single output name
+        if lm_head.outputs.contains_key("logits") {
+            return Some("logits".to_string());
+        }
+
+        // Fallback to the first key if any
+        lm_head
+            .outputs
+            .keys()
+            .next()
+            .map(|k| k.to_string())
+    }
+
     /// Validate the configuration for consistency
     pub fn validate(&self) -> Result<()> {
         // Check that required components exist
@@ -236,6 +262,55 @@ impl ModelConfig {
                         "Empty shape for {}.outputs.{}",
                         component_name,
                         tensor_name
+                    ));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate internal wiring between components for basic shape compatibility.
+    /// Examples:
+    ///  - embeddings.outputs.hidden_states == ffn_prefill.inputs.hidden_states
+    ///  - ffn_infer.outputs.output_hidden_states == lm_head.inputs.hidden_states (when ffn_infer exists)
+    pub fn validate_internal_wiring(&self) -> Result<()> {
+        // Embeddings -> FFN prefill hidden_states flow
+        if let (Some(emb_out), Some(ffn_in_hidden)) = (
+            self.get_tensor_shape("embeddings", "hidden_states", false),
+            self.get_tensor_shape("ffn_prefill", "hidden_states", true),
+        ) {
+            if emb_out != ffn_in_hidden {
+                return Err(anyhow::anyhow!(
+                    "Shape mismatch: embeddings.hidden_states {:?} != ffn_prefill.hidden_states {:?}",
+                    emb_out, ffn_in_hidden
+                ));
+            }
+        }
+
+        // FFN infer -> LM head hidden_states flow
+        if self.components.contains_key("ffn_infer") {
+            if let (Some(ffn_out), Some(lm_in)) = (
+                self.get_tensor_shape("ffn_infer", "output_hidden_states", false),
+                self.get_tensor_shape("lm_head", "hidden_states", true),
+            ) {
+                if ffn_out != lm_in {
+                    return Err(anyhow::anyhow!(
+                        "Shape mismatch: ffn_infer.output_hidden_states {:?} != lm_head.hidden_states {:?}",
+                        ffn_out, lm_in
+                    ));
+                }
+            }
+        } else {
+            // If there's no separate ffn_infer, check ffn_prefill output shape matches lm_head (single-token path)
+            if let (Some(ffn_out), Some(lm_in)) = (
+                self.get_tensor_shape("ffn_prefill", "output_hidden_states", false),
+                self.get_tensor_shape("lm_head", "hidden_states", true),
+            ) {
+                if ffn_out != lm_in {
+                    return Err(anyhow::anyhow!(
+                        "Shape mismatch: ffn_prefill.output_hidden_states {:?} != lm_head.hidden_states {:?}",
+                        ffn_out, lm_in
                     ));
                 }
             }
@@ -288,6 +363,7 @@ mod tests {
                 inputs: embeddings_inputs,
                 outputs: embeddings_outputs,
                 functions: vec![],
+                input_order: None,
             },
         );
 
@@ -320,6 +396,7 @@ mod tests {
                 inputs: lm_head_inputs,
                 outputs: lm_head_outputs,
                 functions: vec![],
+                input_order: None,
             },
         );
 
@@ -426,6 +503,9 @@ mod tests {
     fn test_config_validation() {
         let config = create_test_config();
         assert!(config.validate().is_ok());
+
+    // Internal wiring should be consistent in this synthetic setup
+    assert!(config.validate_internal_wiring().is_ok());
 
         // Test missing component
         let mut invalid_config = config.clone();

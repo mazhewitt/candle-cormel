@@ -6,6 +6,7 @@
 use crate::qwen::naming::ModelNamingConfig;
 use crate::ModelConfig;
 use candle_core::{Device, Error as CandleError};
+use tracing::debug;
 
 // NOTE: These constants are deprecated and will be removed.
 // Use ModelConfig system instead for dynamic shape configuration.
@@ -235,13 +236,28 @@ impl QwenConfig {
                         .get_tensor_shape("ffn_infer", "position_ids", true)
                 {
                     if infer_shape[0] == 1 {
-                        // Single position for infer
+                        // Single position for infer - FORCE infer tensor creation
+                        debug!("🔧 SHAPE FIX: Using infer position_ids tensor (shape [1])");
                         return self.create_infer_position_ids_tensor(positions[0] as usize);
+                    } else {
+                        debug!("⚠️ SHAPE WARNING: ffn_infer position_ids shape is not [1]: {:?}", infer_shape);
                     }
+                } else {
+                    debug!("⚠️ SHAPE WARNING: No shape found for ffn_infer position_ids");
                 }
+            } else {
+                debug!("⚠️ SHAPE WARNING: No ffn_infer component found");
             }
 
-            // Fallback to prefill shape or model configuration
+            // CRITICAL FIX: For typo-fixer models, ALWAYS use infer tensor shape in infer mode
+            // This prevents falling back to the prefill shape (64) when we need infer shape (1)
+            if positions.len() == 1 {
+                debug!("🔧 SHAPE FIX: Forcing infer position_ids tensor for single position");
+                return self.create_infer_position_ids_tensor(positions[0] as usize);
+            }
+
+            // Fallback to prefill shape or model configuration (this should rarely happen now)
+            debug!("⚠️ SHAPE WARNING: Falling back to prefill position_ids tensor");
             self.create_ffn_position_ids_tensor(positions)
         }
     }

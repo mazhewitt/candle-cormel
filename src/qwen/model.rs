@@ -29,6 +29,105 @@ pub struct QwenModel {
 }
 
 impl QwenModel {
+    /// Find model file using glob pattern from ModelConfig
+    /// This is the new preferred method that works directly with ModelConfig patterns
+    pub fn find_model_file_with_pattern<P: AsRef<Path>>(
+        model_dir: P,
+        file_pattern: &str,
+    ) -> Result<std::path::PathBuf, CandleError> {
+        let model_dir = model_dir.as_ref();
+
+        debug!("Searching for model files in: {}", model_dir.display());
+        debug!("File pattern: {}", file_pattern);
+
+        // Read directory entries
+        let entries = std::fs::read_dir(model_dir)
+            .map_err(|e| CandleError::Msg(format!("Failed to read model directory: {e}")))?;
+
+        // Find files matching the glob pattern
+        let mut matching_files = Vec::new();
+        for entry in entries {
+            let entry = entry
+                .map_err(|e| CandleError::Msg(format!("Failed to read directory entry: {e}")))?;
+            let filename = entry.file_name();
+            let filename_str = filename.to_string_lossy();
+
+            // Skip git directory
+            if filename_str == ".git" {
+                continue;
+            }
+
+            // Match against glob pattern
+            if Self::matches_glob_pattern(&filename_str, file_pattern) {
+                debug!("Found matching file: {} (pattern: {})", filename_str, file_pattern);
+                matching_files.push(entry.path());
+            }
+        }
+
+        match matching_files.len() {
+            0 => Err(CandleError::Msg(format!(
+                "No model file found matching pattern: {} in directory: {}",
+                file_pattern,
+                model_dir.display()
+            ))),
+            1 => {
+                let path = &matching_files[0];
+                debug!("Auto-detected model file: {}", path.display());
+                Ok(path.clone())
+            }
+            _ => {
+                warn!(
+                    "Multiple files match pattern {}: {:?}. Using first one: {}",
+                    file_pattern,
+                    matching_files.iter().map(|p| p.display()).collect::<Vec<_>>(),
+                    matching_files[0].display()
+                );
+                Ok(matching_files[0].clone())
+            }
+        }
+    }
+
+    /// Simple glob pattern matching - supports * wildcards
+    fn matches_glob_pattern(filename: &str, pattern: &str) -> bool {
+        // Handle exact matches
+        if !pattern.contains('*') {
+            return filename == pattern;
+        }
+
+        // Split pattern by * to get parts that must be present
+        let parts: Vec<&str> = pattern.split('*').collect();
+        
+        if parts.is_empty() {
+            return true;
+        }
+
+        // Check if filename starts with first part
+        if !parts[0].is_empty() && !filename.starts_with(parts[0]) {
+            return false;
+        }
+
+        // Check if filename ends with last part
+        if let Some(last_part) = parts.last() {
+            if !last_part.is_empty() && !filename.ends_with(last_part) {
+                return false;
+            }
+        }
+
+        // Check if all middle parts are present in order
+        let mut search_from = if parts[0].is_empty() { 0 } else { parts[0].len() };
+        for part in parts.iter().skip(1).take(parts.len() - 2) {
+            if !part.is_empty() {
+                if let Some(pos) = filename[search_from..].find(part) {
+                    search_from += pos + part.len();
+                } else {
+                    return false;
+                }
+            }
+        }
+
+        true
+    }
+
     /// Auto-detect model file using configurable naming patterns
     /// Supports arbitrary prefixes, suffixes, and file extensions
     pub fn find_model_file_with_config<P: AsRef<Path>>(
@@ -148,20 +247,46 @@ impl QwenModel {
             .map_err(|e| CandleError::Msg(format!("Failed to load tokenizer: {e}")))?;
 
         // Configure and load embeddings
+        let embeddings_inputs = if let Some(emb_comp) = config.model_config.components.get("embeddings") {
+            emb_comp
+                .input_order
+                .clone()
+                .unwrap_or_else(|| vec!["input_ids".to_string()])
+        } else {
+            vec!["input_ids".to_string()]
+        };
         let embeddings_config = CoreMLConfig {
-            input_names: vec!["input_ids".to_string()],
+            input_names: embeddings_inputs,
             output_name: "hidden_states".to_string(),
             max_sequence_length: config.context_length(),
             vocab_size: config.vocab_size(),
             model_type: "qwen-embeddings".to_string(),
         };
 
-        let embeddings_path = Self::find_model_file_with_config(
-            actual_model_dir,
-            &config.naming.embeddings_prefixes,
-            &config.naming.embeddings_suffix,
-            &config.naming.supported_extensions,
-        )?;
+        // Use ModelConfig component paths/patterns if available, otherwise fall back to naming config
+        let embeddings_path = if let Some(embeddings_component) = config.model_config.components.get("embeddings") {
+            if let Some(file_path) = &embeddings_component.file_path {
+                // SAFE: Use explicit file path - no pattern matching risk
+                actual_model_dir.join(file_path)
+            } else if let Some(pattern) = &embeddings_component.file_pattern {
+                // FALLBACK: Use pattern matching (legacy support)
+                Self::find_model_file_with_pattern(actual_model_dir, pattern)?
+            } else {
+                Self::find_model_file_with_config(
+                    actual_model_dir,
+                    &config.naming.embeddings_prefixes,
+                    &config.naming.embeddings_suffix,
+                    &config.naming.supported_extensions,
+                )?
+            }
+        } else {
+            Self::find_model_file_with_config(
+                actual_model_dir,
+                &config.naming.embeddings_prefixes,
+                &config.naming.embeddings_suffix,
+                &config.naming.supported_extensions,
+            )?
+        };
         debug!(
             "Loading embeddings component from {}",
             embeddings_path.display()
@@ -169,54 +294,157 @@ impl QwenModel {
         let embeddings = CoreMLModel::load_from_file(&embeddings_path, &embeddings_config)?;
 
         // Configure and load FFN models (both prefill and infer functions)
-        let ffn_config_base = CoreMLConfig {
-            input_names: vec![
+        let ffn_prefill_inputs = if let Some(ffn_prefill_comp) = config.model_config.components.get("ffn_prefill") {
+            ffn_prefill_comp
+                .input_order
+                .clone()
+                .unwrap_or_else(|| vec![
+                    "hidden_states".to_string(),
+                    "position_ids".to_string(),
+                    "causal_mask".to_string(),
+                    "current_pos".to_string(),
+                ])
+        } else {
+            vec![
                 "hidden_states".to_string(),
                 "position_ids".to_string(),
                 "causal_mask".to_string(),
                 "current_pos".to_string(),
-            ],
+            ]
+        };
+        let ffn_config_base = CoreMLConfig {
+            input_names: ffn_prefill_inputs,
             output_name: "output_hidden_states".to_string(),
             max_sequence_length: config.context_length(),
             vocab_size: config.hidden_size(),
             model_type: "qwen-ffn".to_string(),
         };
 
-        // Auto-detect FFN model file (handles different LUT versions)
-        let ffn_path = Self::find_model_file_with_config(
-            actual_model_dir,
-            &config.naming.ffn_prefixes,
-            &config.naming.ffn_suffix,
-            &config.naming.supported_extensions,
-        )?;
+        // Auto-detect FFN model file using ModelConfig paths/patterns if available
+        let ffn_path = if let Some(ffn_component) = config.model_config.components.get("ffn_prefill") {
+            if let Some(file_path) = &ffn_component.file_path {
+                // SAFE: Use explicit file path - no pattern matching risk
+                actual_model_dir.join(file_path)
+            } else if let Some(pattern) = &ffn_component.file_pattern {
+                // FALLBACK: Use pattern matching (legacy support)
+                Self::find_model_file_with_pattern(actual_model_dir, pattern)?
+            } else {
+                Self::find_model_file_with_config(
+                    actual_model_dir,
+                    &config.naming.ffn_prefixes,
+                    &config.naming.ffn_suffix,
+                    &config.naming.supported_extensions,
+                )?
+            }
+        } else {
+            Self::find_model_file_with_config(
+                actual_model_dir,
+                &config.naming.ffn_prefixes,
+                &config.naming.ffn_suffix,
+                &config.naming.supported_extensions,
+            )?
+        };
 
         // FFN Prefill function (for initial sequence processing)
         debug!("Loading FFN prefill component from {}", ffn_path.display());
         let ffn_prefill = CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?;
 
         // FFN Infer function (for token-by-token generation)
-        debug!("Loading FFN infer component from {}", ffn_path.display());
-        let ffn_infer_config = ffn_config_base.clone(); // Same inputs as prefill
-        let ffn_infer = CoreMLModel::load_with_function(&ffn_path, &ffn_infer_config, "infer")?;
+        // Check if there's a separate ffn_infer component, otherwise use the same file as prefill
+        let (ffn_infer_path, ffn_infer_config) = if let Some(ffn_infer_component) = config.model_config.components.get("ffn_infer") {
+            let infer_path = if let Some(file_path) = &ffn_infer_component.file_path {
+                // SAFE: Use explicit file path for separate infer component
+                actual_model_dir.join(file_path)
+            } else if let Some(pattern) = &ffn_infer_component.file_pattern {
+                // FALLBACK: Use pattern matching (legacy support)  
+                Self::find_model_file_with_pattern(actual_model_dir, pattern)?
+            } else {
+                ffn_path.clone() // Fallback to prefill path
+            };
+            
+            // Use infer-specific configuration
+            let ffn_infer_inputs = if let Some(ffn_infer_comp) = config.model_config.components.get("ffn_infer") {
+                ffn_infer_comp
+                    .input_order
+                    .clone()
+                    .unwrap_or_else(|| vec![
+                        "hidden_states".to_string(),
+                        "position_ids".to_string(),
+                        "causal_mask".to_string(),
+                        "current_pos".to_string(),
+                    ])
+            } else {
+                vec![
+                    "hidden_states".to_string(),
+                    "position_ids".to_string(),
+                    "causal_mask".to_string(),
+                    "current_pos".to_string(),
+                ]
+            };
+            let infer_config = CoreMLConfig {
+                input_names: ffn_infer_inputs,
+                output_name: "output_hidden_states".to_string(),
+                max_sequence_length: 1, // Single token for inference
+                vocab_size: config.hidden_size(),
+                model_type: "qwen-ffn-infer".to_string(),
+            };
+            (infer_path, infer_config)
+        } else {
+            // Use same file as prefill with infer function
+            (ffn_path.clone(), ffn_config_base.clone())
+        };
+        
+        debug!("Loading FFN infer component from {}", ffn_infer_path.display());
+        let ffn_infer = CoreMLModel::load_with_function(&ffn_infer_path, &ffn_infer_config, "infer")?;
 
         // Configure and load LM head
+        let lm_output = config
+            .model_config
+            .lm_head_primary_output_name()
+            .unwrap_or_else(|| "logits1".to_string());
+
         let lm_head_config = CoreMLConfig {
             input_names: vec!["hidden_states".to_string()],
-            output_name: "logits1".to_string(), // First of 16 outputs
+            output_name: lm_output,
             max_sequence_length: config.context_length(),
             vocab_size: config.vocab_size(),
             model_type: "qwen-lm-head".to_string(),
         };
 
-        // Auto-detect LM head model file (handles different LUT versions)
-        let lm_head_path = Self::find_model_file_with_config(
-            actual_model_dir,
-            &config.naming.lm_head_prefixes,
-            &config.naming.lm_head_suffix,
-            &config.naming.supported_extensions,
-        )?;
+        // Auto-detect LM head model file using ModelConfig paths/patterns if available
+        let lm_head_path = if let Some(lm_head_component) = config.model_config.components.get("lm_head") {
+            if let Some(file_path) = &lm_head_component.file_path {
+                // SAFE: Use explicit file path - no pattern matching risk
+                actual_model_dir.join(file_path)
+            } else if let Some(pattern) = &lm_head_component.file_pattern {
+                // FALLBACK: Use pattern matching (legacy support)
+                Self::find_model_file_with_pattern(actual_model_dir, pattern)?
+            } else {
+                Self::find_model_file_with_config(
+                    actual_model_dir,
+                    &config.naming.lm_head_prefixes,
+                    &config.naming.lm_head_suffix,
+                    &config.naming.supported_extensions,
+                )?
+            }
+        } else {
+            Self::find_model_file_with_config(
+                actual_model_dir,
+                &config.naming.lm_head_prefixes,
+                &config.naming.lm_head_suffix,
+                &config.naming.supported_extensions,
+            )?
+        };
         debug!("Loading LM head component from {}", lm_head_path.display());
         let lm_head = CoreMLModel::load_from_file(&lm_head_path, &lm_head_config)?;
+
+        // Optional runtime config wiring validation
+        if let Err(e) = config.model_config.validate_internal_wiring() {
+            warn!(
+                "ModelConfig internal wiring validation warning: {}. Proceeding with load.",
+                e
+            );
+        }
 
         Ok(Self {
             embeddings,
@@ -472,7 +700,7 @@ impl QwenModel {
         let causal_mask = self.create_position_causal_mask(current_position, context_length)?;
         let current_pos = position_ids.clone();
 
-        // Run infer to get hidden states using granular method
+        // Run infer with the shared state to get next-step hidden states
         let hidden_states = self.run_ffn_infer_with_inputs(
             token_embedding,
             &position_ids,

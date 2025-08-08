@@ -13,6 +13,7 @@ pub mod qwen;
 pub mod qwen_shapes_test;
 pub mod state;
 pub mod utils;
+pub mod pipeline;
 
 pub use builder::CoreMLModelBuilder;
 pub use builtin_configs::{get_builtin_config, list_builtin_models};
