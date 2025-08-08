@@ -144,9 +144,6 @@ let logits = lm_head.forward(&[&processed.i((.., -1.., ..))?])?;
 ### Examples and Demos
 
 ```bash
-# 🌟 Integration patterns demo (works immediately)
-cargo run --example qwen_demo_patterns
-
 # Full multi-component chat (downloads ~2GB models)
 cargo run --example qwen_multi_component
 
@@ -186,7 +183,7 @@ ANEMLL provides reference apps showing production usage:
 
 Our crate provides the missing piece for Rust developers wanting to use ANEMLL's optimized models:
 
-- ✅ **Automatic component discovery and loading**
+- ✅ **Explicit component selection via file paths (no globbing/discovery)**
 - ✅ **Pipeline orchestration with proper data flow**  
 - ✅ **Causal masking for transformer architectures**
 - ✅ **HuggingFace integration for seamless model access**
@@ -273,9 +270,6 @@ See the `examples/` directory for:
 Complete implementation of Anemll's multi-component architecture:
 
 ```bash
-# 🌟 Integration patterns demo (WORKS IMMEDIATELY)
-cargo run --example qwen_demo_patterns
-
 # Multi-component Qwen chat with real models 
 cargo run --example qwen_multi_component
 
@@ -295,6 +289,10 @@ Features:
 This demonstrates how to integrate complex, multi-file CoreML models with Candle, providing a foundation for advanced ANE-optimized architectures.
 
 See [examples/qwen/README.md](examples/qwen/README.md) for detailed documentation.
+
+#### Important: Explicit model file paths only
+
+Filename discovery and globbing have been removed. Models must be configured with explicit file_path values for each component (embeddings, FFN prefill/infer, LM head). See CUSTOM_MODEL_GUIDE.md for details and examples.
 
 ## Platform Support
 
