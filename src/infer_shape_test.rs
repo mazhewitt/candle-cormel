@@ -50,6 +50,7 @@ mod tests {
                 inputs: embeddings_inputs,
                 outputs: HashMap::new(),
                 functions: vec!["main".to_string()],
+                input_order: None,
             },
         );
 
@@ -80,6 +81,7 @@ mod tests {
                 inputs: ffn_prefill_inputs,
                 outputs: HashMap::new(),
                 functions: vec!["prefill".to_string()],
+                input_order: None,
             },
         );
 
@@ -110,6 +112,7 @@ mod tests {
                 inputs: ffn_infer_inputs,
                 outputs: HashMap::new(),
                 functions: vec!["infer".to_string()],
+                input_order: None,
             },
         );
 

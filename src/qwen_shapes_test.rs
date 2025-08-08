@@ -42,6 +42,7 @@ mod tests {
                 inputs: embeddings_inputs,
                 outputs: embeddings_outputs,
                 functions: vec!["main".to_string()],
+                input_order: None,
             },
         );
 
@@ -98,6 +99,7 @@ mod tests {
                 inputs: ffn_prefill_inputs,
                 outputs: ffn_prefill_outputs,
                 functions: vec!["prefill".to_string()],
+                input_order: None,
             },
         );
 
@@ -130,6 +132,7 @@ mod tests {
                 inputs: lm_head_inputs,
                 outputs: lm_head_outputs,
                 functions: vec!["main".to_string()],
+                input_order: None,
             },
         );
 
