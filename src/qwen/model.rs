@@ -628,35 +628,48 @@ impl QwenModel {
             self.initialize_states()?;
         }
 
-        let batch_size = self.config.batch_size(); // 64
-        let context_length = self.config.context_length(); // 512
-        let device = &self.config.device;
+    let batch_size = self.config.batch_size();
+    let context_length = self.config.context_length();
+    let device = &self.config.device;
 
         debug!(
             "Running prefill for {} tokens (padded to {} batch) to populate KV cache",
             sequence_length, batch_size
         );
 
-        // Create position IDs for the full batch (0, 1, 2, ..., 63)
-        // Note: We use the full batch size, not just sequence_length
-        let position_ids_vec: Vec<i64> = (0..batch_size as i64).collect();
-        let position_ids = Tensor::from_vec(position_ids_vec, (batch_size,), device)?;
+        // Create position IDs using config-driven shape
+        let expected_pos_len = self
+            .config
+            .model_config
+            .get_tensor_shape("ffn_prefill", "position_ids", true)
+            .map(|v| v[0])
+            .unwrap_or(batch_size);
 
-        // Create causal mask for the full batch (1, 1, 64, 512)
-        // Each row allows attention to positions up to that token's position
-        let mut mask_data = vec![f32::NEG_INFINITY; batch_size * context_length];
-        for i in 0..batch_size {
-            for j in 0..=i.min(context_length - 1) {
-                mask_data[i * context_length + j] = 0.0;
-            }
-        }
-        let causal_mask = Tensor::from_vec(mask_data, (1, 1, batch_size, context_length), device)?;
+        let position_ids = if expected_pos_len == 1 {
+            // Typo-fixer style: prefill expects [1] containing last token position
+            self.config
+                .create_position_ids_with_mode_detection(&[sequence_length as i64 - 1], true)?
+        } else {
+            // Generic Qwen: batch-sized positions [0..batch_size)
+            let vec: Vec<i64> = (0..batch_size as i64).collect();
+            Tensor::from_vec(vec, (batch_size,), device)?
+        };
+
+        // Use cached full causal mask if available, otherwise create via config
+        let causal_mask = if let Some(mask) = &self.cached_causal_mask {
+            mask.clone()
+        } else {
+            let m = self.create_full_causal_mask(context_length)?;
+            // cache for future calls
+            self.cached_causal_mask = Some(m.clone());
+            m
+        };
 
         // Current pos is the last actual token position (seq_len - 1)
         let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
 
         // Run prefill with full batch embeddings (using granular method)
-        let _prefill_output = self.run_ffn_prefill_with_inputs(
+    let _prefill_output = self.run_ffn_prefill_with_inputs(
             embeddings,
             &position_ids,
             &causal_mask,
