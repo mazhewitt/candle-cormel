@@ -264,7 +264,7 @@ You are passing the full sequence hidden_states tensor produced by embeddings/pr
 
 Fixes:
 1. Configuration: Ensure the ffn_infer.hidden_states input shape in your JSON is [1, 1, hidden_size].
-2. Runtime safeguard (now implemented): The library auto‑slices the last token if it detects ffn_infer expects seq len 1.
+2. Runtime safeguard: The library auto‑slices the last token if it detects ffn_infer expects seq len 1.
 3. If building your own model export, compile infer graph with a dynamic or single‑token sequence dimension consistent with your config.
 
 Also verify position_ids: prefill may expect shape [1] (last position) instead of [sequence_length]. Update the config's ffn_prefill.position_ids shape accordingly; do not confuse model batch_size with the number of tokens in the prompt.
