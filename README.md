@@ -256,6 +256,73 @@ ANE (fastest, most efficient) > GPU/Metal (fast) > CPU (most compatible)
 
 Apple automatically chooses the best available backend, but your model must be ANE-compatible to benefit from the fastest option.
 
+## Model Configuration System (Generic Qwen / ANEMLL Models)
+
+Complex multi-component language models (e.g. ANEMLL Qwen variants, typo-fixer fine-tunes) are described declaratively using a `ModelConfig` JSON file. This removes hardcoded shapes and enables:
+
+- Explicit component file paths (no globbing)
+- Per-component input/output tensor shapes & dtypes
+- Multipart logits combination (auto-detected part count)
+- Split vs unified FFN execution (`ffn_execution` = `split` | `unified`)
+- Automatic detection of prefill mode (batched vs sequential single-token)
+
+### Minimal Example
+
+```jsonc
+{
+    "model_info": { "model_type": "qwen", "path": "/path/to/model" },
+    "shapes": { "batch_size": 64, "context_length": 256, "hidden_size": 1024, "vocab_size": 151669 },
+    "components": {
+        "embeddings": { "file_path": "embeddings.mlpackage", "inputs": { "input_ids": {"shape": [1,64], "data_type": "INT32", "name": "input_ids" } }, "outputs": { "hidden_states": {"shape": [1,64,1024], "data_type": "FLOAT16", "name": "hidden_states" } }, "functions": [] },
+        "ffn_prefill": { "file_path": "ffn_prefill.mlpackage", "inputs": { "hidden_states": {"shape": [1,64,1024], "data_type": "FLOAT16","name":"hidden_states"}, "position_ids": {"shape":[64],"data_type":"INT32","name":"position_ids"}, "causal_mask": {"shape":[1,1,64,256],"data_type":"FLOAT16","name":"causal_mask"}, "current_pos": {"shape":[1],"data_type":"INT32","name":"current_pos"} }, "outputs": { "output_hidden_states": {"shape":[1,1,1024],"data_type":"FLOAT16","name":"output_hidden_states"} }, "functions":["prefill"] },
+        "ffn_infer": { "file_path": "ffn_infer.mlpackage", "inputs": { "hidden_states": {"shape": [1,1,1024], "data_type": "FLOAT16","name":"hidden_states"}, "position_ids": {"shape":[1],"data_type":"INT32","name":"position_ids"}, "causal_mask": {"shape":[1,1,1,256],"data_type":"FLOAT16","name":"causal_mask"}, "current_pos": {"shape":[1],"data_type":"INT32","name":"current_pos"} }, "outputs": { "output_hidden_states": {"shape":[1,1,1024],"data_type":"FLOAT16","name":"output_hidden_states"} }, "functions":["infer"] },
+        "lm_head": { "file_path": "lm_head.mlpackage", "inputs": { "hidden_states": {"shape":[1,1,1024],"data_type":"FLOAT16","name":"hidden_states" } }, "outputs": { "logits1": {"shape":[1,1,9480],"data_type":"FLOAT16","name":"logits1"}, "logits2": {"shape":[1,1,9479],"data_type":"FLOAT16","name":"logits2"} }, "functions": [] }
+    },
+    "ffn_execution": "split"
+}
+```
+
+### Execution Modes
+
+| Mode | When | Behavior |
+|------|------|----------|
+| `unified` | Single CoreML package exposes `prefill` & `infer` functions | Shared file, one state, batched prefill then token-by-token infer |
+| `split` | Separate `ffn_prefill` & `ffn_infer` model files | Distinct model files; state created from prefill model and reused for infer |
+
+If `ffn_execution` is omitted, the system infers `split` when `ffn_prefill.file_path != ffn_infer.file_path`.
+
+### Prefill Modes
+
+Prefill can be either batch (process full sequence in one call) or sequential (one token at a time). Sequential mode is auto-enabled when `ffn_prefill.hidden_states` shape has `seq_len == 1` (e.g. `[1,1,H]`) indicating a single-token CoreML prefill variant. This matches certain fine-tuned or distilled models (like a typo-fixer) exported with single-token kernels.
+
+### Multipart Logits
+
+The LM head may output `logits1..logitsN`. The library detects count dynamically and stitches them into a contiguous logits tensor. No manual configuration needed beyond listing outputs.
+
+### Validation
+
+`ModelConfig::validate()` checks basic consistency; `validate_internal_wiring()` ensures adjacent component tensor shapes align (e.g. embeddings → ffn_prefill). Warnings are logged but loading proceeds to aid iterative development.
+
+### Custom Model Guide
+
+See `CUSTOM_MODEL_GUIDE.md` for deep-dive shape discovery tooling and advanced customization.
+
+### Migrating From Globs
+
+Legacy filename pattern discovery has been removed. Always set `file_path` for each component—this avoids ambiguity and improves reproducibility.
+
+### Troubleshooting
+
+| Symptom | Likely Cause | Fix |
+|---------|--------------|-----|
+| `MultiArray shape (64) does not match shape (1)` | Prefill or infer mismatch between batch vs single-token tensors | Ensure correct `ffn_prefill` / `ffn_infer` shapes or adjust to sequential mode by setting prefill hidden_states to `[1,1,H]` |
+| Missing logits concatenation | Outputs not named `logits*` | Rename outputs or manually post-process |
+| Incorrect token length padding | Embeddings `input_ids` shape mismatch | Align `embeddings.inputs.input_ids.shape` with expected max prefill length |
+| LM head shape mismatch | `output_hidden_states` vs `lm_head.hidden_states` differ | Regenerate config with discovery tool; fix shapes |
+
+For detailed examples see `configs/` directory (e.g. `typo-fixer-working.json`).
+
+
 ## Examples
 
 See the `examples/` directory for:

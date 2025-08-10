@@ -101,8 +101,7 @@ impl QwenModel {
 
         let adjusted_hidden_states = self.adapt_hidden_states_for_infer(hidden_states)?;
         let adjusted_position_ids = self.adapt_position_ids_for_infer(position_ids)?;
-    println!("[DEBUG] infer inputs pre-adapt: hidden_states={:?} position_ids={:?}", hidden_states.dims(), position_ids.dims());
-    println!("[DEBUG] infer inputs adapted: hidden_states={:?} position_ids={:?}", adjusted_hidden_states.dims(), adjusted_position_ids.dims());
+    // Debug adaptation (kept via tracing debug elsewhere)
 
         let expects_update_mask = self
             .config
@@ -208,25 +207,7 @@ impl QwenModel {
                 debug!("Infer: using separate ffn_infer with update_mask (reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
-                    Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("MultiArray shape (64) does not match the shape (1)") {
-                            debug!("⚠️ Auto-retry: narrowing position_ids & causal_mask for infer (update_mask path)");
-                            // Create narrowed tensors
-                            let narrowed_pos = adjusted_position_ids.narrow(0, adjusted_position_ids.dim(0).unwrap_or(1)-1, 1)?;
-                            let narrowed_mask = adapted_causal_mask.narrow(2, adapted_causal_mask.dim(2).unwrap_or(1)-1, 1)?;
-                            let mut by_name_retry: std::collections::HashMap<&str, Tensor> = std::collections::HashMap::new();
-                            by_name_retry.insert("hidden_states", adjusted_hidden_states.clone());
-                            by_name_retry.insert("position_ids", narrowed_pos.clone());
-                            by_name_retry.insert("update_mask", update_mask.clone());
-                            by_name_retry.insert("causal_mask", narrowed_mask.clone());
-                            by_name_retry.insert("current_pos", current_pos.clone());
-                            let retry_inputs: Vec<Tensor> = ordered_names.iter().filter_map(|n| by_name_retry.get(n.as_str()).cloned()).collect();
-                            let retry_refs: Vec<&Tensor> = retry_inputs.iter().collect();
-                            debug_log_inputs("FFN_INFER(update_mask)-retry", &ordered_names, &retry_refs);
-                            self.ffn_infer.predict_with_state(&retry_refs, state)?
-                        } else { return Err(e); }
-                    }
+                    Err(e) => { return Err(e); }
                 }
             } else {
                 let ordered_names = self
@@ -254,23 +235,7 @@ impl QwenModel {
                 debug!("Infer: using separate ffn_infer (no update_mask, reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
-                    Err(e) => {
-                        let msg = e.to_string();
-                        if msg.contains("MultiArray shape (64) does not match the shape (1)") {
-                            debug!("⚠️ Auto-retry: narrowing position_ids & causal_mask for infer (no update_mask path)");
-                            let narrowed_pos = adjusted_position_ids.narrow(0, adjusted_position_ids.dim(0).unwrap_or(1)-1, 1)?;
-                            let narrowed_mask = adapted_causal_mask.narrow(2, adapted_causal_mask.dim(2).unwrap_or(1)-1, 1)?;
-                            let mut by_name_retry: std::collections::HashMap<&str, Tensor> = std::collections::HashMap::new();
-                            by_name_retry.insert("hidden_states", adjusted_hidden_states.clone());
-                            by_name_retry.insert("position_ids", narrowed_pos.clone());
-                            by_name_retry.insert("causal_mask", narrowed_mask.clone());
-                            by_name_retry.insert("current_pos", current_pos.clone());
-                            let retry_inputs: Vec<Tensor> = ordered_names.iter().filter_map(|n| by_name_retry.get(n.as_str()).cloned()).collect();
-                            let retry_refs: Vec<&Tensor> = retry_inputs.iter().collect();
-                            debug_log_inputs("FFN_INFER-retry", &ordered_names, &retry_refs);
-                            self.ffn_infer.predict_with_state(&retry_refs, state)?
-                        } else { return Err(e); }
-                    }
+                    Err(e) => { return Err(e); }
                 }
             }
         } else {
