@@ -133,6 +133,7 @@ mod tests {
                 ffn_infer_pattern: None,
                 lm_head_pattern: None,
             },
+            ffn_execution: Some("split".to_string()),
         }
     }
 

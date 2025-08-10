@@ -198,47 +198,86 @@ class ModelShapeDiscovery:
         return type_map.get(data_type_enum, f"TYPE_{data_type_enum}")
     
     def _derive_model_shapes(self, components: Dict[str, Any]) -> Dict[str, Any]:
-        """Derive overall model configuration from component shapes."""
+        """Derive overall model configuration from component shapes.
+
+        Heuristics (tailored for ANEMLL/Qwen + typo-fixer variants):
+          * Prefer causal_mask of ffn_prefill to determine (prefill_block_size, context_length):
+              causal_mask shape: [1, 1, prefill_block_size, context_length]
+              -> batch_size := prefill_block_size (matches legacy candle usage)
+          * Embeddings input shape [B, S] where typically B=1, S=prefill_block_size.
+          * hidden_size from embeddings.hidden_states last dim.
+          * vocab_size aggregated over all logits* outputs of lm_head.
+        """
+
         shapes = {
-            "batch_size": 1,
-            "context_length": 512,
+            "batch_size": 1,        # Legacy candle meaning: prefill block size
+            "context_length": 512,  # Max attention window
             "hidden_size": 1024,
-            "vocab_size": 151936
+            "vocab_size": 151936,
         }
-        
-        # Try to infer from embeddings component
+
+        # 1. Use ffn_prefill.causal_mask if available (most reliable)
+        if "ffn_prefill" in components:
+            ffn_prefill = components["ffn_prefill"]
+            causal = ffn_prefill.get("inputs", {}).get("causal_mask")
+            if causal:
+                cshape = causal.get("shape", [])
+                # Expect [1,1,block,context]
+                if len(cshape) == 4:
+                    block, ctx = cshape[2], cshape[3]
+                    if block > 0:
+                        shapes["batch_size"] = block  # Maintain legacy semantic
+                    if ctx > 0:
+                        shapes["context_length"] = ctx
+
+        # 2. Hidden size from embeddings output
         if "embeddings" in components:
-            embeddings = components["embeddings"]
-            if "input_ids" in embeddings["inputs"]:
-                input_shape = embeddings["inputs"]["input_ids"]["shape"]
-                if len(input_shape) >= 2:
-                    shapes["batch_size"] = input_shape[0]
-                    shapes["context_length"] = input_shape[1]
-            
-            if "hidden_states" in embeddings["outputs"]:
-                output_shape = embeddings["outputs"]["hidden_states"]["shape"]
-                if len(output_shape) >= 3:
-                    shapes["hidden_size"] = output_shape[2]
-        
-        # Try to infer vocab size from LM head
+            emb = components["embeddings"]
+            hs = emb.get("outputs", {}).get("hidden_states")
+            if hs:
+                hshape = hs.get("shape", [])
+                if len(hshape) == 3:
+                    shapes["hidden_size"] = hshape[2]
+
+        # 3. Vocab size from lm_head logits aggregation
         if "lm_head" in components:
             lm_head = components["lm_head"]
-            # Look for logits outputs
-            for output_name, output_info in lm_head["outputs"].items():
-                if "logits" in output_name.lower():
-                    output_shape = output_info["shape"]
-                    if len(output_shape) >= 3:
-                        # This might be a partial vocab (for multi-part outputs)
-                        partial_vocab = output_shape[2]
-                        # Count all logits outputs to get total vocab
-                        total_vocab = sum(
-                            info["shape"][2] for name, info in lm_head["outputs"].items()
-                            if "logits" in name.lower() and len(info["shape"]) >= 3
-                        )
-                        shapes["vocab_size"] = total_vocab
-                        break
-        
+            logits_sizes = []
+            for name, info in lm_head.get("outputs", {}).items():
+                if "logits" in name.lower():
+                    ishape = info.get("shape", [])
+                    if len(ishape) >= 3:
+                        logits_sizes.append(ishape[2])
+            if logits_sizes:
+                shapes["vocab_size"] = sum(logits_sizes)
+
+        # 4. Anomaly detection (position_ids inconsistencies)
+        self._warn_shape_anomalies(components, shapes)
+
         return shapes
+
+    def _warn_shape_anomalies(self, components: Dict[str, Any], shapes: Dict[str, int]) -> None:
+        """Emit warnings for common mismatch patterns (e.g., position_ids length)."""
+        try:
+            if "ffn_prefill" in components:
+                prefill = components["ffn_prefill"].get("inputs", {})
+                pos = prefill.get("position_ids")
+                if pos:
+                    pshape = pos.get("shape", [])
+                    if len(pshape) == 1 and pshape[0] not in (1, shapes.get("batch_size")):
+                        print(
+                            f"⚠️  Warning: ffn_prefill.position_ids shape {pshape} not 1 or batch_size ({shapes.get('batch_size')}).",
+                            file=sys.stderr,
+                        )
+                    # Special case: shape [1] while batch_size > 1 → expected for typo-fixer variant
+                    if len(pshape) == 1 and pshape[0] == 1 and shapes.get("batch_size") > 1:
+                        print(
+                            "ℹ️  Note: position_ids=[1] with batch_size>1 (prefill block). This is a known fine-tuned variant pattern.",
+                            file=sys.stderr,
+                        )
+        except Exception as e:
+            if self.verbose:
+                print(f"⚠️  Warning: anomaly detection failed: {e}", file=sys.stderr)
     
     def _extract_naming_patterns(self, components: Dict[str, Path]) -> Dict[str, str]:
         """Extract naming patterns from discovered components."""
