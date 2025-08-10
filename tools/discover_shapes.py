@@ -18,11 +18,14 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple, Any
 import re
 
-try:
-    import coremltools as ct
-except ImportError:
-    print("Error: coremltools not found. Install with: pip install coremltools", file=sys.stderr)
-    sys.exit(1)
+# Lazy coremltools import so that shape derivation helper tests (synthetic) can run
+# without requiring the heavy dependency (and macOS environment).
+_CT_AVAILABLE = False
+try:  # pragma: no cover - presence depends on environment
+    import coremltools as ct  # type: ignore
+    _CT_AVAILABLE = True
+except Exception:  # pragma: no cover
+    ct = None  # type: ignore
 
 
 class ModelShapeDiscovery:
@@ -122,8 +125,10 @@ class ModelShapeDiscovery:
     
     def _extract_component_shapes(self, model_path: Path) -> Dict[str, Any]:
         """Extract input/output shapes from a CoreML model component."""
-        try:
-            model = ct.models.MLModel(str(model_path))
+        if not _CT_AVAILABLE:
+            raise RuntimeError("coremltools not installed – cannot introspect real CoreML models")
+        try:  # pragma: no cover - relies on coremltools
+            model = ct.models.MLModel(str(model_path))  # type: ignore
             spec = model.get_spec()
             
             component_config = {
@@ -155,7 +160,7 @@ class ModelShapeDiscovery:
             
             return component_config
             
-        except Exception as e:
+        except Exception as e:  # pragma: no cover
             raise RuntimeError(f"Failed to load CoreML model {model_path}: {e}")
     
     def _extract_tensor_info(self, tensor_desc) -> Dict[str, Any]:
@@ -389,6 +394,31 @@ def scan_directory_for_models(scan_dir: Path, output_dir: Path, verbose: bool = 
             continue
 
 
+def post_process_config(config: Dict[str, Any]) -> Dict[str, Any]:
+    """Augment generated config with derived fields (ffn_execution, sequential prefill hint)."""
+    components = config.get("components", {})
+    ffn_prefill = components.get("ffn_prefill")
+    ffn_infer = components.get("ffn_infer")
+
+    # Determine execution mode
+    if ffn_prefill and ffn_infer:
+        pre_path = str(ffn_prefill.get("file_path", ""))
+        inf_path = str(ffn_infer.get("file_path", ""))
+        if pre_path and inf_path and pre_path != inf_path:
+            config["ffn_execution"] = "split"
+        elif pre_path and inf_path:
+            config["ffn_execution"] = "unified"
+
+    # Sequential prefill detection: hidden_states seq_len == 1
+    if ffn_prefill:
+        hs = ffn_prefill.get("inputs", {}).get("hidden_states")
+        if hs:
+            shape = hs.get("shape", [])
+            if len(shape) == 3 and shape[1] == 1:
+                config.setdefault("hints", {})["prefill_mode"] = "sequential"
+    return config
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Discover shapes from CoreML ANEMLL models",
@@ -433,6 +463,7 @@ Examples:
                 
             discovery = ModelShapeDiscovery(verbose=args.verbose)
             config = discovery.discover_model_shapes(args.model_dir)
+            config = post_process_config(config)
             
             # Save configuration
             with open(args.output, 'w') as f:
