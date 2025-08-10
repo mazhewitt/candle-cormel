@@ -354,6 +354,73 @@ impl QwenModel {
         Ok(generated_tokens)
     }
 
+    /// Generate tokens using combined top-k + temperature sampling similar to Python reference script.
+    /// If top_k is Some(k) and k > 0, restrict sampling to top-k logits; if temperature <= 0 use greedy within that set.
+    pub fn generate_tokens_topk_temp(
+        &mut self,
+        text: &str,
+        max_tokens: usize,
+        temperature: f32,
+        top_k: Option<usize>,
+    ) -> Result<Vec<i64>, CandleError> {
+        use crate::utils::sampling;
+        let mut generated_tokens = Vec::new();
+        let mut current_text = text.to_string();
+
+        for _ in 0..max_tokens {
+            // Ensure stateful pipeline progresses: run forward_text to build caches & get greedy logits via infer path
+            // Adapt forward_text to expose logits by duplicating last steps inline
+            if self.unified_state.is_none() || self.cached_causal_mask.is_none() {
+                self.initialize_states()?;
+            }
+            let tokens = self.tokenize(&current_text)?;
+            let context_pos = tokens.len();
+            // Cache embeddings & run chunked prefill only first time or when context grows
+            self.run_chatpy_prefill(&tokens, context_pos)?;
+            // Run infer to get logits tensor
+            let hidden_states = self.get_infer_hidden_states(&tokens, context_pos)?;
+            let position_ids = self
+                .config
+                .create_position_ids_with_mode_detection(&[(context_pos - 1) as i64], false)?;
+            let infer_causal_mask = self.config.create_causal_mask_with_mode_detection(
+                context_pos - 1,
+                self.config.context_length(),
+                false,
+            )?;
+            let current_pos = position_ids.clone();
+            let infer_output = self.run_ffn_infer_with_inputs(
+                &hidden_states,
+                &position_ids,
+                &infer_causal_mask,
+                &current_pos,
+            )?;
+            let logits_tensor = self.run_lm_head_with_inputs(&infer_output)?;
+            let flat_logits = logits_tensor.squeeze(0)?.squeeze(0)?; // [vocab]
+
+            // Sampling strategy
+            let next_token = if let Some(k) = top_k {
+                sampling::sample_top_k(&flat_logits, k, temperature)?
+            } else if temperature > 0.0 {
+                sampling::sample_with_temperature(&flat_logits, temperature)?
+            } else {
+                sampling::greedy_sample(&flat_logits)?
+            };
+
+            generated_tokens.push(next_token);
+            // Stop if EOS
+            if next_token == 151_645 {
+                // TODO: obtain dynamically from tokenizer special tokens
+                break;
+            }
+            if let Ok(decoded) = self.tokenizer.decode(&[next_token as u32], false) {
+                current_text.push_str(&decoded);
+            } else {
+                break;
+            }
+        }
+        Ok(generated_tokens)
+    }
+
     /// 🚀 OPTIMIZATION: Try to get cached embeddings for a batch of tokens
     /// This checks if the padded batch matches part of our cached sequence
     fn get_cached_batch_embeddings(

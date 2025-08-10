@@ -29,6 +29,33 @@ pub struct QwenModel {
 }
 
 impl QwenModel {
+    /// Single-token prefill step used when prefill_is_single_token() is true.
+    fn prefill_single_token_step(
+        &mut self,
+        embeddings: &Tensor,
+        pos: usize,
+        causal_mask_full: &Tensor,
+    ) -> Result<(), CandleError> {
+        let device = &self.config.device;
+        // Narrow embeddings for current token
+        let token_embed = embeddings.narrow(1, pos, 1).map_err(|e| {
+            CandleError::Msg(format!(
+                "Failed to narrow embeddings for prefill token {pos}: {e}"
+            ))
+        })?;
+        // [1] position_ids tensor
+        let position_ids = Tensor::from_vec(vec![pos as i64], (1,), device)?;
+        // Narrow causal mask if needed
+        let causal_mask = match causal_mask_full.dim(2) {
+            Ok(d) if d > 1 => causal_mask_full
+                .narrow(2, pos, 1)
+                .unwrap_or_else(|_| causal_mask_full.clone()),
+            _ => causal_mask_full.clone(),
+        };
+        let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
+        let _ = self.run_ffn_prefill_with_inputs(&token_embed, &position_ids, &causal_mask, &current_pos)?;
+        Ok(())
+    }
     // Pattern/glob discovery removed. Explicit file paths are now required in ModelConfig.
 
     /// Load Qwen model from the specified directory
@@ -416,49 +443,40 @@ impl QwenModel {
             sequence_length, batch_size
         );
 
-        // Create position IDs using config-driven shape
-        let expected_pos_len = self
-            .config
-            .model_config
-            .get_tensor_shape("ffn_prefill", "position_ids", true)
-            .map(|v| v[0])
-            .unwrap_or(batch_size);
-
-        let position_ids = if expected_pos_len == 1 {
-            // Typo-fixer style: prefill expects [1] containing last token position
-            self.config
-                .create_position_ids_with_mode_detection(&[sequence_length as i64 - 1], true)?
+        // Branch: unified multi-token prefill vs single-token sequential prefill
+        let single_token_mode = self.config.model_config.prefill_is_single_token();
+        if single_token_mode {
+            debug!("⚙️ Prefill: single-token sequential mode ({} tokens)", sequence_length);
+            // Prepare (and cache) full causal mask once
+            if self.cached_causal_mask.is_none() {
+                let full = self.create_full_causal_mask(context_length)?;
+                self.cached_causal_mask = Some(full);
+            }
+            let causal_mask_full = self.cached_causal_mask.as_ref().unwrap().clone();
+            // Iterate each token position and feed one token slice at a time
+            for pos in 0..sequence_length {
+                self.prefill_single_token_step(embeddings, pos, &causal_mask_full)?;
+            }
+            debug!("✅ Prefill (sequential) complete - KV cache populated for 0..{}", sequence_length - 1);
         } else {
-            // Generic Qwen: batch-sized positions [0..batch_size)
-            let vec: Vec<i64> = (0..batch_size as i64).collect();
-            Tensor::from_vec(vec, (batch_size,), device)?
-        };
-
-        // Use cached full causal mask if available, otherwise create via config
-        let causal_mask = if let Some(mask) = &self.cached_causal_mask {
-            mask.clone()
-        } else {
-            let m = self.create_full_causal_mask(context_length)?;
-            // cache for future calls
-            self.cached_causal_mask = Some(m.clone());
-            m
-        };
-
-        // Current pos is the last actual token position (seq_len - 1)
-        let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
-
-        // Run prefill with full batch embeddings (using granular method)
-        let _prefill_output = self.run_ffn_prefill_with_inputs(
-            embeddings,
-            &position_ids,
-            &causal_mask,
-            &current_pos,
-        )?;
-
-        debug!(
-            "Prefill complete - KV cache populated for positions 0..{}",
-            sequence_length - 1
-        );
+            // Original batched logic
+            let expected_pos_len = self
+                .config
+                .model_config
+                .get_tensor_shape("ffn_prefill", "position_ids", true)
+                .map(|v| v[0])
+                .unwrap_or(batch_size);
+            let position_ids = if expected_pos_len == 1 {
+                self.config.create_position_ids_with_mode_detection(&[sequence_length as i64 - 1], true)?
+            } else {
+                let vec: Vec<i64> = (0..batch_size as i64).collect();
+                Tensor::from_vec(vec, (batch_size,), device)?
+            };
+            let causal_mask = if let Some(mask) = &self.cached_causal_mask { mask.clone() } else { let m = self.create_full_causal_mask(context_length)?; self.cached_causal_mask = Some(m.clone()); m };
+            let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
+            let _prefill_output = self.run_ffn_prefill_with_inputs(embeddings, &position_ids, &causal_mask, &current_pos)?;
+            debug!("✅ Prefill (batched) complete - KV cache populated for 0..{}", sequence_length - 1);
+        }
         Ok(())
     }
 
@@ -498,6 +516,10 @@ impl QwenModel {
         let current_pos = position_ids.clone();
 
         // Run infer with the shared state to get next-step hidden states
+        debug!("🔍 GENERATE_INFER: token_embedding shape={:?}", token_embedding.dims());
+        debug!("🔍 GENERATE_INFER: position_ids shape={:?} vals={:?}", position_ids.dims(), position_ids.to_vec1::<i64>().unwrap_or_default());
+        debug!("🔍 GENERATE_INFER: causal_mask shape={:?}", causal_mask.dims());
+        debug!("🔍 GENERATE_INFER: current_pos shape={:?} vals={:?}", current_pos.dims(), current_pos.to_vec1::<i64>().unwrap_or_default());
         let hidden_states = self.run_ffn_infer_with_inputs(
             token_embedding,
             &position_ids,

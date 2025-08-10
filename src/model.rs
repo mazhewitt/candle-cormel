@@ -415,6 +415,11 @@ impl CoreMLModel {
 
         #[cfg(target_os = "macos")]
         {
+            // Debug print input shapes and names
+            println!("[DEBUG predict_with_state] function={:?}", self.function_name);
+            for (i, t) in inputs.iter().enumerate() {
+                println!("[DEBUG predict_with_state] input {} '{}' shape={:?}", i, self.config.input_names[i], t.dims());
+            }
             self.predict_with_state_impl(inputs, state)
         }
 

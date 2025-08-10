@@ -17,6 +17,9 @@ pub struct ModelConfig {
     pub shapes: ShapeConfig,
     pub components: HashMap<String, ComponentConfig>,
     pub naming: NamingConfig,
+    /// Execution mode for FFN: "unified" (single component/function) or "split" (separate prefill/infer components)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ffn_execution: Option<String>,
 }
 
 /// Model metadata and identification
@@ -124,6 +127,7 @@ impl ModelConfig {
                 ffn_infer_pattern: None,
                 lm_head_pattern: None,
             },
+            ffn_execution: None,
         }
     }
 
@@ -316,6 +320,27 @@ impl ModelConfig {
 
         Ok(())
     }
+
+    /// Determine if FFN execution should be treated as split (separate infer component)
+    pub fn ffn_is_split(&self) -> bool {
+        if let Some(mode) = self.ffn_execution.as_deref() { return mode == "split"; }
+        if let (Some(prefill), Some(infer)) = (self.components.get("ffn_prefill"), self.components.get("ffn_infer")) {
+            match (&prefill.file_path, &infer.file_path) {
+                (Some(p), Some(i)) => p != i, // different files => split
+                _ => false,
+            }
+        } else { false }
+    }
+
+    /// Detect if prefill should run in single-token sequential mode based on configured shapes
+    pub fn prefill_is_single_token(&self) -> bool {
+        if let Some(prefill) = self.components.get("ffn_prefill") {
+            if let Some(hs) = prefill.inputs.get("hidden_states") {
+                return hs.shape.len() == 3 && hs.shape.get(1) == Some(&1);
+            }
+        }
+        false
+    }
 }
 
 impl Default for ModelConfig {
@@ -416,6 +441,7 @@ mod tests {
                 ffn_infer_pattern: None,
                 lm_head_pattern: None,
             },
+            ffn_execution: Some("unified".to_string()),
         }
     }
 

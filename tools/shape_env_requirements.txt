@@ -1,0 +1,12 @@
+# Minimal, compatible environment for ANEMLL/Qwen CoreML shape discovery
+# Pin scikit-learn <=1.5.1 (coremltools warning showed 1.6.1 unsupported)
+# Torch optional; omit unless you need PyTorch model conversion.
+
+coremltools==7.2  # adjust if your Xcode/macOS combo prefers 7.1.x
+scikit-learn==1.5.1
+numpy>=1.24,<2.0   # coremltools (as of 7.x) not yet on numpy 2 in all paths
+packaging>=23.0
+# Optional extras (comment out if not needed)
+# torch==2.5.0
+# sentencepiece
+# protobuf<5
