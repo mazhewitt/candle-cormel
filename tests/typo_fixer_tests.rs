@@ -1,6 +1,7 @@
 //! Tests for the typo-fixer config and related sampling/utilities.
 use candle_core::{Device, Tensor};
 use candle_coreml::ModelConfig; // crate root
+use candle_coreml::qwen::inference::PrefillStep;
 
 #[test]
 fn test_parse_typo_fixer_config() {
@@ -98,3 +99,59 @@ fn test_typo_fixer_prefill_infer_pipeline_if_available() {
 }
 
 // NOTE: End-to-end generation test omitted to avoid dependence on local CoreML mlpackage files in CI.
+
+#[test]
+fn test_plan_sequential_prefill_single_window() {
+    use candle_coreml::qwen::QwenModel;
+    // token_count <= embeddings_len => single window
+    let plan = QwenModel::plan_sequential_prefill_static(5, 64, 0);
+    // Expect 4 steps (leave last token for infer)
+    assert_eq!(plan.steps.len(), 4);
+    assert_eq!(plan.steps[0], PrefillStep { local_idx: 0, global_pos: 0 });
+    assert_eq!(plan.steps[3], PrefillStep { local_idx: 3, global_pos: 3 });
+    assert_eq!(plan.last_window_start, 0);
+    assert_eq!(plan.last_local_idx, 4);
+}
+
+#[test]
+fn test_plan_sequential_prefill_multi_window_with_already_prefilled() {
+    use candle_coreml::qwen::QwenModel;
+    // token_count spans two windows (e.g., 300 tokens with embeddings window=256)
+    let token_count = 300usize;
+    let embeddings_len = 256usize;
+    let already_prefilled = 200usize; // e.g., continuing from a previous call
+    let plan = QwenModel::plan_sequential_prefill_static(token_count, embeddings_len, already_prefilled);
+
+    // Steps should start at global_pos=200 up to 298 (leave last token 299 for infer)
+    assert!(plan.steps.first().unwrap().global_pos >= already_prefilled);
+    assert_eq!(plan.steps.last().unwrap().global_pos, 298);
+    // Last window start should be 44 (= 300 - 256)
+    assert_eq!(plan.last_window_start, 44);
+    // Last local index is 255-1 = 255? Actually local_idx is (token_count - start - 1)
+    assert_eq!(plan.last_local_idx, 255);
+}
+
+// Placeholder for a future golden test that will load captured tensors
+// from tests/fixtures/ and validate that forward path stays stable.
+#[test]
+fn test_golden_forward_plan_smoke() {
+    use candle_coreml::qwen::QwenModel;
+    // Load golden fixture
+    let fixture = include_str!("fixtures/typo_fixer_prefill_plan_golden.json");
+    let v: serde_json::Value = serde_json::from_str(fixture).unwrap();
+    let token_count = v["token_count"].as_u64().unwrap() as usize;
+    let embeddings_len = v["embeddings_len"].as_u64().unwrap() as usize;
+    let already_prefilled = v["already_prefilled"].as_u64().unwrap() as usize;
+    let expected_plan = &v["plan"];
+
+    let plan = QwenModel::plan_sequential_prefill_static(token_count, embeddings_len, already_prefilled);
+    // Compare steps
+    let steps = expected_plan["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), plan.steps.len());
+    for (i, s) in plan.steps.iter().enumerate() {
+        assert_eq!(s.local_idx as u64, steps[i]["local_idx"].as_u64().unwrap());
+        assert_eq!(s.global_pos as u64, steps[i]["global_pos"].as_u64().unwrap());
+    }
+    assert_eq!(plan.last_window_start as u64, expected_plan["last_window_start"].as_u64().unwrap());
+    assert_eq!(plan.last_local_idx as u64, expected_plan["last_local_idx"].as_u64().unwrap());
+}
