@@ -6,8 +6,67 @@
 use crate::qwen::model::QwenModel;
 use candle_core::{Error as CandleError, Tensor};
 use tracing::{debug, info};
+use serde::{Serialize, Deserialize};
+
+/// A single prefill step mapping inside a padded embeddings window.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PrefillStep {
+    /// Index inside the current embeddings window (0..embeddings_len)
+    pub local_idx: usize,
+    /// Absolute token position within the prompt (0..context_pos)
+    pub global_pos: usize,
+}
+
+/// A pure, testable plan describing how to run sequential prefill over one or more windows.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SequentialPrefillPlan {
+    /// Ordered list of prefill steps to execute. Does not include the final token (reserved for infer).
+    pub steps: Vec<PrefillStep>,
+    /// The start index of the final window (for slicing last token embedding)
+    pub last_window_start: usize,
+    /// The local index of the last token embedding inside the final window
+    pub last_local_idx: usize,
+}
 
 impl QwenModel {
+    /// Static helper variant of plan_sequential_prefill for unit testing without a model instance.
+    pub fn plan_sequential_prefill_static(
+        token_count: usize,
+        embeddings_len: usize,
+        already_prefilled: usize,
+    ) -> SequentialPrefillPlan {
+        // Delegate to the instance logic by simulating the minimal inputs.
+        // This duplicates the logic to keep it pure and independent of any model fields.
+        let mut steps = Vec::new();
+        let mut processed = already_prefilled.min(token_count);
+        while processed < token_count.saturating_sub(1) {
+            let window_end = (processed + embeddings_len).min(token_count);
+            let window_len = window_end - processed;
+            let take_len = window_len.saturating_sub(1).min(token_count.saturating_sub(1) - processed);
+            for local in 0..take_len {
+                let global_pos = processed + local;
+                if global_pos < already_prefilled { continue; }
+                steps.push(PrefillStep { local_idx: local, global_pos });
+            }
+            processed = window_end;
+        }
+        let last_window_start = token_count.saturating_sub(embeddings_len);
+        let last_local_idx = token_count - last_window_start - 1;
+        SequentialPrefillPlan { steps, last_window_start, last_local_idx }
+    }
+
+    /// Build a deterministic plan for single-token sequential prefill over possibly multiple windows.
+    /// This function is pure and unit-test friendly.
+    pub fn plan_sequential_prefill(
+        &self,
+        token_count: usize,
+        embeddings_len: usize,
+        already_prefilled: usize,
+    ) -> SequentialPrefillPlan {
+        // Delegate to the static version to ensure identical behavior across tests and runtime.
+        QwenModel::plan_sequential_prefill_static(token_count, embeddings_len, already_prefilled)
+    }
+
     /// Generate a single token from text input - PRIMARY METHOD
     /// ✅ Uses chat.py architecture for correct predictions (correctly answers "Paris" for capital of France)
     /// 🚀 OPTIMIZED: Enhanced with embeddings caching for maximum performance
@@ -54,30 +113,52 @@ impl QwenModel {
                 self.initialize_states()?;
             }
             let already_prefilled = self.last_single_token_prefill_len.unwrap_or(0);
-            if context_pos > embed_seq_len {
-                debug!("⚠️ forward_text: prompt token count {} exceeds embeddings window {} -> performing multi-window sequential prefill", context_pos, embed_seq_len);
-                // Initialize states & causal mask if needed
-                if self.unified_state.is_none() || self.cached_causal_mask.is_none() { self.initialize_states()?; }
-                let causal_mask_full = self.cached_causal_mask.as_ref().unwrap().clone();
-                let mut processed = already_prefilled; // continue from where we left off
-                while processed < context_pos {
-                    let window_end = (processed + embed_seq_len).min(context_pos);
-                    let window_tokens = &tokens[processed..window_end];
-                    let window_embeddings = self.compute_embeddings(window_tokens)?; // recompute per window
-                    for local in 0..(window_end - processed) { // local token index inside this window
-                        let global_pos = processed + local;
-                        if global_pos + 1 >= context_pos { break; } // leave final token for infer phase
-                        if global_pos < already_prefilled { continue; } // skip tokens we already prefetched
-                        self.prefill_single_token_step_chunk(&window_embeddings, local, global_pos, &causal_mask_full)?;
+
+            // Construct a testable execution plan and use it to drive the calls
+            let plan = self.plan_sequential_prefill(context_pos, embed_seq_len as usize, already_prefilled);
+
+            // Run sequential prefill across one or more windows (as needed by the plan)
+            if self.unified_state.is_none() || self.cached_causal_mask.is_none() { self.initialize_states()?; }
+            let causal_mask_full = self.cached_causal_mask.as_ref().unwrap().clone();
+
+            if plan.steps.len() > 0 {
+                // If a single window suffices, reuse the full embeddings; otherwise recompute per-window slices
+                if context_pos <= embed_seq_len && already_prefilled + 1 < context_pos {
+                    for step in &plan.steps {
+                        self.prefill_single_token_step_chunk(&embeddings, step.local_idx, step.global_pos, &causal_mask_full)?;
                     }
-                    processed = window_end;
+                } else {
+                    // Multi-window: recompute embeddings per window slice
+                    let mut processed = already_prefilled.min(context_pos);
+                    while processed < context_pos {
+                        let window_end = (processed + embed_seq_len).min(context_pos);
+                        let window_tokens = &tokens[processed..window_end];
+                        let window_embeddings = self.compute_embeddings(window_tokens)?;
+                        for step in plan.steps.iter().filter(|s| s.global_pos >= processed && s.global_pos < window_end) {
+                            let local = step.global_pos - processed;
+                            self.prefill_single_token_step_chunk(&window_embeddings, local, step.global_pos, &causal_mask_full)?;
+                        }
+                        processed = window_end;
+                    }
                 }
-                // Last token embedding: ensure we have embedding for final token
-                let last_window_start = context_pos.saturating_sub(embed_seq_len);
-                let last_window_tokens = &tokens[last_window_start..context_pos];
+            }
+
+            // Slice the last embedding according to the plan and run infer
+            if context_pos == 0 { return Err(CandleError::Msg("Empty token sequence".into())); }
+            if plan.last_window_start == 0 {
+                // Last token is inside the full embeddings tensor we already computed
+                let last_embed = embeddings.narrow(1, plan.last_local_idx, 1)?;
+                let logits = self.generate_next_token_with_infer(&last_embed, context_pos - 1)?;
+                let next_token = self.extract_next_token(&logits)?;
+                self.last_single_token_prefill_len = Some(context_pos);
+                let total_time = start_time.elapsed();
+                debug!("🎯 SINGLE-TOKEN TOTAL: {:?}", total_time);
+                return Ok(next_token);
+            } else {
+                // Need to recompute the last window's embeddings
+                let last_window_tokens = &tokens[plan.last_window_start..context_pos];
                 let last_embeddings = self.compute_embeddings(last_window_tokens)?;
-                let local_idx = context_pos - last_window_start - 1;
-                let last_embed = last_embeddings.narrow(1, local_idx, 1)?;
+                let last_embed = last_embeddings.narrow(1, plan.last_local_idx, 1)?;
                 let logits = self.generate_next_token_with_infer(&last_embed, context_pos - 1)?;
                 let next_token = self.extract_next_token(&logits)?;
                 self.last_single_token_prefill_len = Some(context_pos);
@@ -85,24 +166,6 @@ impl QwenModel {
                 debug!("🎯 MULTI-WINDOW SINGLE-TOKEN TOTAL: {:?}", total_time);
                 return Ok(next_token);
             }
-            // Run sequential prefill (populates KV cache token by token)
-            if self.unified_state.is_none() || self.cached_causal_mask.is_none() { self.initialize_states()?; }
-            let causal_mask_full = self.cached_causal_mask.as_ref().unwrap().clone();
-            if already_prefilled + 1 < context_pos { // +1 to leave last token for infer
-                for pos in already_prefilled..(context_pos - 1) {
-                    self.prefill_single_token_step_chunk(&embeddings, pos, pos, &causal_mask_full)?;
-                }
-            }
-            // Get last token embedding (slice from padded embeddings at logical position-1)
-            if context_pos == 0 { return Err(CandleError::Msg("Empty token sequence".into())); }
-            let last_embed = embeddings.narrow(1, context_pos - 1, 1)?;
-            // Run infer for next token
-            let logits = self.generate_next_token_with_infer(&last_embed, context_pos - 1)?;
-            let next_token = self.extract_next_token(&logits)?;
-            self.last_single_token_prefill_len = Some(context_pos);
-            let total_time = start_time.elapsed();
-            debug!("🎯 SINGLE-TOKEN TOTAL: {:?}", total_time);
-            return Ok(next_token);
         }
 
         // PHASE 1: CHUNKED PREFILL (chat.py architecture with embeddings optimization)

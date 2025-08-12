@@ -1,0 +1,20 @@
+{
+  "token_count": 10,
+  "embeddings_len": 256,
+  "already_prefilled": 0,
+  "plan": {
+    "steps": [
+      { "local_idx": 0, "global_pos": 0 },
+      { "local_idx": 1, "global_pos": 1 },
+      { "local_idx": 2, "global_pos": 2 },
+      { "local_idx": 3, "global_pos": 3 },
+      { "local_idx": 4, "global_pos": 4 },
+      { "local_idx": 5, "global_pos": 5 },
+      { "local_idx": 6, "global_pos": 6 },
+      { "local_idx": 7, "global_pos": 7 },
+      { "local_idx": 8, "global_pos": 8 }
+    ],
+    "last_window_start": 0,
+    "last_local_idx": 9
+  }
+}
