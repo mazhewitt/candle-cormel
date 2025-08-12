@@ -21,11 +21,11 @@ impl QwenModel {
                                 "🔧 adapt_hidden_states_for_infer: slicing seq_len {} -> 1 (last token)",
                                 actual_seq
                             );
-                            return hidden_states
-                                .narrow(1, actual_seq - 1, 1)
-                                .map_err(|e| CandleError::Msg(format!(
+                            return hidden_states.narrow(1, actual_seq - 1, 1).map_err(|e| {
+                                CandleError::Msg(format!(
                                     "Failed to narrow hidden_states for infer: {e}"
-                                )));
+                                ))
+                            });
                         }
                     }
                 }
@@ -45,11 +45,11 @@ impl QwenModel {
                                 "🔧 adapt_position_ids_for_infer: slicing length {} -> 1 (last index)",
                                 actual_len
                             );
-                            return position_ids
-                                .narrow(0, actual_len - 1, 1)
-                                .map_err(|e| CandleError::Msg(format!(
+                            return position_ids.narrow(0, actual_len - 1, 1).map_err(|e| {
+                                CandleError::Msg(format!(
                                     "Failed to narrow position_ids for infer: {e}"
-                                )));
+                                ))
+                            });
                         }
                     }
                 }
@@ -101,7 +101,7 @@ impl QwenModel {
 
         let adjusted_hidden_states = self.adapt_hidden_states_for_infer(hidden_states)?;
         let adjusted_position_ids = self.adapt_position_ids_for_infer(position_ids)?;
-    // Debug adaptation (kept via tracing debug elsewhere)
+        // Debug adaptation (kept via tracing debug elsewhere)
 
         let expects_update_mask = self
             .config
@@ -112,24 +112,26 @@ impl QwenModel {
             .unwrap_or(false);
 
         // Adapt causal mask if model expects singleton seq dimension
-        let adapted_causal_mask = if let Some(infer_comp) = self
-            .config
-            .model_config
-            .components
-            .get("ffn_infer")
-        {
-            if let Some(cm_cfg) = infer_comp.inputs.get("causal_mask") {
-                if cm_cfg.shape.len() == 4 && cm_cfg.shape[2] == 1 {
-                    if let Ok(actual) = causal_mask.dim(2) {
-                        if actual > 1 {
-                            debug!("🔧 adapt_causal_mask_for_infer: slicing causal_mask dim2 {} -> 1", actual);
-                            match causal_mask.narrow(2, actual - 1, 1) {
-                                Ok(n) => n,
-                                Err(e) => {
-                                    return Err(CandleError::Msg(format!(
-                                        "Failed to narrow causal_mask for infer: {e}"
-                                    )))
+        let adapted_causal_mask =
+            if let Some(infer_comp) = self.config.model_config.components.get("ffn_infer") {
+                if let Some(cm_cfg) = infer_comp.inputs.get("causal_mask") {
+                    if cm_cfg.shape.len() == 4 && cm_cfg.shape[2] == 1 {
+                        if let Ok(actual) = causal_mask.dim(2) {
+                            if actual > 1 {
+                                debug!(
+                                "🔧 adapt_causal_mask_for_infer: slicing causal_mask dim2 {} -> 1",
+                                actual
+                            );
+                                match causal_mask.narrow(2, actual - 1, 1) {
+                                    Ok(n) => n,
+                                    Err(e) => {
+                                        return Err(CandleError::Msg(format!(
+                                            "Failed to narrow causal_mask for infer: {e}"
+                                        )))
+                                    }
                                 }
+                            } else {
+                                causal_mask.clone()
                             }
                         } else {
                             causal_mask.clone()
@@ -142,10 +144,7 @@ impl QwenModel {
                 }
             } else {
                 causal_mask.clone()
-            }
-        } else {
-            causal_mask.clone()
-        };
+            };
 
         let state = self.unified_state.as_mut().unwrap();
         // Helper closure to debug-print the shapes about to be sent to CoreML
@@ -156,7 +155,7 @@ impl QwenModel {
             }
         };
 
-    let output = if self
+        let output = if self
             .config
             .model_config
             .components
@@ -168,32 +167,34 @@ impl QwenModel {
                 let context_length = self.config.context_length();
                 let mut data = vec![0f32; context_length];
                 let pos_idx = if let Ok(vals) = current_pos.to_vec1::<f32>() {
-                    vals.get(0).cloned().unwrap_or(0.0) as usize
+                    vals.first().cloned().unwrap_or(0.0) as usize
                 } else {
                     0
                 };
                 let pos_idx = pos_idx.min(context_length.saturating_sub(1));
                 data[pos_idx] = 1.0;
-                let update_mask = Tensor::from_vec(
-                    data,
-                    (1, 1, context_length, 1),
-                    &self.config.device,
-                )?;
+                let update_mask =
+                    Tensor::from_vec(data, (1, 1, context_length, 1), &self.config.device)?;
                 let ordered_names = self
                     .config
                     .model_config
                     .components
                     .get("ffn_infer")
-                    .map(|c| c.input_order.clone().unwrap_or_else(|| vec![
-                        "hidden_states".to_string(),
-                        "position_ids".to_string(),
-                        "update_mask".to_string(),
-                        "causal_mask".to_string(),
-                        "current_pos".to_string(),
-                    ]))
+                    .map(|c| {
+                        c.input_order.clone().unwrap_or_else(|| {
+                            vec![
+                                "hidden_states".to_string(),
+                                "position_ids".to_string(),
+                                "update_mask".to_string(),
+                                "causal_mask".to_string(),
+                                "current_pos".to_string(),
+                            ]
+                        })
+                    })
                     .unwrap();
                 // Map tensors by name for reordering
-                let mut by_name: std::collections::HashMap<&str, &Tensor> = std::collections::HashMap::new();
+                let mut by_name: std::collections::HashMap<&str, &Tensor> =
+                    std::collections::HashMap::new();
                 by_name.insert("hidden_states", &adjusted_hidden_states);
                 by_name.insert("position_ids", &adjusted_position_ids);
                 by_name.insert("update_mask", &update_mask);
@@ -207,7 +208,9 @@ impl QwenModel {
                 debug!("Infer: using separate ffn_infer with update_mask (reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
-                    Err(e) => { return Err(e); }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             } else {
                 let ordered_names = self
@@ -215,14 +218,19 @@ impl QwenModel {
                     .model_config
                     .components
                     .get("ffn_infer")
-                    .map(|c| c.input_order.clone().unwrap_or_else(|| vec![
-                        "hidden_states".to_string(),
-                        "position_ids".to_string(),
-                        "causal_mask".to_string(),
-                        "current_pos".to_string(),
-                    ]))
+                    .map(|c| {
+                        c.input_order.clone().unwrap_or_else(|| {
+                            vec![
+                                "hidden_states".to_string(),
+                                "position_ids".to_string(),
+                                "causal_mask".to_string(),
+                                "current_pos".to_string(),
+                            ]
+                        })
+                    })
                     .unwrap();
-                let mut by_name: std::collections::HashMap<&str, &Tensor> = std::collections::HashMap::new();
+                let mut by_name: std::collections::HashMap<&str, &Tensor> =
+                    std::collections::HashMap::new();
                 by_name.insert("hidden_states", &adjusted_hidden_states);
                 by_name.insert("position_ids", &adjusted_position_ids);
                 by_name.insert("causal_mask", &adapted_causal_mask);
@@ -235,7 +243,9 @@ impl QwenModel {
                 debug!("Infer: using separate ffn_infer (no update_mask, reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
-                    Err(e) => { return Err(e); }
+                    Err(e) => {
+                        return Err(e);
+                    }
                 }
             }
         } else {

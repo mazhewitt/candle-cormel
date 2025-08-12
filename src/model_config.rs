@@ -323,13 +323,20 @@ impl ModelConfig {
 
     /// Determine if FFN execution should be treated as split (separate infer component)
     pub fn ffn_is_split(&self) -> bool {
-        if let Some(mode) = self.ffn_execution.as_deref() { return mode == "split"; }
-        if let (Some(prefill), Some(infer)) = (self.components.get("ffn_prefill"), self.components.get("ffn_infer")) {
+        if let Some(mode) = self.ffn_execution.as_deref() {
+            return mode == "split";
+        }
+        if let (Some(prefill), Some(infer)) = (
+            self.components.get("ffn_prefill"),
+            self.components.get("ffn_infer"),
+        ) {
             match (&prefill.file_path, &infer.file_path) {
                 (Some(p), Some(i)) => p != i, // different files => split
                 _ => false,
             }
-        } else { false }
+        } else {
+            false
+        }
     }
 
     /// Detect if prefill should run in single-token sequential mode based on configured shapes

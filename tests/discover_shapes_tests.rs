@@ -1,8 +1,8 @@
 //! Tests for the Python discover_shapes tool logic (post_process_config & shape derivation heuristics)
 //! These tests avoid invoking coremltools (heavy dependency) by exercising pure-Python post-processing
 //! through reimplementation of critical heuristics in Rust for parity validation.
-use std::process::Command;
 use serde_json::Value;
+use std::process::Command;
 
 fn run_discover(model_dir: &str) -> Option<Value> {
     // Requires python & coremltools; skip gracefully if unavailable
@@ -11,10 +11,15 @@ fn run_discover(model_dir: &str) -> Option<Value> {
     let output_file = tempfile::NamedTempFile::new().ok()?;
     let status = Command::new(python)
         .arg("tools/discover_shapes.py")
-        .arg("--model-dir").arg(model_dir)
-        .arg("--output").arg(output_file.path())
-        .status().ok()?;
-    if !status.success() { return None; }
+        .arg("--model-dir")
+        .arg(model_dir)
+        .arg("--output")
+        .arg(output_file.path())
+        .status()
+        .ok()?;
+    if !status.success() {
+        return None;
+    }
     let data = std::fs::read_to_string(output_file.path()).ok()?;
     serde_json::from_str(&data).ok()
 }
@@ -34,10 +39,16 @@ fn test_post_process_split_execution_detection() {
     });
     // Mirror Python post_process_config logic in Rust for validation
     let components = cfg.get_mut("components").unwrap();
-    if let (Some(pref), Some(infer)) = (components.get("ffn_prefill"), components.get("ffn_infer")) {
+    if let (Some(pref), Some(infer)) = (components.get("ffn_prefill"), components.get("ffn_infer"))
+    {
         let pre = pref.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-        let inf = infer.get("file_path").and_then(|v| v.as_str()).unwrap_or("");
-        if pre != inf { cfg["ffn_execution"] = Value::from("split"); }
+        let inf = infer
+            .get("file_path")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if pre != inf {
+            cfg["ffn_execution"] = Value::from("split");
+        }
     }
     assert_eq!(cfg["ffn_execution"], "split");
 }
@@ -57,7 +68,9 @@ fn test_post_process_sequential_prefill_hint() {
     if let Some(pref) = components.get("ffn_prefill") {
         if let Some(hs) = pref.get("inputs").and_then(|i| i.get("hidden_states")) {
             if let Some(arr) = hs.get("shape").and_then(|s| s.as_array()) {
-                if arr.len()==3 && arr[1].as_i64()==Some(1) { cfg["hints"] = serde_json::json!({"prefill_mode":"sequential"}); }
+                if arr.len() == 3 && arr[1].as_i64() == Some(1) {
+                    cfg["hints"] = serde_json::json!({"prefill_mode":"sequential"});
+                }
             }
         }
     }

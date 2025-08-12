@@ -54,6 +54,8 @@ jobs:
         # Run only unit tests that don't require large model downloads
         cargo test --verbose --test builder_tests
         cargo test --verbose --test utils_tests
+        cargo test --verbose --test tensor_regression_tests
+        cargo test --verbose --test discover_shapes_tests
         # Skip integration tests that require actual models in CI
         echo "Skipping integration tests that require model downloads in CI"
       continue-on-error: true
