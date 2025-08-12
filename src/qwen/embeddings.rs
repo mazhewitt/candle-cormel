@@ -117,7 +117,7 @@ impl QwenModel {
             .components
             .contains_key("ffn_infer")
         {
-            // Typo-fixer style: Use single token embedding for separate infer component
+            // Split-FFN style: Use single token embedding for separate infer component
             debug!("Using single token embedding for separate FFN infer component");
             self.get_last_token_embedding_optimized(tokens)
         } else {

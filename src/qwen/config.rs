@@ -251,8 +251,8 @@ impl QwenConfig {
                 debug!("⚠️ SHAPE WARNING: No ffn_infer component found");
             }
 
-            // CRITICAL FIX: For typo-fixer models, ALWAYS use infer tensor shape in infer mode
-            // This prevents falling back to the prefill shape (64) when we need infer shape (1)
+            // CRITICAL FIX: For single-token inference, ALWAYS use infer tensor shape
+            // This prevents falling back to the prefill shape when we need infer shape
             if positions.len() == 1 {
                 debug!("🔧 SHAPE FIX: Forcing infer position_ids tensor for single position");
                 return self.create_infer_position_ids_tensor(positions[0] as usize);
