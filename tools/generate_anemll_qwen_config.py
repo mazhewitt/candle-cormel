@@ -5,7 +5,7 @@ Goals:
   * Accept a model directory containing .mlpackage / .mlmodelc parts.
   * Auto-detect embeddings, FFN (prefill & infer), LM head (chunked logits) using discover_shapes logic.
   * Produce a single candle-coreml ModelConfig JSON (shapes + components + naming=NULL) suitable for direct loading.
-  * Handle typo-fixer style (separate prefill/infer) and unified FFN models.
+  * Handle split-FFN style (separate prefill/infer) and unified FFN models.
   * Warn about anomalies (position_ids mismatch, missing functions, multipart logits).
 
 Usage:

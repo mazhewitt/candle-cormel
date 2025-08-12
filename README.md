@@ -214,7 +214,7 @@ This crate follows the **inference engine** pattern rather than treating CoreML 
 
 ## 🔥 Complete Worked Example
 
-**👉 [BERT CoreML Inference - Step-by-Step Guide](https://github.com/mazhewitt/candle-cormel/blob/main/examples/WORKED_EXAMPLE.md)**
+**👉 [BERT CoreML Inference - Step-by-Step Guide](examples/WORKED_EXAMPLE.md)**
 
 A comprehensive tutorial covering:
 - Model download and compilation
@@ -258,7 +258,7 @@ Apple automatically chooses the best available backend, but your model must be A
 
 ## Model Configuration System (Generic Qwen / ANEMLL Models)
 
-Complex multi-component language models (e.g. ANEMLL Qwen variants, typo-fixer fine-tunes) are described declaratively using a `ModelConfig` JSON file. This removes hardcoded shapes and enables:
+Complex multi-component language models (e.g. ANEMLL Qwen variants, custom fine-tunes) are described declaratively using a `ModelConfig` JSON file. This removes hardcoded shapes and enables:
 
 - Explicit component file paths (no globbing)
 - Per-component input/output tensor shapes & dtypes
@@ -293,7 +293,7 @@ If `ffn_execution` is omitted, the system infers `split` when `ffn_prefill.file_
 
 ### Prefill Modes
 
-Prefill can be either batch (process full sequence in one call) or sequential (one token at a time). Sequential mode is auto-enabled when `ffn_prefill.hidden_states` shape has `seq_len == 1` (e.g. `[1,1,H]`) indicating a single-token CoreML prefill variant. This matches certain fine-tuned or distilled models (like a typo-fixer) exported with single-token kernels.
+Prefill can be either batch (process full sequence in one call) or sequential (one token at a time). Sequential mode is auto-enabled when `ffn_prefill.hidden_states` shape has `seq_len == 1` (e.g. `[1,1,H]`) indicating a single-token CoreML prefill variant. This matches certain fine-tuned or distilled models exported with single-token kernels.
 
 ### Multipart Logits
 
@@ -320,7 +320,7 @@ Legacy filename pattern discovery has been removed. Always set `file_path` for e
 | Incorrect token length padding | Embeddings `input_ids` shape mismatch | Align `embeddings.inputs.input_ids.shape` with expected max prefill length |
 | LM head shape mismatch | `output_hidden_states` vs `lm_head.hidden_states` differ | Regenerate config with discovery tool; fix shapes |
 
-For detailed examples see `configs/` directory (e.g. `typo-fixer-working.json`).
+For detailed examples see `configs/` directory (e.g. `anemll-qwen3-0.6b.json`).
 
 
 ## Examples

@@ -205,7 +205,7 @@ class ModelShapeDiscovery:
     def _derive_model_shapes(self, components: Dict[str, Any]) -> Dict[str, Any]:
         """Derive overall model configuration from component shapes.
 
-        Heuristics (tailored for ANEMLL/Qwen + typo-fixer variants):
+        Heuristics (tailored for ANEMLL/Qwen + custom variants):
           * Prefer causal_mask of ffn_prefill to determine (prefill_block_size, context_length):
               causal_mask shape: [1, 1, prefill_block_size, context_length]
               -> batch_size := prefill_block_size (matches legacy candle usage)
@@ -274,7 +274,7 @@ class ModelShapeDiscovery:
                             f"⚠️  Warning: ffn_prefill.position_ids shape {pshape} not 1 or batch_size ({shapes.get('batch_size')}).",
                             file=sys.stderr,
                         )
-                    # Special case: shape [1] while batch_size > 1 → expected for typo-fixer variant
+                    # Special case: shape [1] while batch_size > 1 → expected for single-token variant
                     if len(pshape) == 1 and pshape[0] == 1 and shapes.get("batch_size") > 1:
                         print(
                             "ℹ️  Note: position_ids=[1] with batch_size>1 (prefill block). This is a known fine-tuned variant pattern.",
@@ -432,7 +432,7 @@ Examples:
   python discover_shapes.py --scan-directory models/ --output-dir configs/
   
   # Verbose output with detailed analysis
-  python discover_shapes.py --model-dir models/qwen-typo-fixer-ane --output config.json --verbose
+  python discover_shapes.py --model-dir models/qwen-custom-model --output config.json --verbose
         """
     )
     
