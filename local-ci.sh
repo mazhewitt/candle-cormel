@@ -110,6 +110,20 @@ if cargo test --verbose --test utils_tests; then
 else
     print_warning "Utils tests failed (may be expected)"
 fi
+
+print_step "Running tensor regression tests..."
+if cargo test --verbose --test tensor_regression_tests; then
+    print_success "Tensor regression tests passed"
+else
+    print_warning "Tensor regression tests failed (may be expected)"
+fi
+
+print_step "Running discover shapes tests..."
+if cargo test --verbose --test discover_shapes_tests; then
+    print_success "Discover shapes tests passed"
+else
+    print_warning "Discover shapes tests failed (may be expected)"
+fi
 echo ""
 
 # Step 7: Cross-platform Compatibility Tests

@@ -20,7 +20,6 @@ pub static BUILTIN_CONFIGS: Lazy<HashMap<&'static str, ModelConfig>> = Lazy::new
         configs.insert("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4", config);
     }
 
-
     configs
 });
 
@@ -157,7 +156,6 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
   "lm_head_pattern": null
   }
 }"#;
-
 
 #[cfg(test)]
 mod tests {
