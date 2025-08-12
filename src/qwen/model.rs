@@ -26,6 +26,7 @@ pub struct QwenModel {
     pub cached_position_ids: Option<Tensor>, // Pre-computed position IDs for batch sizes
     pub cached_update_mask: Option<Tensor>,  // Pre-allocated update mask tensor
     pub cached_single_pos_tensor: Option<Tensor>, // Pre-allocated [1] tensor for current_pos
+    pub last_single_token_prefill_len: Option<usize>, // How many context tokens have been prefetched into KV cache in single-token mode
 }
 
 impl QwenModel {
@@ -37,6 +38,11 @@ impl QwenModel {
         causal_mask_full: &Tensor,
     ) -> Result<(), CandleError> {
         let device = &self.config.device;
+        let actual_seq = embeddings.dim(1)?;
+        if pos >= actual_seq {
+            // Stop early: we reached beyond real (unpadded) token sequence inside padded embeddings
+            return Ok(());
+        }
         // Narrow embeddings for current token
         let token_embed = embeddings.narrow(1, pos, 1).map_err(|e| {
             CandleError::Msg(format!(
@@ -45,14 +51,35 @@ impl QwenModel {
         })?;
         // [1] position_ids tensor
         let position_ids = Tensor::from_vec(vec![pos as i64], (1,), device)?;
-        // Narrow causal mask if needed
-        let causal_mask = match causal_mask_full.dim(2) {
-            Ok(d) if d > 1 => causal_mask_full
-                .narrow(2, pos, 1)
-                .unwrap_or_else(|_| causal_mask_full.clone()),
-            _ => causal_mask_full.clone(),
-        };
+        // Build a per-position single-row causal mask [1,1,1,context] that allows 0..=pos
+        let context_length = self.config.context_length();
+        let causal_mask = self.config
+            .create_infer_causal_mask_tensor(pos, context_length)
+            .unwrap_or_else(|_| causal_mask_full.clone());
         let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
+        let _ = self.run_ffn_prefill_with_inputs(&token_embed, &position_ids, &causal_mask, &current_pos)?;
+        Ok(())
+    }
+
+    /// Variant used for multi-chunk sequential prefill where embeddings is a window and `global_pos` is absolute token index.
+    pub(crate) fn prefill_single_token_step_chunk(
+        &mut self,
+        embeddings_chunk: &Tensor,
+        local_pos: usize,
+        global_pos: usize,
+        causal_mask_full: &Tensor,
+    ) -> Result<(), CandleError> {
+        let device = &self.config.device;
+        let actual_seq = embeddings_chunk.dim(1)?;
+        if local_pos >= actual_seq { return Ok(()); }
+        let token_embed = embeddings_chunk.narrow(1, local_pos, 1)?;
+        let position_ids = Tensor::from_vec(vec![global_pos as i64], (1,), device)?;
+        // Build a per-position single-row causal mask [1,1,1,context] that allows 0..=global_pos
+        let context_length = self.config.context_length();
+        let causal_mask = self.config
+            .create_infer_causal_mask_tensor(global_pos, context_length)
+            .unwrap_or_else(|_| causal_mask_full.clone());
+        let current_pos = Tensor::from_vec(vec![global_pos as i64], (1,), device)?;
         let _ = self.run_ffn_prefill_with_inputs(&token_embed, &position_ids, &causal_mask, &current_pos)?;
         Ok(())
     }
@@ -266,6 +293,7 @@ impl QwenModel {
             cached_position_ids: None,
             cached_update_mask: None,
             cached_single_pos_tensor: None,
+            last_single_token_prefill_len: None,
         })
     }
 
