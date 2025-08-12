@@ -213,6 +213,26 @@ src/qwen/
 - **Consumer Example**: `../typo-fixer-cli/` - Real-world usage demonstration
 - **Test Cases**: `tests/qwen_tests.rs` - Multi-model testing
 
+## 🔧 Development Notes
+
+### Viewing Tracing Output
+
+The codebase uses `tracing` for debug logging. To view tracing output when running tests or examples:
+
+```bash
+# View debug-level tracing output
+RUST_LOG=debug cargo test test_name -- --nocapture
+
+# View trace-level output (more verbose)
+RUST_LOG=trace cargo test test_name -- --nocapture
+
+# Filter to specific modules (e.g., just candle-coreml)
+RUST_LOG=candle_coreml=debug cargo test test_name -- --nocapture
+
+# View tracing output when running examples
+RUST_LOG=debug cargo run --example example_name
+```
+
 ---
 
 **Priority**: High - This enhancement is critical for candle-coreml to be truly generic and support the diverse ecosystem of ANEMLL models.
