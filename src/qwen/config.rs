@@ -137,15 +137,14 @@ impl QwenConfig {
         let mask_batch_size = expected_shape[2];
         let mask_context_length = expected_shape[3];
 
-        // Create causal mask data
+        // For single-token sequential prefill (hidden_states shape [1,1,H]) we still need a full causal mask logically,
+        // but the network expects shape [1,1,1,context_length]. We'll just build the expected shape directly.
         let mut mask_data = vec![f32::NEG_INFINITY; mask_batch_size * mask_context_length];
-
-        for i in 0..mask_batch_size {
-            for j in 0..=i.min(mask_context_length - 1) {
+        for i in 0..mask_batch_size { // usually 1 in sequential mode
+            for j in 0..=i.min(mask_context_length - 1) { // i will be 0 -> only j=0 set to 0.0
                 mask_data[i * mask_context_length + j] = 0.0;
             }
         }
-
         candle_core::Tensor::from_vec(
             mask_data,
             (

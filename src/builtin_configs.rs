@@ -21,6 +21,9 @@ pub static BUILTIN_CONFIGS: Lazy<HashMap<&'static str, ModelConfig>> = Lazy::new
     }
 
     // Typo-fixer model
+  if let Ok(config) = serde_json::from_str(TYPO_FIXER_QWEN_CONFIG) {
+    configs.insert("mazhewitt/qwen-typo-fixer", config);
+  }
 
     configs
 });
@@ -157,6 +160,91 @@ const ANEMLL_QWEN3_0_6B_CONFIG: &str = r#"{
   "ffn_prefill_pattern": null,
   "lm_head_pattern": null
   }
+}"#;
+
+/// Typo-fixer Qwen fine-tuned model configuration (single-token prefill shapes, split FFN, multipart logits)
+const TYPO_FIXER_QWEN_CONFIG: &str = r#"{
+  "model_info": {
+    "model_id": "mazhewitt/qwen-typo-fixer",
+    "model_type": "qwen",
+    "discovered_at": "2025-08-10T00:00:00"
+  },
+  "shapes": {
+    "batch_size": 64,
+    "context_length": 256,
+    "hidden_size": 1024,
+    "vocab_size": 151669
+  },
+  "components": {
+    "embeddings": {
+      "file_path": "qwen-typo-fixer_embeddings.mlpackage",
+      "inputs": {
+        "input_ids": { "name": "input_ids", "shape": [1, 64], "data_type": "INT32" }
+      },
+      "outputs": {
+        "hidden_states": { "name": "hidden_states", "shape": [1, 64, 1024], "data_type": "FLOAT16" }
+      },
+      "functions": []
+    },
+    "ffn_prefill": {
+      "file_path": "qwen-typo-fixer_FFN_PF_lut4_chunk_01of01.mlpackage",
+      "inputs": {
+        "hidden_states": { "name": "hidden_states", "shape": [1, 1, 1024], "data_type": "FLOAT16" },
+        "position_ids": { "name": "position_ids", "shape": [1], "data_type": "INT32" },
+        "causal_mask": { "name": "causal_mask", "shape": [1, 1, 1, 256], "data_type": "FLOAT16" },
+        "current_pos": { "name": "current_pos", "shape": [1], "data_type": "INT32" }
+      },
+      "outputs": {
+        "output_hidden_states": { "name": "output_hidden_states", "shape": [1, 1, 1024], "data_type": "FLOAT16" }
+      },
+      "functions": ["prefill"]
+    },
+    "ffn_infer": {
+      "file_path": "qwen-typo-fixer_FFN_lut4_chunk_01of01.mlpackage",
+      "inputs": {
+        "hidden_states": { "name": "hidden_states", "shape": [1, 1, 1024], "data_type": "FLOAT16" },
+        "position_ids": { "name": "position_ids", "shape": [1], "data_type": "INT32" },
+        "causal_mask": { "name": "causal_mask", "shape": [1, 1, 1, 256], "data_type": "FLOAT16" },
+        "current_pos": { "name": "current_pos", "shape": [1], "data_type": "INT32" }
+      },
+      "outputs": {
+        "output_hidden_states": { "name": "output_hidden_states", "shape": [1, 1, 1024], "data_type": "FLOAT16" }
+      },
+      "functions": ["infer"]
+    },
+    "lm_head": {
+      "file_path": "qwen-typo-fixer_lm_head_lut6.mlpackage",
+      "inputs": {
+        "hidden_states": { "name": "hidden_states", "shape": [1, 1, 1024], "data_type": "FLOAT16" }
+      },
+      "outputs": {
+        "logits1": { "name": "logits1", "shape": [1, 1, 9480], "data_type": "FLOAT16" },
+        "logits2": { "name": "logits2", "shape": [1, 1, 9480], "data_type": "FLOAT16" },
+        "logits3": { "name": "logits3", "shape": [1, 1, 9480], "data_type": "FLOAT16" },
+        "logits4": { "name": "logits4", "shape": [1, 1, 9480], "data_type": "FLOAT16" },
+        "logits5": { "name": "logits5", "shape": [1, 1, 9480], "data_type": "FLOAT16" },
+        "logits6": { "name": "logits6", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits7": { "name": "logits7", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits8": { "name": "logits8", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits9": { "name": "logits9", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits10": { "name": "logits10", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits11": { "name": "logits11", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits12": { "name": "logits12", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits13": { "name": "logits13", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits14": { "name": "logits14", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits15": { "name": "logits15", "shape": [1, 1, 9479], "data_type": "FLOAT16" },
+        "logits16": { "name": "logits16", "shape": [1, 1, 9479], "data_type": "FLOAT16" }
+      },
+      "functions": []
+    }
+  },
+  "naming": {
+    "embeddings_pattern": null,
+    "ffn_prefill_pattern": null,
+    "ffn_infer_pattern": null,
+    "lm_head_pattern": null
+  },
+  "ffn_execution": "split"
 }"#;
 
 #[cfg(test)]
