@@ -34,3 +34,6 @@ time_*.rs
 test_tensors/
 *.npy
 rust_embeddings.npy
+
+# demonstration repos
+typo-fixer-cli
