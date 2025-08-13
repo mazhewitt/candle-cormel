@@ -26,7 +26,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-candle-coreml = "0.2.2"
+candle-coreml = "0.2.3"
 candle-core = "0.9.1"
 ```
 
