@@ -1,3 +1,5 @@
+# Ignore Python virtual environment
+.shape-env/
 # Rust
 /target/
 **/*.rs.bk

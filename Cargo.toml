@@ -10,7 +10,7 @@ keywords = ["machine-learning", "coreml", "candle", "apple-neural-engine", "sent
 categories = ["science", "api-bindings"]
 license = "MIT OR Apache-2.0"
 authors = ["candle-coreml contributors"]
-exclude = ["target/", "examples/models/", ".git/", "*.mlmodelc", "*.mlpackage", "mistral-model/"]
+exclude = ["target/", "examples/models/", ".git/", "*.mlmodelc", "*.mlpackage", "mistral-model/", ".shape-env/"]
 readme = "README.md"
 
 [dependencies]
