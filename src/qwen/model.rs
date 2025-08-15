@@ -9,6 +9,7 @@ use candle_core::{Error as CandleError, Tensor};
 use std::path::Path;
 use tokenizers::Tokenizer;
 use tracing::{debug, warn};
+use tracing_subscriber::fmt; // Ensure you import the necessary traits and types from tracing-subscriber
 
 /// Complete Qwen model with all components and state management
 pub struct QwenModel {
@@ -97,6 +98,46 @@ impl QwenModel {
         )?;
         Ok(())
     }
+
+    /// Full-sequence prefill for CoreML models that expect fixed-length inputs (e.g., 128 tokens)
+    /// This bypasses single-token processing and sends the complete sequence to CoreML
+    pub(crate) fn prefill_full_sequence_chunk(
+        &mut self,
+        embeddings_chunk: &Tensor,
+        max_global_pos: usize,
+        causal_mask_full: &Tensor,
+    ) -> Result<(), CandleError> {
+        let device = &self.config.device;
+        let seq_len = embeddings_chunk.dim(1)?;
+
+        // Create position_ids for the full sequence [0, 1, 2, ..., seq_len-1]
+        let position_ids_vec: Vec<i64> = (0..seq_len as i64).collect();
+        let position_ids = self.create_position_tensor(position_ids_vec)?;
+
+        // Use the full causal mask (should already be correctly sized for the sequence)
+        let causal_mask = causal_mask_full.clone();
+
+        // Set current_pos to the last meaningful position
+        let current_pos = Tensor::from_vec(vec![max_global_pos as i64], (1,), device)?;
+
+        debug!(
+            "🚀 FULL-SEQUENCE PREFILL: Processing full sequence with shape {:?}, max_pos: {}",
+            embeddings_chunk.dims(),
+            max_global_pos
+        );
+
+        // Send the full sequence to CoreML prefill model
+        let _ = self.run_ffn_prefill_with_inputs(
+            embeddings_chunk, // Full [1, 128, 1024] tensor
+            &position_ids,    // [128] position IDs
+            &causal_mask,     // Full causal mask
+            &current_pos,     // [1] current position
+        )?;
+
+        debug!("✅ FULL-SEQUENCE PREFILL: Successfully processed full sequence");
+        Ok(())
+    }
+
     // Pattern/glob discovery removed. Explicit file paths are now required in ModelConfig.
 
     /// Load Qwen model from the specified directory
@@ -105,6 +146,11 @@ impl QwenModel {
         model_dir: P,
         config: Option<QwenConfig>,
     ) -> Result<Self, CandleError> {
+        let subscriber = fmt::Subscriber::builder()
+            .with_env_filter("debug") // Adjust the filter level as needed (e.g., "info", "warn", etc.)
+            .finish();
+        let _ = tracing::subscriber::set_global_default(subscriber); // Ignore error if already set
+
         let config = config.unwrap_or_default();
         let model_dir = model_dir.as_ref();
 

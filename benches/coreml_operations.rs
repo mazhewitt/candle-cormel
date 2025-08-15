@@ -7,7 +7,8 @@
 
 use candle_core::{DType, Device, Tensor};
 use candle_coreml::{Config, CoreMLModel};
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]

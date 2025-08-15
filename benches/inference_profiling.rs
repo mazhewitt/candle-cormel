@@ -7,7 +7,8 @@
 #![allow(clippy::get_first)]
 
 use candle_coreml::qwen::QwenModel;
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 const TEST_PROMPT: &str = "The quick brown fox jumps over the lazy";

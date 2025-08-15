@@ -3,7 +3,8 @@
 //! This runs fewer samples and shorter measurements to get rapid feedback
 
 use candle_core::{DType, Device, Tensor};
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{criterion_group, criterion_main, Criterion};
+use std::hint::black_box;
 use std::time::Duration;
 
 #[cfg(target_os = "macos")]
