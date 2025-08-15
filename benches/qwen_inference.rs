@@ -9,7 +9,8 @@
 
 use candle_core::{Device, Tensor};
 use candle_coreml::{ensure_model_downloaded, qwen::QwenModel};
-use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
+use std::hint::black_box;
 use std::time::Duration;
 
 const BASELINE_PYTHON_TPS: f64 = 87.0; // tokens/second from chat.py

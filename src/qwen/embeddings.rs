@@ -108,23 +108,12 @@ impl QwenModel {
     pub fn get_infer_hidden_states(
         &mut self,
         tokens: &[i64],
-        pos: usize,
+        _pos: usize,
     ) -> Result<Tensor, CandleError> {
-        // Check if we have a separate FFN infer component
-        if self
-            .config
-            .model_config
-            .components
-            .contains_key("ffn_infer")
-        {
-            // Split-FFN style: Use single token embedding for separate infer component
-            debug!("Using single token embedding for separate FFN infer component");
-            self.get_last_token_embedding_optimized(tokens)
-        } else {
-            // Standard ANEMLL style: Use full sequence embeddings for unified FFN component
-            debug!("Using full sequence embeddings for unified FFN component");
-            self.get_full_sequence_embeddings_for_infer(tokens, pos)
-        }
+        // For inference phase, we need single-token embeddings for the infer model
+        // The infer model always expects single-token inputs regardless of prefill model flexibility
+        debug!("🔍 get_infer_hidden_states: Using single token embedding for inference phase");
+        self.get_last_token_embedding_optimized(tokens)
     }
 
     /// Get full sequence embeddings for inference (needed by standard ANEMLL model)

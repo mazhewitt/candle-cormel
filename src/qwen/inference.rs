@@ -137,37 +137,69 @@ impl QwenModel {
             let causal_mask_full = self.cached_causal_mask.as_ref().unwrap().clone();
 
             if !plan.steps.is_empty() {
-                // If a single window suffices, reuse the full embeddings; otherwise recompute per-window slices
-                if context_pos <= embed_seq_len && already_prefilled + 1 < context_pos {
-                    for step in &plan.steps {
-                        self.prefill_single_token_step_chunk(
-                            &embeddings,
-                            step.local_idx,
-                            step.global_pos,
-                            &causal_mask_full,
-                        )?;
+                // Check if model expects full-sequence inputs (like CoreML models with fixed shapes)
+                if self.config.model_config.expects_full_sequence_prefill() {
+                    debug!("🚀 Using FULL-SEQUENCE prefill mode for CoreML model");
+                    // For CoreML models: send the full embeddings sequence once
+                    if context_pos <= embed_seq_len && already_prefilled + 1 < context_pos {
+                        let max_pos = plan.steps.iter().map(|s| s.global_pos).max().unwrap_or(0);
+                        self.prefill_full_sequence_chunk(&embeddings, max_pos, &causal_mask_full)?;
+                    } else {
+                        // Multi-window: process each window as a full sequence
+                        let mut processed = already_prefilled.min(context_pos);
+                        while processed < context_pos {
+                            let window_end = (processed + embed_seq_len).min(context_pos);
+                            let window_tokens = &tokens[processed..window_end];
+                            let window_embeddings = self.compute_embeddings(window_tokens)?;
+                            let window_max_pos = plan
+                                .steps
+                                .iter()
+                                .filter(|s| s.global_pos >= processed && s.global_pos < window_end)
+                                .map(|s| s.global_pos)
+                                .max()
+                                .unwrap_or(processed);
+                            self.prefill_full_sequence_chunk(
+                                &window_embeddings,
+                                window_max_pos,
+                                &causal_mask_full,
+                            )?;
+                            processed = window_end;
+                        }
                     }
                 } else {
-                    // Multi-window: recompute embeddings per window slice
-                    let mut processed = already_prefilled.min(context_pos);
-                    while processed < context_pos {
-                        let window_end = (processed + embed_seq_len).min(context_pos);
-                        let window_tokens = &tokens[processed..window_end];
-                        let window_embeddings = self.compute_embeddings(window_tokens)?;
-                        for step in plan
-                            .steps
-                            .iter()
-                            .filter(|s| s.global_pos >= processed && s.global_pos < window_end)
-                        {
-                            let local = step.global_pos - processed;
+                    debug!("🔄 Using SINGLE-TOKEN prefill mode for non-CoreML model");
+                    // Original single-token processing for non-CoreML models
+                    if context_pos <= embed_seq_len && already_prefilled + 1 < context_pos {
+                        for step in &plan.steps {
                             self.prefill_single_token_step_chunk(
-                                &window_embeddings,
-                                local,
+                                &embeddings,
+                                step.local_idx,
                                 step.global_pos,
                                 &causal_mask_full,
                             )?;
                         }
-                        processed = window_end;
+                    } else {
+                        // Multi-window: recompute embeddings per window slice
+                        let mut processed = already_prefilled.min(context_pos);
+                        while processed < context_pos {
+                            let window_end = (processed + embed_seq_len).min(context_pos);
+                            let window_tokens = &tokens[processed..window_end];
+                            let window_embeddings = self.compute_embeddings(window_tokens)?;
+                            for step in plan
+                                .steps
+                                .iter()
+                                .filter(|s| s.global_pos >= processed && s.global_pos < window_end)
+                            {
+                                let local = step.global_pos - processed;
+                                self.prefill_single_token_step_chunk(
+                                    &window_embeddings,
+                                    local,
+                                    step.global_pos,
+                                    &causal_mask_full,
+                                )?;
+                            }
+                            processed = window_end;
+                        }
                     }
                 }
             }
@@ -259,6 +291,16 @@ impl QwenModel {
         tokens: &[i64],
         context_pos: usize,
     ) -> Result<(), CandleError> {
+        // Check if this model expects full-sequence prefill (e.g., CoreML with fixed shapes)
+        if self.config.model_config.expects_full_sequence_prefill() {
+            debug!("🚀 CHATPY-PREFILL: Using FULL-SEQUENCE mode for CoreML model");
+            // For full-sequence models, send the complete embeddings once
+            let embeddings = self.compute_embeddings(tokens)?;
+            let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone();
+            return self.prefill_full_sequence_chunk(&embeddings, context_pos - 1, &causal_mask);
+        }
+
+        debug!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
         let batch_size = self.config.batch_size(); // 64
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask

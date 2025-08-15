@@ -109,7 +109,6 @@ pub mod mask {
 /// Utilities for sampling from model outputs
 pub mod sampling {
     use super::*;
-    use rand::Rng;
 
     /// Sample a token using temperature scaling
     ///
@@ -140,8 +139,7 @@ pub mod sampling {
         let probs_vec = probs.to_vec1::<f32>()?;
 
         // Sample from the distribution
-        let mut rng = rand::thread_rng();
-        let random_val: f32 = rng.gen();
+        let random_val: f32 = rand::random();
 
         let mut cumulative = 0.0;
         for (i, &prob) in probs_vec.iter().enumerate() {

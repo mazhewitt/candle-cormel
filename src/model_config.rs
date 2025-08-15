@@ -9,6 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
+use tracing::debug;
 
 /// Complete model configuration including shapes, components, and naming patterns
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -343,9 +344,42 @@ impl ModelConfig {
     pub fn prefill_is_single_token(&self) -> bool {
         if let Some(prefill) = self.components.get("ffn_prefill") {
             if let Some(hs) = prefill.inputs.get("hidden_states") {
-                return hs.shape.len() == 3 && hs.shape.get(1) == Some(&1);
+                let is_single = hs.shape.len() == 3 && hs.shape.get(1) == Some(&1);
+                debug!(
+                    "🔍 prefill_is_single_token: shape={:?}, len={}, dim[1]={:?}, result={}",
+                    hs.shape,
+                    hs.shape.len(),
+                    hs.shape.get(1),
+                    is_single
+                );
+                return is_single;
             }
         }
+        debug!(
+            "🔍 prefill_is_single_token: no ffn_prefill or hidden_states found, returning false"
+        );
+        false
+    }
+
+    /// Check if the model expects full sequence prefill (as opposed to single-token processing)
+    /// This is typically true for CoreML models with fixed-shape inputs like [1, 128, 1024]
+    pub fn expects_full_sequence_prefill(&self) -> bool {
+        if let Some(prefill) = self.components.get("ffn_prefill") {
+            if let Some(hs) = prefill.inputs.get("hidden_states") {
+                // If the model expects a fixed sequence length > 1, it needs full-sequence prefill
+                let expects_full =
+                    hs.shape.len() == 3 && hs.shape.get(1).is_some_and(|&seq_len| seq_len > 1);
+                debug!(
+                    "🔍 expects_full_sequence_prefill: shape={:?}, len={}, dim[1]={:?}, result={}",
+                    hs.shape,
+                    hs.shape.len(),
+                    hs.shape.get(1),
+                    expects_full
+                );
+                return expects_full;
+            }
+        }
+        debug!("🔍 expects_full_sequence_prefill: no ffn_prefill or hidden_states found, returning false");
         false
     }
 }
