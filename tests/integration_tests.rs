@@ -284,8 +284,8 @@ fn test_device_validation_cuda_rejection() {
 fn test_tensor_roundtrip() {
     let device = Device::Cpu;
     let original_data = vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0];
-    let tensor = Tensor::from_slice(&original_data, (6,), &device)
-        .expect("Failed to create tensor");
+    let tensor =
+        Tensor::from_slice(&original_data, (6,), &device).expect("Failed to create tensor");
 
     // Test that tensor data can be extracted
     let extracted: Vec<f32> = tensor.to_vec1().expect("Failed to extract tensor data");
@@ -442,7 +442,9 @@ fn test_stateful_prediction_persistence() {
     };
 
     // OpenELM models don't support stateful predictions with persistent state
-    eprintln!("ℹ️  Stateful persistence test - OpenELM models typically don't support persistent states");
+    eprintln!(
+        "ℹ️  Stateful persistence test - OpenELM models typically don't support persistent states"
+    );
     eprintln!("✅ Stateful persistence test passed (skipped for OpenELM compatibility)");
 }
 
@@ -519,12 +521,16 @@ fn test_openelm_baseline_text_completion() {
         .map(|(i, &score)| (i, score))
         .expect("Failed to find top prediction");
 
-    println!("🏆 Top prediction: Token {} with score {:.3}", top_token_id, top_token_score);
+    println!("🏆 Top prediction: Token {top_token_id} with score {top_token_score:.3}");
 
     // Get top 5 predictions for debugging
-    let mut indexed_logits: Vec<(usize, f32)> = logits_vec.iter().enumerate().map(|(i, &v)| (i, v)).collect();
+    let mut indexed_logits: Vec<(usize, f32)> = logits_vec
+        .iter()
+        .enumerate()
+        .map(|(i, &v)| (i, v))
+        .collect();
     indexed_logits.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-    
+
     println!("📊 Top 5 predictions:");
     for (rank, &(token_id, score)) in indexed_logits.iter().take(5).enumerate() {
         println!("  {}. Token {}: {:.3}", rank + 1, token_id, score);
@@ -533,14 +539,12 @@ fn test_openelm_baseline_text_completion() {
     // Expected: Token 11203 should be "dog" with high confidence
     assert_eq!(
         top_token_id, 11203,
-        "Expected 'dog' (token 11203) as top prediction, got token {}",
-        top_token_id
+        "Expected 'dog' (token 11203) as top prediction, got token {top_token_id}"
     );
 
     assert!(
         top_token_score > 10.0,
-        "Expected high confidence (>10.0), got {:.3}",
-        top_token_score
+        "Expected high confidence (>10.0), got {top_token_score:.3}"
     );
 
     let logit_range = indexed_logits[0].1 - indexed_logits.last().unwrap().1;
@@ -554,7 +558,7 @@ fn test_openelm_baseline_text_completion() {
     println!("🎉 BASELINE TEST PASSED!");
     println!("  ✅ OpenELM correctly predicts 'dog' for 'quick brown fox' completion");
     println!("  ✅ CoreML infrastructure working perfectly");
-    println!("  ✅ Confidence: {:.3}, Range: {:.3}", top_token_score, logit_range);
+    println!("  ✅ Confidence: {top_token_score:.3}, Range: {logit_range:.3}");
     println!("  ✅ This confirms our implementation is solid");
 }
 
@@ -562,12 +566,12 @@ fn test_openelm_baseline_text_completion() {
 #[test]
 fn test_stateful_prediction_validation() {
     let config = Config::bert_config("logits", 128, 30522);
-    
+
     // Test that config creation works
     assert_eq!(config.max_sequence_length, 128);
     assert_eq!(config.vocab_size, 30522);
     assert_eq!(config.output_name, "logits");
-    
+
     eprintln!("✅ State parameter validation test passed");
 }
 
@@ -575,14 +579,14 @@ fn test_stateful_prediction_validation() {
 #[test]
 fn test_stateful_device_validation() {
     let device = Device::Cpu;
-    
+
     // Test basic tensor creation and device handling
     let test_data = vec![1.0f32, 2.0, 3.0, 4.0];
-    let tensor = Tensor::from_slice(&test_data, (2, 2), &device)
-        .expect("Failed to create test tensor");
-    
+    let tensor =
+        Tensor::from_slice(&test_data, (2, 2), &device).expect("Failed to create test tensor");
+
     // Device comparison - just check that tensor was created successfully
     assert_eq!(tensor.dims(), &[2, 2]);
-    
+
     eprintln!("✅ Device validation test passed");
 }

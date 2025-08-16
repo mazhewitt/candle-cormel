@@ -114,23 +114,35 @@ impl QwenModel {
         // This matches the Python workflow: infer uses current_token embeddings, not prefill output
         // The prefill step updates the KV cache, then infer processes current token with fresh embeddings
         debug!("🔍 get_infer_hidden_states: Computing fresh embeddings for current token (position {})", pos - 1);
-        
+
         // Get the current token (last token in the sequence)
         if pos == 0 || pos > tokens.len() {
             return Err(CandleError::Msg(format!(
-                "Invalid position {} for token sequence of length {}", pos, tokens.len()
+                "Invalid position {} for token sequence of length {}",
+                pos,
+                tokens.len()
             )));
         }
-        
+
         let current_token = tokens[pos - 1];
-        debug!("🔍 Current token for infer: {} at position {}", current_token, pos - 1);
-        
+        debug!(
+            "🔍 Current token for infer: {} at position {}",
+            current_token,
+            pos - 1
+        );
+
         // Create single token input tensor and run through embeddings to get 3D output
         let input_tensor = self.create_single_token_embeddings_input(current_token)?;
-        debug!("🔍 Running current token {} through embeddings model", current_token);
+        debug!(
+            "🔍 Running current token {} through embeddings model",
+            current_token
+        );
         let embeddings_output = self.embeddings.forward(&[&input_tensor])?;
-        debug!("🔍 Fresh embeddings output shape: {:?}", embeddings_output.dims());
-        
+        debug!(
+            "🔍 Fresh embeddings output shape: {:?}",
+            embeddings_output.dims()
+        );
+
         Ok(embeddings_output)
     }
 

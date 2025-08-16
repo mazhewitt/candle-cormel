@@ -87,8 +87,8 @@ fn try_load_from_env() -> anyhow::Result<Option<(QwenModel, ModelConfig, String)
         }
     };
 
-    let text = get_env_string("FLEX_TEXT")
-        .unwrap_or_else(|| "Fix typos in this sentance.".to_string());
+    let text =
+        get_env_string("FLEX_TEXT").unwrap_or_else(|| "Fix typos in this sentance.".to_string());
 
     let mut model_config = ModelConfig::load_from_file(&config_path)?;
     adjust_component_paths(&mut model_config, &model_dir);
@@ -118,7 +118,11 @@ fn test_flex_pipeline_shapes_and_infer() -> anyhow::Result<()> {
     // Embeddings input shape
     let emb_input = model.create_embeddings_input_tensor(&tokens)?;
     if let Some(shape) = model_config.embeddings_input_shape() {
-        assert_eq!(emb_input.dims(), &shape[..], "Embeddings input dims mismatch");
+        assert_eq!(
+            emb_input.dims(),
+            &shape[..],
+            "Embeddings input dims mismatch"
+        );
     } else {
         // Fallback: expect 2-D [1, seq]
         let dims = emb_input.dims();
@@ -129,7 +133,11 @@ fn test_flex_pipeline_shapes_and_infer() -> anyhow::Result<()> {
     // Embeddings run -> check output
     let embeddings = model.run_embeddings_with_inputs(&emb_input)?;
     if let Some(shape) = model_config.embeddings_output_shape() {
-        assert_eq!(embeddings.dims(), &shape[..], "Embeddings output dims mismatch");
+        assert_eq!(
+            embeddings.dims(),
+            &shape[..],
+            "Embeddings output dims mismatch"
+        );
     } else {
         // Fallback: expect [1, seq, hidden]
         let dims = embeddings.dims();
@@ -145,7 +153,11 @@ fn test_flex_pipeline_shapes_and_infer() -> anyhow::Result<()> {
     let hidden_states = model.get_infer_hidden_states(&tokens, tokens.len())?;
     // Should match LM head input shape
     if let Some(hs_shape) = model_config.lm_head_input_shape() {
-        assert_eq!(hidden_states.dims(), &hs_shape[..], "Infer hidden_states dims mismatch");
+        assert_eq!(
+            hidden_states.dims(),
+            &hs_shape[..],
+            "Infer hidden_states dims mismatch"
+        );
     } else {
         let dims = hidden_states.dims();
         assert_eq!(dims.len(), 3);
@@ -168,18 +180,25 @@ fn test_flex_pipeline_shapes_and_infer() -> anyhow::Result<()> {
         assert_eq!(dims[0], 1);
     }
 
-    let causal = model
-        .config()
-        .create_causal_mask_with_mode_detection(last_idx, model.config().context_length(), false)?;
+    let causal = model.config().create_causal_mask_with_mode_detection(
+        last_idx,
+        model.config().context_length(),
+        false,
+    )?;
     let c_dims = causal.dims();
-    assert_eq!(c_dims.len(), 4, "causal_mask should be 4-D, got {:?}", c_dims);
+    assert_eq!(c_dims.len(), 4, "causal_mask should be 4-D, got {c_dims:?}");
 
     // Infer run
     let current_pos = pos_ids.clone();
-    let infer_out = model.run_ffn_infer_with_inputs(&hidden_states, &pos_ids, &causal, &current_pos)?;
+    let infer_out =
+        model.run_ffn_infer_with_inputs(&hidden_states, &pos_ids, &causal, &current_pos)?;
     // Should match LM head input shape
     if let Some(hs_shape) = model_config.lm_head_input_shape() {
-        assert_eq!(infer_out.dims(), &hs_shape[..], "FFN infer output dims mismatch");
+        assert_eq!(
+            infer_out.dims(),
+            &hs_shape[..],
+            "FFN infer output dims mismatch"
+        );
     } else {
         let dims = infer_out.dims();
         assert_eq!(dims.len(), 3);

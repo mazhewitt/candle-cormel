@@ -64,13 +64,13 @@ impl PerformanceMetrics {
 // Helper to get model path - tests will be ignored if model not available
 fn get_qwen_model_path() -> Option<PathBuf> {
     use candle_coreml::ensure_model_downloaded;
-    
+
     // Try to get the model from cache first
     const MODEL_ID: &str = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
     if let Ok(model_dir) = ensure_model_downloaded(MODEL_ID, true) {
         return Some(model_dir);
     }
-    
+
     // Try common paths where the model might be located
     let possible_paths = [
         "/Users/mazdahewitt/Library/Caches/candle-coreml/clean-anemll--anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4",

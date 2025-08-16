@@ -13,7 +13,6 @@
 use std::env;
 use std::path::PathBuf;
 
-use candle_core::Tensor;
 use candle_coreml::{ModelConfig, QwenConfig, QwenModel};
 
 #[cfg(target_os = "macos")]
@@ -78,7 +77,11 @@ fn main() -> anyhow::Result<()> {
                 if let Some(fname) = p.file_name() {
                     let candidate = model_dir.join(fname);
                     if candidate.exists() {
-                        println!("🔄 Updated {} component path -> {}", name, candidate.display());
+                        println!(
+                            "🔄 Updated {} component path -> {}",
+                            name,
+                            candidate.display()
+                        );
                         comp.file_path = Some(candidate.to_string_lossy().to_string());
                     }
                 }
@@ -94,7 +97,7 @@ fn main() -> anyhow::Result<()> {
     println!("🚀 Initializing shared state and causal mask");
     model.initialize_states()?;
 
-    println!("📝 Tokenizing input text: {:?}", text);
+    println!("📝 Tokenizing input text: {text:?}");
     let tokens = model.tokenize(&text)?;
     println!("   → token count: {}", tokens.len());
 
@@ -111,7 +114,10 @@ fn main() -> anyhow::Result<()> {
     println!("   ✅ Prefill complete");
 
     println!("🎯 Preparing single-token inputs for infer…");
-    let last_idx = tokens.len().checked_sub(1).ok_or_else(|| anyhow::anyhow!("Empty input"))?;
+    let last_idx = tokens
+        .len()
+        .checked_sub(1)
+        .ok_or_else(|| anyhow::anyhow!("Empty input"))?;
     let hidden_states = model.get_infer_hidden_states(&tokens, tokens.len())?;
     println!("   hidden_states shape: {:?}", hidden_states.dims());
 
@@ -120,9 +126,11 @@ fn main() -> anyhow::Result<()> {
         .create_position_ids_with_mode_detection(&[last_idx as i64], false)?;
     println!("   position_ids shape: {:?}", position_ids.dims());
 
-    let causal_mask = model
-        .config()
-        .create_causal_mask_with_mode_detection(last_idx, model.config().context_length(), false)?;
+    let causal_mask = model.config().create_causal_mask_with_mode_detection(
+        last_idx,
+        model.config().context_length(),
+        false,
+    )?;
     println!("   causal_mask shape: {:?}", causal_mask.dims());
 
     let current_pos = position_ids.clone();
@@ -151,7 +159,13 @@ fn main() -> anyhow::Result<()> {
             .tokenizer()
             .decode(&[*token_id as u32], false)
             .unwrap_or_else(|_| "<?>".to_string());
-        println!("  {}. id={}  score={:.6}  tok='{}'", rank + 1, token_id, score, decoded);
+        println!(
+            "  {}. id={}  score={:.6}  tok='{}'",
+            rank + 1,
+            token_id,
+            score,
+            decoded
+        );
     }
 
     Ok(())
