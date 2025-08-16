@@ -28,6 +28,7 @@ pub struct QwenModel {
     pub cached_update_mask: Option<Tensor>,  // Pre-allocated update mask tensor
     pub cached_single_pos_tensor: Option<Tensor>, // Pre-allocated [1] tensor for current_pos
     pub last_single_token_prefill_len: Option<usize>, // How many context tokens have been prefetched into KV cache in single-token mode
+    pub cached_prefill_output: Option<Tensor>, // Cache prefill output hidden states for infer input
 }
 
 impl QwenModel {
@@ -59,12 +60,15 @@ impl QwenModel {
             .create_infer_causal_mask_tensor(pos, context_length)
             .unwrap_or_else(|_| causal_mask_full.clone());
         let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
-        let _ = self.run_ffn_prefill_with_inputs(
+        let prefill_output = self.run_ffn_prefill_with_inputs(
             &token_embed,
             &position_ids,
             &causal_mask,
             &current_pos,
         )?;
+        
+        // Cache the prefill output for use in get_infer_hidden_states
+        self.cached_prefill_output = Some(prefill_output);
         Ok(())
     }
 
@@ -90,12 +94,15 @@ impl QwenModel {
             .create_infer_causal_mask_tensor(global_pos, context_length)
             .unwrap_or_else(|_| causal_mask_full.clone());
         let current_pos = Tensor::from_vec(vec![global_pos as i64], (1,), device)?;
-        let _ = self.run_ffn_prefill_with_inputs(
+        let prefill_output = self.run_ffn_prefill_with_inputs(
             &token_embed,
             &position_ids,
             &causal_mask,
             &current_pos,
         )?;
+        
+        // Cache the prefill output for use in get_infer_hidden_states
+        self.cached_prefill_output = Some(prefill_output);
         Ok(())
     }
 
@@ -117,8 +124,9 @@ impl QwenModel {
         // Use the full causal mask (should already be correctly sized for the sequence)
         let causal_mask = causal_mask_full.clone();
 
-        // Set current_pos to the last meaningful position
-        let current_pos = Tensor::from_vec(vec![max_global_pos as i64], (1,), device)?;
+        // Set current_pos to 0 for prefill (matches Python behavior)
+        // Python uses batch_pos=0 for prefill, not the last position
+        let current_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
 
         debug!(
             "🚀 FULL-SEQUENCE PREFILL: Processing full sequence with shape {:?}, max_pos: {}",
@@ -126,14 +134,26 @@ impl QwenModel {
             max_global_pos
         );
 
+        // Debug: Print prefill inputs for comparison with Python
+        debug!("🔍 PREFILL INPUTS DEBUG:");
+        debug!("  embeddings shape: {:?}", embeddings_chunk.dims());
+        debug!("  position_ids shape: {:?}", position_ids.dims());
+        debug!("  causal_mask shape: {:?}", causal_mask.dims());
+        debug!("  current_pos: {:?}", current_pos.to_vec1::<i64>().unwrap_or_default());
+        if let Ok(pos_ids_vec) = position_ids.to_vec1::<i64>() {
+            debug!("  position_ids[0..16]: {:?}", &pos_ids_vec[..16.min(pos_ids_vec.len())]);
+        }
+
         // Send the full sequence to CoreML prefill model
-        let _ = self.run_ffn_prefill_with_inputs(
+        let prefill_output = self.run_ffn_prefill_with_inputs(
             embeddings_chunk, // Full [1, 128, 1024] tensor
             &position_ids,    // [128] position IDs
             &causal_mask,     // Full causal mask
             &current_pos,     // [1] current position
         )?;
 
+        // Cache the prefill output for use in get_infer_hidden_states
+        self.cached_prefill_output = Some(prefill_output);
         debug!("✅ FULL-SEQUENCE PREFILL: Successfully processed full sequence");
         Ok(())
     }
@@ -354,6 +374,7 @@ impl QwenModel {
             cached_update_mask: None,
             cached_single_pos_tensor: None,
             last_single_token_prefill_len: None,
+            cached_prefill_output: None,
         })
     }
 
@@ -575,12 +596,15 @@ impl QwenModel {
                 m
             };
             let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
-            let _prefill_output = self.run_ffn_prefill_with_inputs(
+            let prefill_output = self.run_ffn_prefill_with_inputs(
                 embeddings,
                 &position_ids,
                 &causal_mask,
                 &current_pos,
             )?;
+            
+            // Cache the prefill output for use in get_infer_hidden_states
+            self.cached_prefill_output = Some(prefill_output);
             debug!(
                 "✅ Prefill (batched) complete - KV cache populated for 0..{}",
                 sequence_length - 1

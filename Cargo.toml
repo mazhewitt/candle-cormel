@@ -121,3 +121,8 @@ name = "component_profiler"
 path = "bin/component_profiler.rs"
 
 
+[[bin]]
+name = "step_pipeline"
+path = "bin/step_pipeline.rs"
+
+
