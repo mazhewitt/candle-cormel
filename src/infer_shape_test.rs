@@ -226,7 +226,7 @@ mod tests {
             model.initialize_states().unwrap();
 
             // This should now work with our shape detection fix
-            model.run_chatpy_infer(&[785, 3974, 13876, 38835, 34208, 916, 279, 15678], 9)
+            model.run_chatpy_infer(&[785, 3974, 13876, 38835, 34208, 916, 279, 15678], 8)
         });
 
         // With our fix implemented, this should now succeed
@@ -253,7 +253,7 @@ mod tests {
 
         // This should succeed with our shape mode detection implementation
         let next_token =
-            model.run_chatpy_infer(&[785, 3974, 13876, 38835, 34208, 916, 279, 15678], 9);
+            model.run_chatpy_infer(&[785, 3974, 13876, 38835, 34208, 916, 279, 15678], 8);
         match &next_token {
             Ok(token) => println!("✅ Successfully generated token: {token}"),
             Err(e) => {
