@@ -66,7 +66,7 @@ impl QwenModel {
             &causal_mask,
             &current_pos,
         )?;
-        
+
         // Cache the prefill output for use in get_infer_hidden_states
         self.cached_prefill_output = Some(prefill_output);
         Ok(())
@@ -100,7 +100,7 @@ impl QwenModel {
             &causal_mask,
             &current_pos,
         )?;
-        
+
         // Cache the prefill output for use in get_infer_hidden_states
         self.cached_prefill_output = Some(prefill_output);
         Ok(())
@@ -139,9 +139,15 @@ impl QwenModel {
         debug!("  embeddings shape: {:?}", embeddings_chunk.dims());
         debug!("  position_ids shape: {:?}", position_ids.dims());
         debug!("  causal_mask shape: {:?}", causal_mask.dims());
-        debug!("  current_pos: {:?}", current_pos.to_vec1::<i64>().unwrap_or_default());
+        debug!(
+            "  current_pos: {:?}",
+            current_pos.to_vec1::<i64>().unwrap_or_default()
+        );
         if let Ok(pos_ids_vec) = position_ids.to_vec1::<i64>() {
-            debug!("  position_ids[0..16]: {:?}", &pos_ids_vec[..16.min(pos_ids_vec.len())]);
+            debug!(
+                "  position_ids[0..16]: {:?}",
+                &pos_ids_vec[..16.min(pos_ids_vec.len())]
+            );
         }
 
         // Send the full sequence to CoreML prefill model
@@ -602,7 +608,7 @@ impl QwenModel {
                 &causal_mask,
                 &current_pos,
             )?;
-            
+
             // Cache the prefill output for use in get_infer_hidden_states
             self.cached_prefill_output = Some(prefill_output);
             debug!(
