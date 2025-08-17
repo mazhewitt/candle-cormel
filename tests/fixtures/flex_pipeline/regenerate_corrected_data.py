@@ -41,6 +41,8 @@ def main():
     # Exact same settings as typo_fixer_complete.py
     test_sentence = "This setence has multple typos in it"
     tokenizer_path = "mazhewitt/qwen-typo-fixer"
+    # TODO: Update this to use HuggingFace model downloads like the Rust implementation
+    # Currently uses local model for test fixture generation
     model_dir = "/Users/mazdahewitt/projects/train-typo-fixer/models/qwen-typo-fixer-ane-flex"
     
     # Load tokenizer

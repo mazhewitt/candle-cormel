@@ -132,6 +132,58 @@ src/qwen/
 
 **Benefits**: Better code organization, easier maintenance, clearer separation of concerns, improved testability.
 
+## 🧹 IMPLEMENTED: Enhanced Cache Management System (August 2025)
+
+### Problem Successfully Solved
+
+Investigation revealed that CoreML cache accumulation was consuming massive disk space:
+- **46.19 GB** of accumulated cache data found across 13 directories
+- Test runs create persistent `{test_name}-{hash}/com.apple.e5rt.e5bundlecache` directories
+- Apple controls cache directory naming based on bundle identifier and process name
+
+### Solution Implemented
+
+1. **Bundle Identifier Investigation**: 
+   - `NSBundle.mainBundle().bundleIdentifier()` returns `None` for cargo/command-line processes
+   - Environment variables (`CFBundleIdentifier`) don't affect CoreML cache naming
+   - Cache directories follow pattern: `{process_name}-{hash}/com.apple.e5rt.e5bundlecache`
+
+2. **Enhanced Cleanup Scripts**: 
+   - `cleanup_coreml_caches_enhanced.sh` - detects all candle-coreml cache patterns
+   - Handles multiple cache types: integration tests, performance tests, qwen tests, etc.
+   - Interactive, dry-run, and batch removal modes for safe cleanup
+
+3. **CacheManager API**: 
+   - `src/cache_manager.rs` - programmatic cache management in Rust
+   - Safety checks prevent accidental deletion of system directories
+   - Automatic detection of CoreML-related cache directories
+
+### Cache Detection Results
+
+```bash
+# Found cache directories (sorted by size):
+integration_tests-d82b189a4c4542f1         (36.6 GB)  # ⚠️ Largest!
+typo_fixer_test-1346f12d3fdcafc6          (3.9 GB)
+integration_tests-c175e5d207035e23         (1.7 GB)
+typo_fixer_tests-805e09825c2c7005         (1.5 GB)
+performance_regression_tests-*             (297 MB each)
+candle_coreml-*                            (297 MB each)
+qwen_tests-*                               (297 MB each)
+# ... and more
+```
+
+### Cache Cleanup Commands
+
+```bash
+# Enhanced cleanup script (recommended)
+./cleanup_coreml_caches_enhanced.sh
+
+# Options: 1) Remove all, 2) Interactive, 3) Dry run, 4) Cancel
+
+# Or via Rust API for programmatic access
+cargo test cache_manager::tests::test_find_all_candle_coreml_caches -- --nocapture
+```
+
 ## ✅ COMPLETED: Shape Configuration Implementation  
 
 ### Phase 1: Shape Discovery ✅ DONE
@@ -188,7 +240,7 @@ src/qwen/
    - Standard ANEMLL models (anemll/*)
    - Fine-tuned models with custom configurations
    - Custom models with arbitrary shapes
-3. **Zero Breaking Changes**: Existing consumer code continues to work unchanged
+3. **Documented Breaking Changes**: Clear migration path for any API changes (version bump allows breaking changes)
 4. **Auto-Discovery**: New models work out-of-the-box without manual configuration
 
 ## 📝 Current Consumer Integration Status
@@ -208,6 +260,8 @@ src/qwen/
 - **Core Implementation**: `src/qwen.rs` - QwenModel and QwenConfig
 - **Configuration**: `src/config.rs` - CoreML configuration structures  
 - **Model Loading**: `src/model_downloader.rs` - HuggingFace integration
+- **Cache Management**: `src/cache_manager.rs` - Unified cache management system
+- **Enhanced Cleanup**: `cleanup_coreml_caches_enhanced.sh` - Comprehensive cache cleanup
 - **Examples**: `examples/` - Various usage demonstrations
 - **Test Cases**: `tests/qwen_tests.rs` - Multi-model testing
 

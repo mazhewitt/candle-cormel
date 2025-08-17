@@ -13,6 +13,9 @@ use candle_coreml::{QwenConfig, QwenModel};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
+#[cfg(test)]
+use candle_coreml::test_utils::TestCleanupGuard;
+
 // Performance benchmarks based on chat.py reference
 const CHAT_PY_BASELINE_TOKENS_PER_SECOND: f32 = 87.0;
 const PERFORMANCE_TOLERANCE: f32 = 0.3; // Allow 30% variance for different conditions
@@ -394,6 +397,8 @@ fn test_concurrent_generation_safety() {
 // Tests that can run without models (architectural validation)
 #[test]
 fn test_performance_metrics_calculation() {
+    let _cleanup = TestCleanupGuard::new("test_performance_metrics_calculation");
+
     // Test our performance calculation logic
     let metrics = PerformanceMetrics::new(50, Duration::from_secs(1));
     assert_eq!(metrics.tokens_per_second, 50.0);
