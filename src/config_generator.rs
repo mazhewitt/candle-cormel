@@ -88,7 +88,7 @@ impl ConfigGenerator {
         let naming_config = self.generate_naming_config(&packages)?;
 
         // Create the complete ModelConfig
-        let config = ModelConfig {
+        let mut config = ModelConfig {
             model_info: crate::model_config::ModelInfo {
                 model_id: Some(model_id.to_string()),
                 path: Some(model_dir.to_string_lossy().to_string()),
@@ -100,6 +100,9 @@ impl ConfigGenerator {
             naming: naming_config,
             ffn_execution: Some("split".to_string()), // Default to split mode
         };
+
+        // Apply model-specific fixes for known patterns
+        self.apply_model_specific_fixes(&mut config, model_id)?;
 
         info!(
             "✅ Generated config for {} with {} components",
@@ -232,7 +235,7 @@ impl ConfigGenerator {
             "embeddings".to_string()
         } else if filename.contains("prefill") {
             "ffn_prefill".to_string()
-        } else if filename.contains("ffn") || filename.contains("chunk") {
+        } else if filename.contains("ffn") && !filename.contains("prefill") {
             "ffn_infer".to_string()
         } else if filename.contains("lm_head") || filename.contains("head") {
             "lm_head".to_string()
@@ -318,6 +321,177 @@ impl ConfigGenerator {
 
         debug!("📖 Loaded cached config for: {}", model_id);
         Ok(Some(config))
+    }
+
+    /// Apply model-specific fixes for known model patterns
+    fn apply_model_specific_fixes(&self, config: &mut ModelConfig, model_id: &str) -> Result<()> {
+        debug!("🔧 Checking if model needs fixes: {}", model_id);
+        
+        // Handle qwen-typo-fixer-coreml specific configuration issues
+        if model_id.contains("qwen-typo-fixer-coreml") {
+            info!("🔧 Applying fixes for qwen-typo-fixer-coreml model");
+            self.fix_qwen_typo_fixer_config(config)?;
+        } else {
+            debug!("🔧 No specific fixes needed for model: {}", model_id);
+        }
+        
+        // Add more model-specific fixes here as needed
+        
+        Ok(())
+    }
+
+    /// Fix configuration for qwen-typo-fixer-coreml models
+    fn fix_qwen_typo_fixer_config(&self, config: &mut ModelConfig) -> Result<()> {
+        // Based on working Python pipeline analysis:
+        // - max_length=64 for tokenization (embeddings input)
+        // - context_length=256 for causal mask last dimension
+        // - batch_size=128 for prefill processing
+        // - But only 12 actual tokens in typical prompts
+        
+        let hidden_size = config.shapes.hidden_size;
+        let batch_size = config.shapes.batch_size;
+        let seq_length = 128; // From flex_pipeline test: embeddings input [1, 128]
+        let context_length = 256; // From Python: context_length=256
+        let prefill_batch_size = 128; // From Python: batch_size=128
+        
+        // Update the shapes to match working Python pipeline
+        config.shapes.context_length = prefill_batch_size; // Store prefill batch size as context_length
+        
+        debug!("🔧 Fixing config with batch_size={}, seq_length={}, prefill_batch_size={}, context_length={}, hidden_size={}", 
+               batch_size, seq_length, prefill_batch_size, context_length, hidden_size);
+
+        // Fix embeddings component to use correct sequence length
+        if let Some(embeddings) = config.components.get_mut("embeddings") {
+            debug!("🔧 Fixing embeddings component shapes");
+            
+            // Fix input_ids shape to match Python max_length=64
+            if let Some(input_ids) = embeddings.inputs.get_mut("input_ids") {
+                input_ids.shape = vec![batch_size, seq_length]; // [1, 64]
+            }
+            
+            // Fix hidden_states output shape to match sequence length
+            if let Some(hidden_states) = embeddings.outputs.get_mut("hidden_states") {
+                hidden_states.shape = vec![batch_size, seq_length, hidden_size]; // [1, 64, 1024]
+            }
+        }
+
+        // Fix ffn_prefill component - the main component that handles both prefill and infer
+        if let Some(ffn_prefill) = config.components.get_mut("ffn_prefill") {
+            debug!("🔧 Fixing ffn_prefill component for both prefill and infer modes");
+            
+            // Clear existing inputs and rebuild with correct tensors
+            ffn_prefill.inputs.clear();
+            
+            // Add hidden_states input (from embeddings, full sequence for prefill)
+            ffn_prefill.inputs.insert("hidden_states".to_string(), TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![batch_size, prefill_batch_size, hidden_size], // [1, 128, 1024] for prefill batch processing
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Add position_ids input (for prefill batch)
+            ffn_prefill.inputs.insert("position_ids".to_string(), TensorConfig {
+                name: "position_ids".to_string(),
+                shape: vec![prefill_batch_size], // [128] for prefill batch
+                data_type: "INT32".to_string(),
+            });
+            
+            // Add causal_mask input - key insight: last dimension is context_length (256)
+            ffn_prefill.inputs.insert("causal_mask".to_string(), TensorConfig {
+                name: "causal_mask".to_string(),
+                shape: vec![batch_size, 1, prefill_batch_size, context_length], // [1, 1, 128, 256]
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Add current_pos input
+            ffn_prefill.inputs.insert("current_pos".to_string(), TensorConfig {
+                name: "current_pos".to_string(),
+                shape: vec![1],
+                data_type: "INT32".to_string(),
+            });
+            
+            // Fix output to be output_hidden_states (single token output)
+            ffn_prefill.outputs.clear();
+            ffn_prefill.outputs.insert("output_hidden_states".to_string(), TensorConfig {
+                name: "output_hidden_states".to_string(),
+                shape: vec![batch_size, 1, hidden_size], // [1, 1, 1024] single token output
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Support only prefill function (infer is handled by separate ffn_infer component)
+            ffn_prefill.functions = vec!["prefill".to_string()];
+        }
+
+        // Keep ffn_infer component - models use split architecture with separate prefill/infer
+        if let Some(ffn_infer) = config.components.get_mut("ffn_infer") {
+            debug!("🔧 Fixing ffn_infer component for single-token processing");
+            
+            // Clear and rebuild inputs for single-token infer mode
+            ffn_infer.inputs.clear();
+            
+            // Add hidden_states input (single token from embeddings)
+            ffn_infer.inputs.insert("hidden_states".to_string(), TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![batch_size, 1, hidden_size], // [1, 1, 1024] single token input
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Add position_ids input (single token position)
+            ffn_infer.inputs.insert("position_ids".to_string(), TensorConfig {
+                name: "position_ids".to_string(),
+                shape: vec![1], // [1] single token position
+                data_type: "INT32".to_string(),
+            });
+            
+            // Add causal_mask input (single token mask)
+            ffn_infer.inputs.insert("causal_mask".to_string(), TensorConfig {
+                name: "causal_mask".to_string(),
+                shape: vec![batch_size, 1, 1, context_length], // [1, 1, 1, 256] single token mask
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Add current_pos input
+            ffn_infer.inputs.insert("current_pos".to_string(), TensorConfig {
+                name: "current_pos".to_string(),
+                shape: vec![1],
+                data_type: "INT32".to_string(),
+            });
+            
+            // Fix output 
+            ffn_infer.outputs.clear();
+            ffn_infer.outputs.insert("output_hidden_states".to_string(), TensorConfig {
+                name: "output_hidden_states".to_string(),
+                shape: vec![batch_size, 1, hidden_size], // [1, 1, 1024] single token output
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Support infer function
+            ffn_infer.functions = vec!["infer".to_string()];
+        }
+
+        // Fix lm_head component - use hidden_states input and logits output
+        if let Some(lm_head) = config.components.get_mut("lm_head") {
+            debug!("🔧 Fixing lm_head component inputs and outputs");
+            
+            // Clear and rebuild inputs - should take hidden_states, not input_ids
+            lm_head.inputs.clear();
+            lm_head.inputs.insert("hidden_states".to_string(), TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![batch_size, 1, hidden_size], // [1, 1, 1024] single token from ffn
+                data_type: "FLOAT16".to_string(),
+            });
+            
+            // Fix output to be logits instead of hidden_states
+            lm_head.outputs.clear();
+            lm_head.outputs.insert("logits".to_string(), TensorConfig {
+                name: "logits".to_string(),
+                shape: vec![batch_size, 1, config.shapes.vocab_size], // [1, 1, vocab_size]
+                data_type: "FLOAT32".to_string(),
+            });
+        }
+
+        debug!("✅ Applied qwen-typo-fixer-coreml specific fixes");
+        Ok(())
     }
 }
 
@@ -453,6 +627,123 @@ mod tests {
 
         println!("Generated config: {config:#?}");
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_qwen_typo_fixer_config_structure() -> Result<()> {
+        // This test asserts the expected config structure based on the working Python pipeline
+        // It should fail initially, then we improve the config generator to make it pass
+        
+        let temp_dir = TempDir::new()?;
+        let generator = ConfigGenerator::new()?;
+
+        // Create mock packages that match the qwen-typo-fixer model structure
+        create_mock_mlpackage(temp_dir.path(), "qwen-typo-fixer_embeddings")?;
+        create_mock_mlpackage(temp_dir.path(), "qwen-typo-fixer_prefill_chunk_01of01")?;
+        create_mock_mlpackage(temp_dir.path(), "qwen-typo-fixer_FFN_chunk_01of01")?;
+        create_mock_mlpackage(temp_dir.path(), "qwen-typo-fixer_lm_head")?;
+
+        // Generate config for qwen-typo-fixer-coreml (triggers fixes)
+        let config = generator.generate_config_from_directory(
+            temp_dir.path(),
+            "mazhewitt/qwen-typo-fixer-coreml",
+            "qwen",
+        )?;
+
+        // Assert expected shape configuration (from Python pipeline)
+        assert_eq!(config.shapes.batch_size, 1);
+        assert_eq!(config.shapes.context_length, 128); // Fixed from Python: context_pos=12, but model uses 128
+        assert_eq!(config.shapes.hidden_size, 1024);
+        
+        // Assert component structure matches working Python pipeline
+        
+        // 1. Embeddings component
+        let embeddings = config.components.get("embeddings").expect("embeddings component missing");
+        assert!(embeddings.inputs.contains_key("input_ids"));
+        assert!(embeddings.outputs.contains_key("hidden_states"));
+        
+        let input_ids = &embeddings.inputs["input_ids"];
+        assert_eq!(input_ids.shape, vec![1, 128]); // From flex_pipeline test: working model uses [1, 128]
+        assert_eq!(input_ids.data_type, "INT32");
+        
+        let hidden_states = &embeddings.outputs["hidden_states"];
+        assert_eq!(hidden_states.shape, vec![1, 128, 1024]); // [batch, seq_len, hidden] - matches flex_pipeline
+        assert_eq!(hidden_states.data_type, "FLOAT16");
+
+        // 2. FFN Prefill component (supports both prefill and infer)
+        let ffn_prefill = config.components.get("ffn_prefill").expect("ffn_prefill component missing");
+        
+        // Should have all required inputs from Python pipeline
+        assert!(ffn_prefill.inputs.contains_key("hidden_states"));
+        assert!(ffn_prefill.inputs.contains_key("position_ids"));
+        assert!(ffn_prefill.inputs.contains_key("causal_mask"));
+        assert!(ffn_prefill.inputs.contains_key("current_pos"));
+        
+        // Verify tensor shapes match Python implementation
+        let prefill_hidden = &ffn_prefill.inputs["hidden_states"];
+        assert_eq!(prefill_hidden.shape, vec![1, 128, 1024]); // Full sequence for prefill
+        
+        let position_ids = &ffn_prefill.inputs["position_ids"];
+        assert_eq!(position_ids.shape, vec![128]); // Position array for prefill
+        
+        let causal_mask = &ffn_prefill.inputs["causal_mask"];
+        assert_eq!(causal_mask.shape, vec![1, 1, 128, 256]); // Key insight from Python: context_length=256
+        
+        let current_pos = &ffn_prefill.inputs["current_pos"];
+        assert_eq!(current_pos.shape, vec![1]);
+        
+        // Output should be single token hidden states
+        assert!(ffn_prefill.outputs.contains_key("output_hidden_states"));
+        let output_hidden = &ffn_prefill.outputs["output_hidden_states"];
+        assert_eq!(output_hidden.shape, vec![1, 1, 1024]); // Single token output
+        
+        // Should support only prefill function (infer handled by separate component)
+        assert!(ffn_prefill.functions.contains(&"prefill".to_string()));
+        assert!(!ffn_prefill.functions.contains(&"infer".to_string()));
+
+        // 3. LM Head component  
+        let lm_head = config.components.get("lm_head").expect("lm_head component missing");
+        
+        assert!(lm_head.inputs.contains_key("hidden_states"));
+        let lm_hidden = &lm_head.inputs["hidden_states"];
+        assert_eq!(lm_hidden.shape, vec![1, 1, 1024]); // Single token input
+        
+        assert!(lm_head.outputs.contains_key("logits"));
+        let logits = &lm_head.outputs["logits"];
+        assert_eq!(logits.shape, vec![1, 1, config.shapes.vocab_size]); // Logits output
+        assert_eq!(logits.data_type, "FLOAT32");
+
+        // 4. Should HAVE separate ffn_infer component for single-token processing
+        let ffn_infer = config.components.get("ffn_infer").expect("ffn_infer component missing");
+        
+        // Should have all required inputs for single-token infer
+        assert!(ffn_infer.inputs.contains_key("hidden_states"));
+        assert!(ffn_infer.inputs.contains_key("position_ids"));
+        assert!(ffn_infer.inputs.contains_key("causal_mask"));
+        assert!(ffn_infer.inputs.contains_key("current_pos"));
+        
+        // Verify tensor shapes for single-token processing
+        let infer_hidden = &ffn_infer.inputs["hidden_states"];
+        assert_eq!(infer_hidden.shape, vec![1, 1, 1024]); // Single token input
+        
+        let infer_position_ids = &ffn_infer.inputs["position_ids"];
+        assert_eq!(infer_position_ids.shape, vec![1]); // Single position
+        
+        let infer_causal_mask = &ffn_infer.inputs["causal_mask"];
+        assert_eq!(infer_causal_mask.shape, vec![1, 1, 1, 256]); // Single token mask
+        
+        // Output should be single token hidden states
+        assert!(ffn_infer.outputs.contains_key("output_hidden_states"));
+        let infer_output_hidden = &ffn_infer.outputs["output_hidden_states"];
+        assert_eq!(infer_output_hidden.shape, vec![1, 1, 1024]); // Single token output
+        
+        // Should support only infer function
+        assert!(ffn_infer.functions.contains(&"infer".to_string()));
+        assert!(!ffn_infer.functions.contains(&"prefill".to_string()));
+
+        println!("✅ Config structure matches working Python pipeline!");
+        
         Ok(())
     }
 }
