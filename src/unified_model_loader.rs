@@ -7,6 +7,7 @@ use crate::model_config::ModelConfig;
 use crate::model_downloader::{download_model, ensure_model_downloaded};
 use crate::{CacheManager, ConfigGenerator, QwenConfig, QwenModel};
 use anyhow::Result;
+use serde_json::Value;
 use std::path::Path;
 use tracing::{debug, info};
 
@@ -49,8 +50,57 @@ impl UnifiedModelLoader {
 
             // Verify the model files still exist
             if self.verify_model_files_exist(&cached_config) {
-                info!("✅ Model files verified, using cached config");
-                return self.load_model_from_config(&cached_config);
+                // Validate config and internal wiring; regenerate if invalid or inconsistent
+                let valid_basic = cached_config.validate();
+                let valid_wiring = cached_config.validate_internal_wiring();
+                if valid_basic.is_ok() && valid_wiring.is_ok() {
+                    // Extra: if FFN package exposes both prefill & infer functions but config lacks ffn_infer, regenerate
+                    if self.config_requires_ffn_split_upgrade(&cached_config) {
+                        info!(
+                            "♻️  Cached config lacks 'ffn_infer' but FFN manifest has both functions; regenerating config"
+                        );
+                        if let Some(model_path_str) = &cached_config.model_info.path {
+                            let model_path = std::path::PathBuf::from(model_path_str);
+                            if model_path.exists() {
+                                let config = self.config_generator.generate_config_from_directory(
+                                    &model_path,
+                                    model_id,
+                                    "qwen",
+                                )?;
+                                return self.load_model_from_config(&config);
+                            }
+                        }
+                    }
+
+                    info!("✅ Cached config validated, using it");
+                    return self.load_model_from_config(&cached_config);
+                } else {
+                    // Log why we are regenerating
+                    if let Err(e) = valid_basic {
+                        info!("♻️  Cached config failed validation, regenerating: {e}");
+                    }
+                    if let Err(e) = valid_wiring {
+                        info!("♻️  Cached config failed internal wiring, regenerating: {e}");
+                    }
+
+                    // Regenerate from existing model directory if available
+                    if let Some(model_path_str) = &cached_config.model_info.path {
+                        let model_path = std::path::PathBuf::from(model_path_str);
+                        if model_path.exists() {
+                            info!("🔍 Regenerating config from existing model at {}", model_path.display());
+                            let config = self.config_generator.generate_config_from_directory(
+                                &model_path,
+                                model_id,
+                                "qwen",
+                            )?;
+                            return self.load_model_from_config(&config);
+                        } else {
+                            info!("⚠️  Cached model path missing, will re-download");
+                        }
+                    } else {
+                        info!("⚠️  Cached config missing model path, will re-download");
+                    }
+                }
             } else {
                 info!("⚠️  Model files missing, will re-download");
             }
@@ -70,6 +120,62 @@ impl UnifiedModelLoader {
 
         // Step 4: Load the model using the generated config
         self.load_model_from_config(&config)
+    }
+
+    /// Determine if a cached config should be upgraded to include a separate ffn_infer
+    /// component by inspecting the FFN package manifest for both 'prefill' and 'infer' functions.
+    fn config_requires_ffn_split_upgrade(&self, config: &ModelConfig) -> bool {
+        // If ffn_infer already exists, nothing to do
+        if config.components.contains_key("ffn_infer") {
+            return false;
+        }
+
+        // Look for any FFN component file path to inspect its manifest
+        let ffn_component = config
+            .components
+            .iter()
+            .find(|(name, _)| name.to_lowercase().contains("ffn"))
+            .and_then(|(_, comp)| comp.file_path.as_ref());
+
+        let Some(ffn_path_str) = ffn_component else { return false };
+        let ffn_path = std::path::Path::new(ffn_path_str);
+
+        // Determine manifest path (.mlpackage -> Manifest.json, .mlmodelc -> metadata.json)
+        let manifest_path = if ffn_path.join("Manifest.json").exists() {
+            ffn_path.join("Manifest.json")
+        } else if ffn_path.join("metadata.json").exists() {
+            ffn_path.join("metadata.json")
+        } else {
+            return false;
+        };
+
+        // Read and parse manifest
+        let Ok(content) = std::fs::read_to_string(&manifest_path) else { return false };
+        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else { return false };
+
+        // Extract functions array
+        let funcs = json
+            .get(0)
+            .and_then(|m| m.get("functions"))
+            .and_then(|f| f.as_array());
+
+        if let Some(functions) = funcs {
+            let mut has_prefill = false;
+            let mut has_infer = false;
+            for f in functions {
+                if let Some(name) = f.get("name").and_then(|n| n.as_str()) {
+                    if name == "prefill" {
+                        has_prefill = true;
+                    } else if name == "infer" {
+                        has_infer = true;
+                    }
+                }
+            }
+            // If both are present but config lacks ffn_infer, we should regenerate
+            return has_prefill && has_infer;
+        }
+
+        false
     }
 
     /// Load a model from a pre-existing config (useful for advanced use cases)

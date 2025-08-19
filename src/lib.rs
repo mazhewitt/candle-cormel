@@ -1,5 +1,4 @@
 pub mod builder;
-pub mod builtin_configs;
 pub mod cache_manager;
 pub mod clean_git_lfs_downloader;
 pub mod config;
@@ -20,7 +19,6 @@ pub mod unified_model_loader;
 pub mod utils;
 
 pub use builder::CoreMLModelBuilder;
-pub use builtin_configs::{get_builtin_config, list_builtin_models};
 pub use cache_manager::CacheManager;
 pub use config::Config;
 pub use config_generator::ConfigGenerator;
