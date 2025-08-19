@@ -63,9 +63,10 @@ the shape (1) specified in the model description
 The solution uses the existing `ModelConfig` system with component-specific tensor configurations:
 
 ```rust
-// Built-in configurations for different model types
-BUILTIN_CONFIGS.get("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")
-// Generic ModelConfig system supports arbitrary model configurations
+// Dynamic configuration generation for any model
+let loader = UnifiedModelLoader::new()?;
+let model = loader.load_model("model_id")?;
+// Automatic config generation supports arbitrary model configurations
 
 // Mode-aware tensor creation
 config.create_position_ids_with_mode_detection(&positions, is_prefill)
@@ -187,10 +188,10 @@ cargo test cache_manager::tests::test_find_all_candle_coreml_caches -- --nocaptu
 ## ✅ COMPLETED: Shape Configuration Implementation  
 
 ### Phase 1: Shape Discovery ✅ DONE
-1. **Built-in Model Configurations**
-   - ✅ Added `BUILTIN_CONFIGS` registry with known model shapes
-   - ✅ Embedded JSON configurations for standard ANEMLL models
-   - ✅ Automatic shape discovery via `ModelConfig::get_builtin_config()`
+1. **Dynamic Model Configuration**
+   - ✅ Automatic config generation from .mlpackage files  
+   - ✅ Real-time shape detection for any ANEMLL model
+   - ✅ No more hardcoded model configurations needed
 
 2. **QwenConfig Enhancement** ✅ DONE
    - ✅ Added `model_config` field to QwenConfig with shape information

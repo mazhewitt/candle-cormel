@@ -315,24 +315,25 @@ impl QwenConfig {
         }
     }
 
-    /// Create a QwenConfig for a known model ID
+    /// Create a QwenConfig for a known model ID (deprecated - use UnifiedModelLoader instead)
+    #[deprecated(note = "Use UnifiedModelLoader to load models dynamically instead of hardcoded configs")]
     pub fn for_model_id(model_id: &str) -> Result<Self, CandleError> {
-        let model_config = ModelConfig::get_builtin_config(model_id)
-            .ok_or_else(|| CandleError::Msg(format!("Unknown model ID: {model_id}")))?;
-        Ok(Self::from_model_config(model_config))
+        // This method is deprecated. Users should use UnifiedModelLoader which automatically
+        // downloads models and generates configs dynamically.
+        Err(CandleError::Msg(format!(
+            "for_model_id is deprecated. Use UnifiedModelLoader to load model '{}' dynamically",
+            model_id
+        )))
     }
 
     /// Create a QwenConfig for standard qwen models (legacy method)
-    #[deprecated(note = "Use for_model_id() or from_model_config() instead")]
+    #[deprecated(note = "Use UnifiedModelLoader with from_model_config() instead")]
     pub fn for_standard_qwen() -> Self {
-        let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
-        Self::for_model_id(model_id).unwrap_or_else(|_| {
-            // Fallback to old behavior if model not found
-            Self {
-                naming: ModelNamingConfig::standard_qwen(),
-                ..Default::default()
-            }
-        })
+        // Fallback to default configuration with standard naming
+        Self {
+            naming: ModelNamingConfig::standard_qwen(),
+            ..Default::default()
+        }
     }
 
     /// Create a QwenConfig with custom naming patterns
@@ -406,8 +407,7 @@ mod tests {
 
     fn create_test_model_config_standard() -> ModelConfig {
         // Create a standard ANEMLL config (embeddings input [1, 64])
-        ModelConfig::get_builtin_config("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")
-            .expect("Standard ANEMLL config should be available")
+        ModelConfig::default_qwen()
     }
 
     fn create_test_qwen_config_standard() -> QwenConfig {
@@ -419,15 +419,15 @@ mod tests {
     fn test_model_config_loading() {
         let standard_config = create_test_model_config_standard();
 
-        // Verify standard ANEMLL model shapes
-        assert_eq!(standard_config.shapes.batch_size, 64);
+        // Verify default model shapes (not ANEMLL-specific)
+        assert_eq!(standard_config.shapes.batch_size, 1);
         assert_eq!(standard_config.shapes.context_length, 512);
         assert_eq!(standard_config.shapes.hidden_size, 1024);
         assert_eq!(standard_config.shapes.vocab_size, 151936);
 
-        // Verify embeddings input shape for standard model (should be [1, 64])
-        let embeddings_input = standard_config.embeddings_input_shape().unwrap();
-        assert_eq!(embeddings_input, &vec![1, 64]);
+        // Note: default config has no components, so embeddings_input_shape() returns None
+        // For actual models, use UnifiedModelLoader which generates real component configs
+        assert!(standard_config.embeddings_input_shape().is_none());
     }
 
     #[test]
@@ -443,8 +443,8 @@ mod tests {
     fn test_qwen_config_accessor_methods() {
         let standard_config = create_test_qwen_config_standard();
 
-        // Test standard ANEMLL accessor methods
-        assert_eq!(standard_config.batch_size(), 64); // ANEMLL uses batch_size=64
+        // Test default config accessor methods
+        assert_eq!(standard_config.batch_size(), 1); // Default uses batch_size=1
         assert_eq!(standard_config.context_length(), 512);
         assert_eq!(standard_config.hidden_size(), 1024);
         assert_eq!(standard_config.vocab_size(), 151936);
@@ -452,31 +452,27 @@ mod tests {
 
     #[test]
     fn test_dynamic_padding_logic_standard_model() {
-        let config = create_test_qwen_config_standard();
+        // Test dynamic padding logic with a known sequence length
+        let expected_length = 64; // Test with standard length
 
-        // Test dynamic padding logic using the ModelConfig directly
-        if let Some(input_shape) = config.embeddings_input_shape() {
-            let expected_length = input_shape[1]; // Should be 64 for standard ANEMLL
-            assert_eq!(expected_length, 64);
+        // Test single token padding logic
+        let single_token = vec![123];
+        let mut padded = single_token.clone();
+        padded.resize(expected_length, 0);
+        assert_eq!(padded.len(), 64);
+        assert_eq!(padded[0], 123);
+        assert_eq!(padded[1], 0); // Padding
 
-            // Test single token padding logic
-            let single_token = vec![123];
-            let mut padded = single_token.clone();
-            padded.resize(expected_length, 0);
-            assert_eq!(padded.len(), 64);
-            assert_eq!(padded[0], 123);
-            assert_eq!(padded[1], 0); // Padding
+        // Test multi-token padding logic
+        let multi_tokens = [123, 456, 789];
+        let mut padded = multi_tokens.to_vec();
+        padded.resize(expected_length, 0);
+        assert_eq!(padded.len(), 64);
+        assert_eq!(&padded[0..3], [123, 456, 789]);
+        assert_eq!(padded[3], 0); // Padding
 
-            // Test multi-token padding logic
-            let multi_tokens = [123, 456, 789];
-            let mut padded = multi_tokens.to_vec();
-            padded.resize(expected_length, 0);
-            assert_eq!(padded.len(), 64);
-            assert_eq!(&padded[0..3], [123, 456, 789]);
-            assert_eq!(padded[3], 0); // Padding
-        } else {
-            panic!("Standard ANEMLL config should have embeddings input shape");
-        }
+        // Note: For actual model configs with components, use UnifiedModelLoader
+        // which automatically generates embeddings_input_shape() from .mlpackage files
     }
 
     #[test]
@@ -508,23 +504,32 @@ mod tests {
 
     #[test]
     fn test_qwen_config_for_model_id() {
-        // Test loading by model ID
-        let standard_config =
-            QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4").unwrap();
-        assert_eq!(standard_config.batch_size(), 64); // ANEMLL uses batch_size=64
-        assert_eq!(standard_config.context_length(), 512);
-
-        // Test unknown model ID
+        // Test that for_model_id is now deprecated and returns error
         let unknown_result = QwenConfig::for_model_id("unknown/model");
         assert!(unknown_result.is_err());
+        
+        // Test modern approach using default config
+        let default_config = ModelConfig::default_qwen();
+        let qwen_config = QwenConfig::from_model_config(default_config);
+        assert_eq!(qwen_config.batch_size(), 1); // Default uses batch_size=1
+        assert_eq!(qwen_config.context_length(), 512);
     }
 
     #[test]
     fn test_model_config_validation() {
         let standard_config = create_test_model_config_standard();
 
-        // Config should be valid
-        assert!(standard_config.validate().is_ok());
+        // Default config has valid shapes but no components, so validation will fail
+        // This is expected since default_qwen() is a minimal config template
+        let validation_result = standard_config.validate();
+        assert!(validation_result.is_err());
+        
+        // Validation fails because it's missing required components
+        let error_msg = validation_result.unwrap_err().to_string();
+        assert!(error_msg.contains("Missing required component"));
+        
+        // Note: For valid configs with components, use UnifiedModelLoader which
+        // automatically generates complete configurations from .mlpackage files
     }
 
     #[test]
@@ -540,14 +545,14 @@ mod tests {
         assert_eq!(config.hidden_size(), config.model_config.shapes.hidden_size);
         assert_eq!(config.vocab_size(), config.model_config.shapes.vocab_size);
 
-        // Test embeddings shape accessors
+        // Test embeddings shape accessors (should be None for default config)
         assert_eq!(
-            config.embeddings_input_shape().unwrap(),
-            config.model_config.embeddings_input_shape().unwrap()
+            config.embeddings_input_shape(),
+            config.model_config.embeddings_input_shape()
         );
         assert_eq!(
-            config.embeddings_output_shape().unwrap(),
-            config.model_config.embeddings_output_shape().unwrap()
+            config.embeddings_output_shape(),
+            config.model_config.embeddings_output_shape()
         );
 
         // Test multipart logits accessors

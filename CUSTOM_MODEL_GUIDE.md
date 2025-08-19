@@ -185,36 +185,40 @@ let mut qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config)
 // Use the model
 let result = qwen_model.forward_text("Your input text here")?;
 ```
-### Built-in Configuration
+### Automatic Configuration (Recommended)
 
-Add your model configuration to the built-in registry:
+The easiest way to use your custom model is with the UnifiedModelLoader, which automatically generates configurations:
 
 ```rust
-// In src/builtin_configs.rs
+use candle_coreml::UnifiedModelLoader;
 
-const CUSTOM_QWEN_CONFIG: &str = r#"{
-  "model_info": {
-    "model_id": "your-org/custom-qwen-model",
-    "model_type": "qwen"
-  },
-  "shapes": {
-    "batch_size": 1,
-    "context_length": 256,
-    "hidden_size": 1024,
-    "vocab_size": 151669
-  },
-  // ... rest of your configuration
-}"#;
-
-// Add to BUILTIN_CONFIGS registry
-if let Ok(config) = serde_json::from_str(CUSTOM_QWEN_CONFIG) {
-    configs.insert("your-org/custom-qwen-model", config);
-}
+let loader = UnifiedModelLoader::new()?;
+let model = loader.load_model("your-org/custom-qwen-model")?;
+// Configuration is automatically generated from the downloaded .mlpackage files
 ```
-Then use it by model ID:
+
+### Manual Configuration (Advanced)
+
+If you need more control, you can create a configuration file manually:
 
 ```rust
-let qwen_config = QwenConfig::for_model_id("your-org/custom-qwen-model")?;
+let model_config = ModelConfig {
+    model_info: ModelInfo {
+        model_id: Some("your-org/custom-qwen-model".to_string()),
+        model_type: "qwen".to_string(),
+        ..Default::default()
+    },
+    shapes: ShapeConfig {
+        batch_size: 1,
+        context_length: 256,
+        hidden_size: 1024,
+        vocab_size: 151669,
+    },
+    // ... rest of your configuration
+    ..Default::default()
+};
+
+let qwen_config = QwenConfig::from_model_config(model_config);
 let mut qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config))?;
 ```
 ## Step 4: Model-Specific Considerations
@@ -542,39 +546,23 @@ let mut qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config)
 let result = qwen_model.forward_text("Your input text here")?;
 ```
 
-### Option 2: Built-in Configuration
+### Option 2: Automatic Configuration with UnifiedModelLoader
 
-Add your model configuration to the built-in registry:
-
-```rust
-// In src/builtin_configs.rs
-
-const CUSTOM_QWEN_CONFIG: &str = r#"{
-  "model_info": {
-    "model_id": "your-org/custom-qwen-model",
-    "model_type": "qwen"
-  },
-  "shapes": {
-    "batch_size": 1,
-    "context_length": 256,
-    "hidden_size": 1024,
-    "vocab_size": 151669
-  },
-  // ... rest of your configuration
-}"#;
-
-// Add to BUILTIN_CONFIGS registry
-if let Ok(config) = serde_json::from_str(CUSTOM_QWEN_CONFIG) {
-    configs.insert("your-org/custom-qwen-model", config);
-}
-```
-
-Then use it by model ID:
+The recommended approach is to use UnifiedModelLoader for automatic configuration:
 
 ```rust
-let qwen_config = QwenConfig::for_model_id("your-org/custom-qwen-model")?;
-let mut qwen_model = QwenModel::load_from_directory(model_dir, Some(qwen_config))?;
+use candle_coreml::UnifiedModelLoader;
+
+let loader = UnifiedModelLoader::new()?;
+let model = loader.load_model("your-org/custom-qwen-model")?;
+// Configuration is automatically generated from the downloaded .mlpackage files
 ```
+
+This approach provides:
+- Automatic model downloading from HuggingFace
+- Dynamic configuration generation
+- No need for manual shape configuration
+- Support for any ANEMLL model architecture
 
 ## Step 4: Model-Specific Considerations
 

@@ -101,10 +101,6 @@ impl ModelConfig {
         Ok(())
     }
 
-    /// Get built-in configuration for known model IDs
-    pub fn get_builtin_config(model_id: &str) -> Option<Self> {
-        crate::builtin_configs::get_builtin_config(model_id)
-    }
 
     /// Create a default configuration with standard Qwen shapes
     pub fn default_qwen() -> Self {

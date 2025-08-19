@@ -16,8 +16,8 @@
 
 use anyhow::Result;
 use candle_coreml::{
-    ensure_model_downloaded,
     qwen::{QwenConfig, QwenModel},
+    UnifiedModelLoader,
 };
 
 // Test constants - canonical test prompts and expected results
@@ -49,10 +49,9 @@ fn check_coreml_compatibility() -> bool {
 
 // Helper functions for test utilities
 async fn create_test_model() -> Option<QwenModel> {
-    let model_dir = ensure_model_downloaded(MODEL_ID, true).ok()?;
-    // Use the correct model configuration for the specific model being tested
-    let config = QwenConfig::for_model_id(MODEL_ID).ok()?;
-    QwenModel::load_from_directory(&model_dir, Some(config)).ok()
+    // Use UnifiedModelLoader instead of deprecated builtin configs
+    let loader = UnifiedModelLoader::new().ok()?;
+    loader.load_model(MODEL_ID).ok()
 }
 
 #[cfg(target_os = "macos")]
@@ -68,10 +67,9 @@ mod architecture_tests {
 
         println!("🎉 Testing fixed QwenModel architecture");
 
-        let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-        // Use the correct model configuration for this specific model
-        let config = QwenConfig::for_model_id(MODEL_ID)?;
-        let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
+        // Use UnifiedModelLoader for automatic configuration
+        let loader = UnifiedModelLoader::new()?;
+        let mut qwen_model = loader.load_model(MODEL_ID)?;
 
         println!("✅ QwenModel loaded successfully");
 
@@ -129,10 +127,9 @@ mod position_fix_tests {
 
         println!("🔧 Testing QwenModel with position fix");
 
-        let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-        // Use the correct model configuration for this specific model
-        let config = QwenConfig::for_model_id(MODEL_ID)?;
-        let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
+        // Use UnifiedModelLoader for automatic configuration
+        let loader = UnifiedModelLoader::new()?;
+        let mut qwen_model = loader.load_model(MODEL_ID)?;
 
         println!("✅ QwenModel loaded");
 
@@ -226,10 +223,9 @@ mod prediction_tests {
 
         println!("🎯 Testing Rust QwenModel prediction for 'dog' completion");
 
-        let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-        // Use the correct model configuration for this specific model
-        let config = QwenConfig::for_model_id(MODEL_ID)?;
-        let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
+        // Use UnifiedModelLoader for automatic configuration
+        let loader = UnifiedModelLoader::new()?;
+        let mut qwen_model = loader.load_model(MODEL_ID)?;
 
         let prompt = QUICK_BROWN_FOX_PROMPT;
         println!("📝 Prompt: '{prompt}'");
@@ -274,12 +270,9 @@ mod integration_tests {
             return Ok(());
         }
 
-        // Download the Qwen model
-        let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-
-        // Load the complete Qwen model using the full pipeline with correct config
-        let config = QwenConfig::for_model_id(MODEL_ID)?;
-        let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
+        // Use UnifiedModelLoader for automatic model loading and configuration
+        let loader = UnifiedModelLoader::new()?;
+        let mut qwen_model = loader.load_model(MODEL_ID)?;
 
         // Test the classic "The quick brown fox jumps over the lazy" completion
         let prompt = QUICK_BROWN_FOX_PROMPT;
@@ -413,24 +406,16 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_custom_configurations -- --ignored
     async fn test_custom_configurations() -> Result<()> {
-        let model_dir = ensure_model_downloaded(MODEL_ID, true)?;
-
-        // Test with custom configuration - use the new API
-        let custom_config =
-            QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")
-                .unwrap_or_else(|_| QwenConfig::default());
-
-        let model_result = QwenModel::load_from_directory(&model_dir, Some(custom_config));
-        assert!(
-            model_result.is_ok(),
-            "Failed to load model with custom config"
-        );
-
-        let mut model = model_result?;
+        // Test with UnifiedModelLoader - automatically handles configuration
+        let loader = UnifiedModelLoader::new()?;
+        let mut model = loader.load_model(MODEL_ID)?;
 
         // Test that custom config model works
         let result = model.forward_text("Configuration test");
-        assert!(result.is_ok(), "Custom config model failed to generate");
+        match result {
+            Ok(token) => println!("✅ Generated token: {}", token),
+            Err(e) => panic!("Custom config model failed to generate: {}", e),
+        }
 
         println!("✅ Custom configuration tested successfully");
         Ok(())
@@ -497,20 +482,17 @@ async fn test_qwen_config_defaults() {
 async fn test_model_config_system() {
     use candle_coreml::{ModelConfig, QwenConfig};
 
-    // Test that we can load builtin model configurations
-    let standard_config =
-        ModelConfig::get_builtin_config("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4");
-    assert!(
-        standard_config.is_some(),
-        "Standard ANEMLL config should be available"
-    );
+    // Test that we can create default model configurations
+    let default_config = ModelConfig::default_qwen();
+    assert_eq!(default_config.shapes.batch_size, 1);
+    assert_eq!(default_config.shapes.context_length, 512);
+    assert_eq!(default_config.shapes.hidden_size, 1024);
 
-    // Test QwenConfig creation from model ID
-    let qwen_config = QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4");
-    assert!(
-        qwen_config.is_ok(),
-        "Should be able to create QwenConfig from model ID"
-    );
+    // Test QwenConfig creation from ModelConfig
+    let qwen_config = QwenConfig::from_model_config(default_config);
+    assert_eq!(qwen_config.model_config.shapes.batch_size, 1);
+    
+    // Note: for dynamic model loading, use UnifiedModelLoader instead of builtin configs
 
     println!("✅ Model config system validated");
 }
