@@ -6,7 +6,7 @@
 use crate::qwen::model::QwenModel;
 use candle_core::{Error as CandleError, Tensor};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// A single prefill step mapping inside a padded embeddings window.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -93,7 +93,7 @@ impl QwenModel {
         // Tokenize input
         let tokens = self.tokenize(text)?;
         let context_pos = tokens.len();
-        debug!(
+        trace!(
             "🚀 Chat.py-style OPTIMIZED: Processing {} tokens",
             context_pos
         );
@@ -102,14 +102,14 @@ impl QwenModel {
         let embeddings_start = std::time::Instant::now();
         let _cached_embeddings = self.compute_embeddings(&tokens)?;
         let embeddings_time = embeddings_start.elapsed();
-        debug!(
+        trace!(
             "⚡ Cached embeddings took: {:?} for {} tokens",
             embeddings_time, context_pos
         );
 
         // If model is configured for single-token sequential prefill, use simplified path
         if self.config.model_config.prefill_is_single_token() {
-            debug!(
+            trace!(
                 "🧪 forward_text: single-token prefill mode detected, using sequential pipeline"
             );
             // Ensure we have embeddings for full (padded) sequence
@@ -119,7 +119,7 @@ impl QwenModel {
             let already_prefilled = self.last_single_token_prefill_len.unwrap_or(0);
             if already_prefilled > context_pos {
                 // New prompt shorter than previous -> reset state
-                debug!("🔄 forward_text(single-token): prompt reset (previous prefilled {} > new {}), reinitializing state", already_prefilled, context_pos);
+                trace!("🔄 forward_text(single-token): prompt reset (previous prefilled {} > new {}), reinitializing state", already_prefilled, context_pos);
                 self.unified_state = None;
                 self.cached_causal_mask = None;
                 self.last_single_token_prefill_len = None;
@@ -139,7 +139,7 @@ impl QwenModel {
             if !plan.steps.is_empty() {
                 // Check if model expects full-sequence inputs (like CoreML models with fixed shapes)
                 if self.config.model_config.expects_full_sequence_prefill() {
-                    debug!("🚀 Using FULL-SEQUENCE prefill mode for CoreML model");
+                    trace!("🚀 Using FULL-SEQUENCE prefill mode for CoreML model");
                     // For CoreML models: send the full embeddings sequence once
                     if context_pos <= embed_seq_len && already_prefilled + 1 < context_pos {
                         let max_pos = plan.steps.iter().map(|s| s.global_pos).max().unwrap_or(0);
@@ -167,7 +167,7 @@ impl QwenModel {
                         }
                     }
                 } else {
-                    debug!("🔄 Using SINGLE-TOKEN prefill mode for non-CoreML model");
+                    trace!("🔄 Using SINGLE-TOKEN prefill mode for non-CoreML model");
                     // Original single-token processing for non-CoreML models
                     if context_pos <= embed_seq_len && already_prefilled + 1 < context_pos {
                         for step in &plan.steps {
@@ -215,7 +215,7 @@ impl QwenModel {
                 let next_token = self.extract_next_token(&logits)?;
                 self.last_single_token_prefill_len = Some(context_pos);
                 let total_time = start_time.elapsed();
-                debug!("🎯 SINGLE-TOKEN TOTAL: {:?}", total_time);
+                trace!("🎯 SINGLE-TOKEN TOTAL: {:?}", total_time);
                 return Ok(next_token);
             } else {
                 // Need to recompute the last window's embeddings
@@ -226,7 +226,7 @@ impl QwenModel {
                 let next_token = self.extract_next_token(&logits)?;
                 self.last_single_token_prefill_len = Some(context_pos);
                 let total_time = start_time.elapsed();
-                debug!("🎯 MULTI-WINDOW SINGLE-TOKEN TOTAL: {:?}", total_time);
+                trace!("🎯 MULTI-WINDOW SINGLE-TOKEN TOTAL: {:?}", total_time);
                 return Ok(next_token);
             }
         }
@@ -235,16 +235,16 @@ impl QwenModel {
         let prefill_start = std::time::Instant::now();
         self.run_chatpy_prefill(&tokens, context_pos)?;
         let prefill_time = prefill_start.elapsed();
-        debug!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
+    trace!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
 
         // PHASE 2: SINGLE TOKEN INFER (chat.py architecture with embeddings optimization)
         let infer_start = std::time::Instant::now();
         let next_token = self.run_chatpy_infer(&tokens, context_pos)?;
         let infer_time = infer_start.elapsed();
-        debug!("⚡ Optimized chat.py infer took: {:?}", infer_time);
+    trace!("⚡ Optimized chat.py infer took: {:?}", infer_time);
 
         let total_time = start_time.elapsed();
-        debug!(
+        trace!(
             "🎯 OPTIMIZED CHAT.PY TOTAL: {:?} (target: ~11ms for 87 t/s)",
             total_time
         );
@@ -267,13 +267,13 @@ impl QwenModel {
         let next_token = indexed_logits[0].0 as i64;
 
         // Show top predictions for debugging
-        debug!("Top 5 extract_next_token predictions:");
+    trace!("Top 5 extract_next_token predictions:");
         for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
             let decoded = self
                 .tokenizer
                 .decode(&[*token_id as u32], false)
                 .unwrap_or("???".to_string());
-            debug!(
+            trace!(
                 "  {}. Token {} ('{}'): {:.6}",
                 rank + 1,
                 token_id,
@@ -293,14 +293,14 @@ impl QwenModel {
     ) -> Result<(), CandleError> {
         // Check if this model expects full-sequence prefill (e.g., CoreML with fixed shapes)
         if self.config.model_config.expects_full_sequence_prefill() {
-            debug!("🚀 CHATPY-PREFILL: Using FULL-SEQUENCE mode for CoreML model");
+            trace!("🚀 CHATPY-PREFILL: Using FULL-SEQUENCE mode for CoreML model");
             // For full-sequence models, send the complete embeddings once
             let embeddings = self.compute_embeddings(tokens)?;
             let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone();
             return self.prefill_full_sequence_chunk(&embeddings, context_pos - 1, &causal_mask);
         }
 
-        debug!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
+    trace!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
         let batch_size = self.config.batch_size(); // 64
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
@@ -318,9 +318,9 @@ impl QwenModel {
             let mut padded_batch = batch_tokens.to_vec();
             padded_batch.resize(batch_size, 0); // Pad with zeros
 
-            debug!("🔄 PREFILL: Processing batch at position {batch_pos} (batch_end: {batch_end})");
-            debug!("🔄 PREFILL: batch_tokens: {batch_tokens:?}");
-            debug!(
+            trace!("🔄 PREFILL: Processing batch at position {batch_pos} (batch_end: {batch_end})");
+            trace!("🔄 PREFILL: batch_tokens: {batch_tokens:?}");
+            trace!(
                 "🔄 PREFILL: padded_batch (len={}): {:?}",
                 padded_batch.len(),
                 &padded_batch[..10.min(padded_batch.len())]
@@ -330,10 +330,10 @@ impl QwenModel {
             let hidden_states = if let Some(cached_embeddings) =
                 self.get_cached_batch_embeddings(&padded_batch)?
             {
-                debug!("⚡ CACHE HIT: Reusing cached embeddings for batch at position {} with shape {:?}", batch_pos, cached_embeddings.dims());
+                trace!("⚡ CACHE HIT: Reusing cached embeddings for batch at position {} with shape {:?}", batch_pos, cached_embeddings.dims());
                 cached_embeddings
             } else {
-                debug!("💾 CACHE MISS: Computing embeddings for batch at position {batch_pos}");
+                trace!("💾 CACHE MISS: Computing embeddings for batch at position {batch_pos}");
 
                 // Find meaningful tokens (before padding zeros)
                 let meaningful_end = padded_batch
@@ -342,19 +342,19 @@ impl QwenModel {
                     .unwrap_or(padded_batch.len());
                 let meaningful_tokens = &padded_batch[..meaningful_end];
 
-                debug!(
+                trace!(
                     "🔍 PREFILL: meaningful_end: {meaningful_end}, meaningful_tokens: {meaningful_tokens:?}"
                 );
 
                 // Fallback to direct embeddings computation
                 let batch_input = self.create_embeddings_input_tensor(meaningful_tokens)?;
-                debug!(
+                trace!(
                     "✅ PREFILL: Created batch_input with shape: {:?}",
                     batch_input.dims()
                 );
 
                 let embeddings = self.embeddings.forward(&[&batch_input])?;
-                debug!(
+                trace!(
                     "✅ PREFILL: Got embeddings with shape: {:?}",
                     embeddings.dims()
                 );
@@ -432,7 +432,7 @@ impl QwenModel {
         let logits = self.run_lm_head_with_inputs(&infer_output)?;
         let next_token = self.extract_next_token(&logits)?;
 
-        debug!(
+        trace!(
             "✅ Optimized chat.py infer: Generated token {} at position {}",
             next_token, pos
         );

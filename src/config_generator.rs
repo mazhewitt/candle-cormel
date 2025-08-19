@@ -59,7 +59,7 @@ impl ConfigGenerator {
     let mut components: HashMap<String, ComponentConfig> = HashMap::new();
 
         for package_path in &packages {
-            let component_config = self.analyze_mlpackage(package_path)?;
+            let mut component_config = self.analyze_mlpackage(package_path)?;
             let mut component_name = self.infer_component_name(package_path);
 
             // Special handling for FFN components with multiple functions: emit both prefill & infer
@@ -91,6 +91,77 @@ impl ConfigGenerator {
             // For non-FFN or FFN without functions array, proceed with inferred name
             if component_name == "ffn_unified" {
                 component_name = self.analyze_ffn_component_type(package_path, &component_config)?;
+            }
+
+            // If we parsed a limited .mlpackage (Manifest.json without schemas), inputs may default to
+            // a generic "input_ids". For FFN components, rewrite to expected CoreML function IO.
+            // This avoids runtime shape/name mismatches while keeping shapes data-driven elsewhere.
+            if component_name == "ffn_prefill" || component_name == "ffn_infer" {
+                // Heuristic: if inputs contain only "input_ids" (artifact of limited manifest), fix them.
+                let has_only_input_ids = component_config.inputs.len() == 1
+                    && component_config.inputs.contains_key("input_ids")
+                    && !component_config.inputs.contains_key("hidden_states");
+                if has_only_input_ids {
+                    debug!(
+                        "🛠️  Limited manifest detected for {}: rewriting inputs/outputs to expected FFN schema",
+                        component_name
+                    );
+                    // Choose conservative defaults; refined later in reconcile_component_shapes.
+                    let default_hidden = 1024usize; // Will be reconciled if LM head or FFN reveals actual size
+                    let default_context = 256usize; // Used for causal_mask last dim when unknown
+                    if component_name == "ffn_prefill" {
+                        // Prefill expects full-sequence hidden states and [seq] position ids
+                        component_config.inputs.clear();
+                        component_config.inputs.insert(
+                            "hidden_states".to_string(),
+                            TensorConfig { name: "hidden_states".to_string(), shape: vec![1, 128, default_hidden], data_type: "FLOAT16".to_string() }
+                        );
+                        component_config.inputs.insert(
+                            "position_ids".to_string(),
+                            TensorConfig { name: "position_ids".to_string(), shape: vec![128], data_type: "INT64".to_string() }
+                        );
+                        component_config.inputs.insert(
+                            "causal_mask".to_string(),
+                            TensorConfig { name: "causal_mask".to_string(), shape: vec![1, 1, 128, default_context], data_type: "FLOAT16".to_string() }
+                        );
+                        component_config.inputs.insert(
+                            "current_pos".to_string(),
+                            TensorConfig { name: "current_pos".to_string(), shape: vec![1], data_type: "INT64".to_string() }
+                        );
+                        // Prefill usually returns last token hidden state
+                        component_config.outputs.clear();
+                        component_config.outputs.insert(
+                            "output_hidden_states".to_string(),
+                            TensorConfig { name: "output_hidden_states".to_string(), shape: vec![1, 1, default_hidden], data_type: "FLOAT16".to_string() }
+                        );
+                        component_config.functions = vec!["prefill".to_string()];
+                    } else {
+                        // Infer expects single-token hidden states and scalar position ids
+                        component_config.inputs.clear();
+                        component_config.inputs.insert(
+                            "hidden_states".to_string(),
+                            TensorConfig { name: "hidden_states".to_string(), shape: vec![1, 1, default_hidden], data_type: "FLOAT16".to_string() }
+                        );
+                        component_config.inputs.insert(
+                            "position_ids".to_string(),
+                            TensorConfig { name: "position_ids".to_string(), shape: vec![1], data_type: "INT64".to_string() }
+                        );
+                        component_config.inputs.insert(
+                            "causal_mask".to_string(),
+                            TensorConfig { name: "causal_mask".to_string(), shape: vec![1, 1, 1, default_context], data_type: "FLOAT16".to_string() }
+                        );
+                        component_config.inputs.insert(
+                            "current_pos".to_string(),
+                            TensorConfig { name: "current_pos".to_string(), shape: vec![1], data_type: "INT64".to_string() }
+                        );
+                        component_config.outputs.clear();
+                        component_config.outputs.insert(
+                            "output_hidden_states".to_string(),
+                            TensorConfig { name: "output_hidden_states".to_string(), shape: vec![1, 1, default_hidden], data_type: "FLOAT16".to_string() }
+                        );
+                        component_config.functions = vec!["infer".to_string()];
+                    }
+                }
             }
 
             debug!("📋 Component '{}' analysis:", component_name);
@@ -389,28 +460,31 @@ impl ConfigGenerator {
                 }
             }
             
-            for input in input_schema {
+        for input in input_schema {
                 if let (Some(name), Some(data_type)) = (
                     input.get("name").and_then(|n| n.as_str()),
                     input.get("dataType").and_then(|d| d.as_str()),
                 ) {
                     // Prefer enumeratedShapes when available (choose the largest allowed shape)
-                    let mut shape: Vec<usize> = Vec::new();
+            let mut shape: Vec<usize> = Vec::new();
 
                     if let Some(enum_val) = input.get("enumeratedShapes") {
                         if let Some(enum_str) = enum_val.as_str() {
                             // enumeratedShapes is a JSON-like string, e.g. "[[1, 1], [1, 64]]"
                             match serde_json::from_str::<Vec<Vec<usize>>>(enum_str) {
                                 Ok(mut shapes) => {
-                                    // Choose the shape with the largest token dimension (2nd dim if present)
+                                    // Selection policy:
+                                    //  - For embeddings input_ids, pick the SMALLEST allowed token dimension (often [1,1])
+                                    //  - For all other tensors, keep existing policy (largest token dimension)
+                                    let pick_smallest = name == "input_ids"; // input_ids only appears on embeddings
                                     shapes.sort_by(|a, b| {
                                         let a_key = if a.len() > 1 { a[1] } else { a.iter().product() };
                                         let b_key = if b.len() > 1 { b[1] } else { b.iter().product() };
                                         a_key.cmp(&b_key)
                                     });
-                                    if let Some(max) = shapes.last() {
-                                        shape = max.clone();
-                                    }
+                                    if pick_smallest {
+                                        if let Some(min) = shapes.first() { shape = min.clone(); }
+                                    } else if let Some(max) = shapes.last() { shape = max.clone(); }
                                 }
                                 Err(err) => {
                                     debug!("⚠️ Failed to parse enumeratedShapes for '{}': {}", name, err);
@@ -434,7 +508,10 @@ impl ConfigGenerator {
                                     let b_key = if b.len() > 1 { b[1] } else { b.iter().product() };
                                     a_key.cmp(&b_key)
                                 });
-                                if let Some(max) = candidates.last() { shape = max.clone(); }
+                                let pick_smallest = name == "input_ids";
+                                if pick_smallest {
+                                    if let Some(min) = candidates.first() { shape = min.clone(); }
+                                } else if let Some(max) = candidates.last() { shape = max.clone(); }
                             }
                         }
                     }
@@ -466,16 +543,15 @@ impl ConfigGenerator {
                     );
                 }
             }
-        } else if let Some(_items) = manifest.get("itemInfoEntries").and_then(|v| v.as_array()) {
-            // .mlpackage format - need to parse the embedded model description
-            debug!("📖 Parsing .mlpackage format (not fully implemented yet)");
-            
-            // For now, fall back to default input_ids for .mlpackage files
+        } else if let Some(_items_obj) = manifest.get("itemInfoEntries").and_then(|v| v.as_object()) {
+            // .mlpackage format - limited metadata available in Manifest.json
+            debug!("📖 Parsing .mlpackage manifest (limited). Falling back to conservative shapes");
+            // Conservative default for embeddings: many CoreML packages only allow [1,1]
             inputs.insert(
                 "input_ids".to_string(),
                 TensorConfig {
                     name: "input_ids".to_string(),
-                    shape: vec![1, 64], // Default for most models
+                    shape: vec![1, 1], // Safe default for embeddings in .mlpackage
                     data_type: "INT32".to_string(),
                 },
             );
@@ -739,14 +815,44 @@ impl ConfigGenerator {
         }
 
         if let Some(emb) = components.get_mut("embeddings") {
-            if let Some(input_ids) = emb.inputs.get_mut("input_ids") {
-                if let Some(s) = seq_len { if input_ids.shape.len() >= 2 { input_ids.shape[1] = s; } else { input_ids.shape = vec![1, s]; } }
-            }
+            // If FFN prefill clearly expects a fixed full-sequence length (>1), align embeddings to that length
+            // to ensure internal wiring compatibility and avoid runtime CoreML mismatches.
             let desired_hidden = hidden.unwrap_or(1024);
-            let desired_seq = seq_len.or_else(|| emb.inputs.get("input_ids").and_then(|t| t.shape.get(1).cloned())).unwrap_or(1);
-            let out = emb.outputs.entry("hidden_states".to_string()).or_insert(TensorConfig { name: "hidden_states".to_string(), shape: vec![], data_type: "FLOAT16".to_string() });
-            out.shape = vec![1, desired_seq, desired_hidden];
-            out.data_type = out.data_type.to_uppercase();
+            if let Some(ffn_seq) = seq_len.filter(|&s| s > 1) {
+                // Force embeddings input_ids to [1, ffn_seq] and outputs to [1, ffn_seq, hidden]
+                if let Some(inp) = emb.inputs.get_mut("input_ids") {
+                    inp.shape = vec![1, ffn_seq];
+                    // Keep original data type as provided by manifest (usually INT32)
+                }
+                let out = emb
+                    .outputs
+                    .entry("hidden_states".to_string())
+                    .or_insert(TensorConfig {
+                        name: "hidden_states".to_string(),
+                        shape: vec![],
+                        data_type: "FLOAT16".to_string(),
+                    });
+                out.shape = vec![1, ffn_seq, desired_hidden];
+                out.data_type = out.data_type.to_uppercase();
+            } else {
+                // Otherwise, respect embeddings' own enumerated shapes and propagate hidden size
+                let desired_seq = emb
+                    .inputs
+                    .get("input_ids")
+                    .and_then(|t| t.shape.get(1).cloned())
+                    .or(seq_len)
+                    .unwrap_or(1);
+                let out = emb
+                    .outputs
+                    .entry("hidden_states".to_string())
+                    .or_insert(TensorConfig {
+                        name: "hidden_states".to_string(),
+                        shape: vec![],
+                        data_type: "FLOAT16".to_string(),
+                    });
+                out.shape = vec![1, desired_seq, desired_hidden];
+                out.data_type = out.data_type.to_uppercase();
+            }
         }
 
         // Precompute shapes for LM head wiring without holding a mutable borrow

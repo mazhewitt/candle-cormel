@@ -38,7 +38,7 @@ impl UnifiedModelLoader {
     /// use candle_coreml::UnifiedModelLoader;
     ///
     /// let loader = UnifiedModelLoader::new()?;
-    /// let model = loader.load_model("mazhewitt/qwen-typo-fixer-coreml").await?;
+    /// let _model = loader.load_model("mazhewitt/qwen-typo-fixer-coreml")?;
     /// # Ok::<(), Box<dyn std::error::Error>>(())
     /// ```
     pub fn load_model(&self, model_id: &str) -> Result<QwenModel> {
