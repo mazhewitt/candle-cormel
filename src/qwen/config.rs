@@ -82,18 +82,7 @@ impl QwenConfig {
         &self,
         tokens: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        let expected_shape = self.model_config.embeddings_input_shape().unwrap();
-        let expected_len = expected_shape[1]; // [batch, seq_len] -> seq_len
-
-        // Pad or truncate tokens to match expected length
-        let mut padded_tokens = tokens.to_vec();
-        padded_tokens.resize(expected_len, 0); // Pad with 0s
-
-        candle_core::Tensor::from_vec(
-            padded_tokens,
-            (expected_shape[0], expected_shape[1]),
-            &self.device,
-        )
+        self.model_config.create_embeddings_input_tensor(tokens, &self.device)
     }
 
     /// Create position IDs tensor for FFN prefill with proper shape
@@ -101,77 +90,24 @@ impl QwenConfig {
         &self,
         positions: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        let expected_shape = self
-            .model_config
-            .get_tensor_shape("ffn_prefill", "position_ids", true)
-            .unwrap();
-        let expected_len = expected_shape[0];
-
-        // Create position sequence up to expected length
-        let mut position_ids = Vec::with_capacity(expected_len);
-        for i in 0..expected_len {
-            if i < positions.len() {
-                position_ids.push(positions[i]);
-            } else {
-                position_ids.push(0); // Pad with 0s
-            }
-        }
-
-        candle_core::Tensor::from_vec(position_ids, (expected_len,), &self.device)
+        self.model_config.create_ffn_position_ids_tensor(positions, &self.device)
     }
 
     /// Create causal mask tensor for FFN with proper shape
     pub fn create_ffn_causal_mask_tensor(
         &self,
-        _batch_size: usize,
-        _context_length: usize,
+        batch_size: usize,
+        context_length: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
-        // Prefer explicit shape from config; otherwise synthesize a reasonable default
-        let fallback_shape = vec![1, 1, 1, self.model_config.shapes.context_length];
-        let expected_shape = self
-            .model_config
-            .get_tensor_shape("ffn_prefill", "causal_mask", true)
-            .unwrap_or(&fallback_shape);
-        let mask_batch_size = expected_shape[2];
-        let mask_context_length = expected_shape[3];
-
-        // For single-token sequential prefill (hidden_states shape [1,1,H]) we still need a full causal mask logically,
-        // but the network expects shape [1,1,1,context_length]. We'll just build the expected shape directly.
-        let mut mask_data = vec![f32::NEG_INFINITY; mask_batch_size * mask_context_length];
-        for i in 0..mask_batch_size {
-            // usually 1 in sequential mode
-            for j in 0..=i.min(mask_context_length - 1) {
-                // i will be 0 -> only j=0 set to 0.0
-                mask_data[i * mask_context_length + j] = 0.0;
-            }
-        }
-        candle_core::Tensor::from_vec(
-            mask_data,
-            (
-                expected_shape[0],
-                expected_shape[1],
-                expected_shape[2],
-                expected_shape[3],
-            ),
-            &self.device,
-        )
+        self.model_config.create_ffn_causal_mask_tensor(batch_size, context_length, &self.device)
     }
 
     /// Create single token hidden states tensor for LM head
     pub fn create_single_token_hidden_states(
         &self,
-        _tokens: &[i64],
+        tokens: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        let expected_shape = self
-            .model_config
-            .get_tensor_shape("lm_head", "hidden_states", true)
-            .unwrap();
-
-        // Create dummy tensor with correct shape (would be filled by actual embeddings)
-        let tensor_data = vec![0.0f32; expected_shape.iter().product()];
-        let shape = (expected_shape[0], expected_shape[1], expected_shape[2]);
-
-        candle_core::Tensor::from_vec(tensor_data, shape, &self.device)
+        self.model_config.create_single_token_hidden_states(tokens, &self.device)
     }
 
     /// Create position IDs tensor for inference (single position)
@@ -179,8 +115,7 @@ impl QwenConfig {
         &self,
         position: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
-        // For inference, use single position
-        candle_core::Tensor::from_vec(vec![position as i64], (1,), &self.device)
+        self.model_config.create_infer_position_ids_tensor(position as i64, &self.device)
     }
 
     /// Create causal mask tensor for inference
@@ -311,6 +246,14 @@ impl QwenConfig {
             // Fallback to the original infer mask creation
             self.create_infer_causal_mask_tensor(position, context_length)
         }
+    }
+    
+    /// Create current position tensor for FFN (delegates to ModelConfig)
+    pub fn create_current_pos_tensor(
+        &self,
+        position: i64,
+    ) -> Result<candle_core::Tensor, CandleError> {
+        self.model_config.create_current_pos_tensor(position, &self.device)
     }
 
     /// Create a QwenConfig for a known model ID (deprecated - use UnifiedModelLoader instead)
