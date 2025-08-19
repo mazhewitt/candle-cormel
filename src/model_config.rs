@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
+use candle_core::{Device, Error as CandleError, Tensor};
 
 /// Complete model configuration including shapes, components, and naming patterns
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -377,6 +378,138 @@ impl ModelConfig {
         }
         debug!("🔍 expects_full_sequence_prefill: no ffn_prefill or hidden_states found, returning false");
         false
+    }
+
+    // Tensor Creation Methods (moved from QwenConfig for consolidation)
+    
+    /// Create embeddings input tensor with proper shape from configuration
+    pub fn create_embeddings_input_tensor(
+        &self,
+        tokens: &[i64],
+        device: &Device,
+    ) -> Result<Tensor, CandleError> {
+        let expected_shape = self.embeddings_input_shape()
+            .ok_or_else(|| CandleError::Msg("No embeddings input shape found".to_string()))?;
+        let expected_len = expected_shape[1]; // [batch, seq_len] -> seq_len
+
+        // Pad or truncate tokens to match expected length
+        let mut padded_tokens = tokens.to_vec();
+        padded_tokens.resize(expected_len, 0); // Pad with 0s
+
+        Tensor::from_vec(
+            padded_tokens,
+            (expected_shape[0], expected_shape[1]),
+            device,
+        )
+    }
+
+    /// Create position IDs tensor for FFN prefill with proper shape
+    pub fn create_ffn_position_ids_tensor(
+        &self,
+        positions: &[i64],
+        device: &Device,
+    ) -> Result<Tensor, CandleError> {
+        let expected_shape = self
+            .get_tensor_shape("ffn_prefill", "position_ids", true)
+            .ok_or_else(|| CandleError::Msg("No FFN prefill position_ids shape found".to_string()))?;
+        let expected_len = expected_shape[0];
+
+        // Create position sequence up to expected length
+        let mut position_ids = Vec::with_capacity(expected_len);
+        for i in 0..expected_len {
+            if i < positions.len() {
+                position_ids.push(positions[i]);
+            } else {
+                position_ids.push(0); // Pad with 0s
+            }
+        }
+
+        Tensor::from_vec(position_ids, (expected_len,), device)
+    }
+
+    /// Create causal mask tensor for FFN with proper shape
+    pub fn create_ffn_causal_mask_tensor(
+        &self,
+        _batch_size: usize,
+        _context_length: usize,
+        device: &Device,
+    ) -> Result<Tensor, CandleError> {
+        // Prefer explicit shape from config; otherwise synthesize a reasonable default
+        let fallback_shape = vec![1, 1, 1, self.shapes.context_length];
+        let expected_shape = self
+            .get_tensor_shape("ffn_prefill", "causal_mask", true)
+            .unwrap_or(&fallback_shape);
+        let mask_batch_size = expected_shape[2];
+        let mask_context_length = expected_shape[3];
+
+        // Create causal mask data
+        let mut mask_data = vec![f32::NEG_INFINITY; mask_batch_size * mask_context_length];
+        for i in 0..mask_batch_size {
+            for j in 0..=i.min(mask_context_length - 1) {
+                mask_data[i * mask_context_length + j] = 0.0;
+            }
+        }
+        
+        Tensor::from_vec(
+            mask_data,
+            (
+                expected_shape[0],
+                expected_shape[1],
+                expected_shape[2],
+                expected_shape[3],
+            ),
+            device,
+        )
+    }
+
+    /// Create single token hidden states tensor for LM head
+    pub fn create_single_token_hidden_states(
+        &self,
+        _tokens: &[i64],
+        device: &Device,
+    ) -> Result<Tensor, CandleError> {
+        let expected_shape = self
+            .get_tensor_shape("lm_head", "hidden_states", true)
+            .ok_or_else(|| CandleError::Msg("No LM head hidden_states shape found".to_string()))?;
+
+        // Create dummy tensor with correct shape (would be filled by actual embeddings)
+        let tensor_data = vec![0.0f32; expected_shape.iter().product()];
+        let shape = (expected_shape[0], expected_shape[1], expected_shape[2]);
+
+        Tensor::from_vec(tensor_data, shape, device)
+    }
+
+    /// Create position IDs tensor for inference (single position)
+    pub fn create_infer_position_ids_tensor(
+        &self,
+        position: i64,
+        device: &Device,
+    ) -> Result<Tensor, CandleError> {
+        // Check if we have a dedicated ffn_infer component with specific shape
+        if let Some(infer_shape) = self.get_tensor_shape("ffn_infer", "position_ids", true) {
+            // Use the infer-specific shape
+            if infer_shape.len() == 1 {
+                Tensor::from_vec(vec![position], (infer_shape[0],), device)
+            } else {
+                let size = infer_shape.iter().product();
+                let mut data = vec![0i64; size];
+                data[0] = position;
+                Tensor::from_vec(data, infer_shape.as_slice(), device)
+            }
+        } else {
+            // No dedicated infer component - use single position for inference (original QwenConfig behavior)
+            Tensor::from_vec(vec![position], (1,), device)
+        }
+    }
+
+    /// Create current position tensor for FFN
+    pub fn create_current_pos_tensor(
+        &self,
+        position: i64,
+        device: &Device,
+    ) -> Result<Tensor, CandleError> {
+        // Most models expect [1] shape for current_pos
+        Tensor::from_vec(vec![position], (1,), device)
     }
 }
 

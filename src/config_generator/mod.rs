@@ -310,7 +310,7 @@ mod tests {
         let generator = ConfigGenerator::new()?;
         
         // Should have all modules initialized
-        assert!(generator.caching.has_cached_config("nonexistent")); // Should return false but not crash
+        assert!(!generator.caching.has_cached_config("nonexistent")); // Should return false but not crash
         
         Ok(())
     }
