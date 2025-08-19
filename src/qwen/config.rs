@@ -126,14 +126,12 @@ impl QwenConfig {
         _batch_size: usize,
         _context_length: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
+        // Prefer explicit shape from config; otherwise synthesize a reasonable default
+        let fallback_shape = vec![1, 1, 1, self.model_config.shapes.context_length];
         let expected_shape = self
             .model_config
             .get_tensor_shape("ffn_prefill", "causal_mask", true)
-            .ok_or_else(|| {
-                CandleError::Msg(
-                    "No ffn_prefill causal_mask shape found in configuration".to_string(),
-                )
-            })?;
+            .unwrap_or(&fallback_shape);
         let mask_batch_size = expected_shape[2];
         let mask_context_length = expected_shape[3];
 
