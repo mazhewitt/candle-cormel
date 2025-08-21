@@ -6,11 +6,11 @@
 //! for known models.
 
 use anyhow::{Context, Result};
+use candle_core::{Device, Error as CandleError, Tensor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::debug;
-use candle_core::{Device, Error as CandleError, Tensor};
 
 /// Complete model configuration including shapes, components, and naming patterns
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -101,7 +101,6 @@ impl ModelConfig {
 
         Ok(())
     }
-
 
     /// Create a default configuration with standard Qwen shapes
     pub fn default_qwen() -> Self {
@@ -381,14 +380,15 @@ impl ModelConfig {
     }
 
     // Tensor Creation Methods (moved from QwenConfig for consolidation)
-    
+
     /// Create embeddings input tensor with proper shape from configuration
     pub fn create_embeddings_input_tensor(
         &self,
         tokens: &[i64],
         device: &Device,
     ) -> Result<Tensor, CandleError> {
-        let expected_shape = self.embeddings_input_shape()
+        let expected_shape = self
+            .embeddings_input_shape()
             .ok_or_else(|| CandleError::Msg("No embeddings input shape found".to_string()))?;
         let expected_len = expected_shape[1]; // [batch, seq_len] -> seq_len
 
@@ -411,7 +411,9 @@ impl ModelConfig {
     ) -> Result<Tensor, CandleError> {
         let expected_shape = self
             .get_tensor_shape("ffn_prefill", "position_ids", true)
-            .ok_or_else(|| CandleError::Msg("No FFN prefill position_ids shape found".to_string()))?;
+            .ok_or_else(|| {
+                CandleError::Msg("No FFN prefill position_ids shape found".to_string())
+            })?;
         let expected_len = expected_shape[0];
 
         // Create position sequence up to expected length
@@ -449,7 +451,7 @@ impl ModelConfig {
                 mask_data[i * mask_context_length + j] = 0.0;
             }
         }
-        
+
         Tensor::from_vec(
             mask_data,
             (
@@ -508,7 +510,32 @@ impl ModelConfig {
         position: i64,
         device: &Device,
     ) -> Result<Tensor, CandleError> {
-        // Most models expect [1] shape for current_pos
+        // Prefer explicit prefill shape when available
+        if let Some(prefill_shape) = self.get_tensor_shape("ffn_prefill", "current_pos", true)
+        {
+            if prefill_shape.len() == 1 {
+                let expected_len = prefill_shape[0];
+                if expected_len == 1 {
+                    return Tensor::from_vec(vec![position], (1,), device);
+                }
+                // Build vector length expected_len; fill with sequential positions up to expected_len
+                // Use same convention as position_ids: 0..expected_len-1 with zeros after current position
+                let current_pos = position.max(0) as usize;
+                let mut data: Vec<i64> = (0..expected_len as i64).collect();
+                let cutoff = current_pos.saturating_add(1).min(expected_len);
+                for item in data.iter_mut().take(expected_len).skip(cutoff) {
+                    *item = 0;
+                }
+                return Tensor::from_vec(data, (expected_len,), device);
+            }
+            // Non-1D shapes: place the scalar in first position and zero others
+            let size: usize = prefill_shape.iter().product();
+            let mut data = vec![0i64; size];
+            data[0] = position;
+            return Tensor::from_vec(data, prefill_shape.as_slice(), device);
+        }
+
+        // Fallback: treat as scalar
         Tensor::from_vec(vec![position], (1,), device)
     }
 }

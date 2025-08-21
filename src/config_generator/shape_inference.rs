@@ -8,6 +8,12 @@ use tracing::debug;
 
 pub struct ShapeInference;
 
+impl Default for ShapeInference {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ShapeInference {
     pub fn new() -> Self {
         Self
@@ -36,7 +42,7 @@ impl ShapeInference {
     /// Infer batch size from the smallest batch dimension across all components
     fn infer_batch_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut batch_sizes = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.inputs.values().chain(component.outputs.values()) {
                 if !tensor.shape.is_empty() {
@@ -44,14 +50,14 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         batch_sizes.into_iter().min().unwrap_or(1)
     }
 
     /// Infer hidden size from the largest feature dimension
     fn infer_hidden_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut feature_sizes = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.inputs.values().chain(component.outputs.values()) {
                 if tensor.shape.len() >= 3 {
@@ -63,14 +69,14 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         feature_sizes.into_iter().max().unwrap_or(1024)
     }
 
     /// Infer context/sequence length from sequence dimensions
     fn infer_context_length(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut seq_lengths = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.inputs.values().chain(component.outputs.values()) {
                 if tensor.shape.len() >= 2 && tensor.shape[1] > 1 {
@@ -83,14 +89,14 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         seq_lengths.into_iter().max().unwrap_or(256)
     }
 
     /// Infer vocabulary size from the largest output dimension
     fn infer_vocab_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut output_sizes = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.outputs.values() {
                 if let Some(&last_dim) = tensor.shape.last() {
@@ -101,48 +107,50 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         output_sizes.into_iter().max().unwrap_or(30000)
     }
 
     /// Analyze component characteristics for debugging
-    pub fn analyze_components(&self, components: &HashMap<String, ComponentConfig>) -> ComponentAnalysis {
+    pub fn analyze_components(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> ComponentAnalysis {
         let mut analysis = ComponentAnalysis::default();
-        
+
         for (name, component) in components {
             let comp_analysis = self.analyze_single_component(name, component);
             analysis.components.insert(name.clone(), comp_analysis);
         }
-        
+
         analysis.total_components = components.len();
-        analysis.function_based_components = components.values()
+        analysis.function_based_components = components
+            .values()
             .filter(|c| !c.functions.is_empty())
             .count();
-        analysis.multi_function_components = components.values()
+        analysis.multi_function_components = components
+            .values()
             .filter(|c| c.functions.len() > 1)
             .count();
-            
+
         analysis
     }
 
-    fn analyze_single_component(&self, name: &str, component: &ComponentConfig) -> SingleComponentAnalysis {
-        let input_shapes: Vec<Vec<usize>> = component.inputs.values()
+    fn analyze_single_component(
+        &self,
+        name: &str,
+        component: &ComponentConfig,
+    ) -> SingleComponentAnalysis {
+        let input_shapes: Vec<Vec<usize>> =
+            component.inputs.values().map(|t| t.shape.clone()).collect();
+        let output_shapes: Vec<Vec<usize>> = component
+            .outputs
+            .values()
             .map(|t| t.shape.clone())
             .collect();
-        let output_shapes: Vec<Vec<usize>> = component.outputs.values()
-            .map(|t| t.shape.clone())
-            .collect();
-            
-        let max_input_dim = input_shapes.iter()
-            .flatten()
-            .max()
-            .copied()
-            .unwrap_or(0);
-        let max_output_dim = output_shapes.iter()
-            .flatten()
-            .max()
-            .copied()
-            .unwrap_or(0);
+
+        let max_input_dim = input_shapes.iter().flatten().max().copied().unwrap_or(0);
+        let max_output_dim = output_shapes.iter().flatten().max().copied().unwrap_or(0);
 
         SingleComponentAnalysis {
             name: name.to_string(),

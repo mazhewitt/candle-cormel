@@ -51,14 +51,18 @@ pub fn download_model(model_id: &str, verbose: bool) -> Result<PathBuf> {
 
     // Acquire a simple per-model lock to avoid concurrent clones into the same directory
     let model_cache_name = model_id.replace('/', "--");
-    let lock_path = cache_base.join(format!(".lock-{}", model_cache_name));
+    let lock_path = cache_base.join(format!(".lock-{model_cache_name}"));
 
     // Best-effort locking with timeout
     let start = Instant::now();
     let timeout = Duration::from_secs(60);
     let backoff = Duration::from_millis(200);
     loop {
-        match OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock_path)
+        {
             Ok(mut f) => {
                 let _ = writeln!(f, "pid:{}", std::process::id());
                 break;
@@ -68,7 +72,11 @@ pub fn download_model(model_id: &str, verbose: bool) -> Result<PathBuf> {
                     // If lock persists too long, try removing stale lock and continue
                     let _ = fs::remove_file(&lock_path);
                     // One last attempt to acquire
-                    match OpenOptions::new().write(true).create_new(true).open(&lock_path) {
+                    match OpenOptions::new()
+                        .write(true)
+                        .create_new(true)
+                        .open(&lock_path)
+                    {
                         Ok(mut f) => {
                             let _ = writeln!(f, "pid:{}", std::process::id());
                             break;
@@ -77,7 +85,8 @@ pub fn download_model(model_id: &str, verbose: bool) -> Result<PathBuf> {
                             // Give up with a helpful error
                             return Err(anyhow::anyhow!(
                                 "Timed out waiting for download lock for model '{}': {}",
-                                model_id, e
+                                model_id,
+                                e
                             ));
                         }
                     }

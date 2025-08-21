@@ -72,50 +72,28 @@ impl QwenModel {
         };
 
         let (final_positions, shape) = if let Some(expected_shape) = expected_shape {
-            let expected_len = expected_shape[0]; // Should be [64] -> 64
+            let expected_len = expected_shape[0]; // e.g., 128
 
-            if positions.len() == 1 {
-                // Single token inference: create full position sequence up to current position
-                let current_pos = positions[0];
-                let mut full_positions = (0..expected_len as i64).collect::<Vec<i64>>();
-
-                // Set positions up to current_pos, pad rest with 0
-                if current_pos >= 0 && (current_pos as usize) < expected_len {
-                    // Fill positions 0..=current_pos, leave rest as 0
-                    for item in full_positions
-                        .iter_mut()
-                        .take(expected_len)
-                        .skip(current_pos as usize + 1)
-                    {
-                        *item = 0;
-                    }
+            // Always produce a vector of expected_len, even for single position
+            let current_pos = *positions.get(0).unwrap_or(&0);
+            let mut full_positions = (0..expected_len as i64).collect::<Vec<i64>>();
+            if current_pos >= 0 && (current_pos as usize) < expected_len {
+                for item in full_positions
+                    .iter_mut()
+                    .take(expected_len)
+                    .skip(current_pos as usize + 1)
+                {
+                    *item = 0;
                 }
-
-                debug!(
-                    "Single token inference: creating position tensor with shape [{}] for current position {} (expected shape: {:?})",
-                    expected_len, current_pos, expected_shape
-                );
-                (full_positions, (expected_len,))
-            } else {
-                // Multi-token case: use as provided but validate length
-                let mut final_positions = positions;
-                if final_positions.len() > expected_len {
-                    debug!(
-                        "Truncating position tensor from {} to {} positions",
-                        final_positions.len(),
-                        expected_len
-                    );
-                    final_positions.truncate(expected_len);
-                } else if final_positions.len() < expected_len {
-                    debug!(
-                        "Padding position tensor from {} to {} positions",
-                        final_positions.len(),
-                        expected_len
-                    );
-                    final_positions.resize(expected_len, 0);
-                }
-                (final_positions, (expected_len,))
             }
+
+            debug!(
+                "Creating position tensor with shape [{}] (expected) for current_pos {} (orig len={})",
+                expected_len,
+                current_pos,
+                positions.len()
+            );
+            (full_positions, (expected_len,))
         } else {
             // Fallback to original behavior if no model config available
             debug!("No FFN prefill position_ids shape found in ModelConfig, using legacy behavior");

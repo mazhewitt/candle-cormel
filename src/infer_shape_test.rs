@@ -220,7 +220,9 @@ mod tests {
         // Integration test to verify that shape detection works with real model
         // Try to use UnifiedModelLoader, but gracefully handle failures
         let model_result = crate::UnifiedModelLoader::new()
-            .and_then(|loader| loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4"))
+            .and_then(|loader| {
+                loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")
+            })
             .or_else(|_| {
                 // Fallback: try default config with actual model files
                 let model_config = ModelConfig::default_qwen();
@@ -228,7 +230,7 @@ mod tests {
                 QwenModel::load_from_directory(&model_path, Some(config))
                     .map_err(|e| anyhow::anyhow!("Failed to load model: {}", e))
             });
-        
+
         let mut model = match model_result {
             Ok(model) => model,
             Err(_) => {
@@ -236,10 +238,11 @@ mod tests {
                 return;
             }
         };
-        
+
         // Test should work if model is available
         if model.initialize_states().is_ok() {
-            let _result = model.run_chatpy_infer(&[785, 3974, 13876, 38835, 34208, 916, 279, 15678], 8);
+            let _result =
+                model.run_chatpy_infer(&[785, 3974, 13876, 38835, 34208, 916, 279, 15678], 8);
             println!("✅ Shape detection test completed successfully");
         } else {
             eprintln!("⚠️  Could not initialize model states - test may not be valid");
@@ -256,9 +259,9 @@ mod tests {
 
         // With our fix implemented, this should work
         // Try to use UnifiedModelLoader, but gracefully handle failures
-        let mut model = match crate::UnifiedModelLoader::new()
-            .and_then(|loader| loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")) 
-        {
+        let mut model = match crate::UnifiedModelLoader::new().and_then(|loader| {
+            loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")
+        }) {
             Ok(model) => model,
             Err(_) => {
                 // Fallback: try default config with actual model files
@@ -281,7 +284,11 @@ mod tests {
             match &next_token {
                 Ok(token) => {
                     println!("✅ Successfully generated token: {token}");
-                    assert!(next_token.is_ok(), "Should work with fixed shape handling: {:?}", next_token.err());
+                    assert!(
+                        next_token.is_ok(),
+                        "Should work with fixed shape handling: {:?}",
+                        next_token.err()
+                    );
                 }
                 Err(e) => {
                     println!("❌ Error: {e}");

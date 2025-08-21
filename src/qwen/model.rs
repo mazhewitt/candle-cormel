@@ -123,11 +123,13 @@ impl QwenModel {
         // Use the full causal mask (should already be correctly sized for the sequence)
         let causal_mask = causal_mask_full.clone();
 
-        // Set current_pos to 0 for prefill (matches Python behavior)
-        // Python uses batch_pos=0 for prefill, not the last position
-        let current_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
+        // Set current_pos using ModelConfig to match prefill input shape (vector vs scalar)
+        let current_pos = self
+            .config
+            .model_config
+            .create_current_pos_tensor(0, device)?;
 
-    trace!(
+        trace!(
             "🚀 FULL-SEQUENCE PREFILL: Processing full sequence with shape {:?}, max_pos: {}",
             embeddings_chunk.dims(),
             max_global_pos
@@ -158,8 +160,8 @@ impl QwenModel {
         )?;
 
         // Cache the prefill output for use in get_infer_hidden_states
-    self.cached_prefill_output = Some(prefill_output);
-    trace!("✅ FULL-SEQUENCE PREFILL: Successfully processed full sequence");
+        self.cached_prefill_output = Some(prefill_output);
+        trace!("✅ FULL-SEQUENCE PREFILL: Successfully processed full sequence");
         Ok(())
     }
 
@@ -469,7 +471,7 @@ impl QwenModel {
 
     /// Pad tokens to appropriate batch size for embeddings using dynamic configuration
     pub fn pad_tokens(&self, tokens: &[i64]) -> Vec<i64> {
-    trace!(
+        trace!(
             "🔍 PAD_TOKENS: Called with {} tokens: {:?}",
             tokens.len(),
             tokens
@@ -547,9 +549,10 @@ impl QwenModel {
         let context_length = self.config.context_length();
         let device = &self.config.device;
 
-    trace!(
+        trace!(
             "Running prefill for {} tokens (padded to {} batch) to populate KV cache",
-            sequence_length, batch_size
+            sequence_length,
+            batch_size
         );
 
         // Branch: unified multi-token prefill vs single-token sequential prefill
@@ -595,7 +598,10 @@ impl QwenModel {
                 self.cached_causal_mask = Some(m.clone());
                 m
             };
-            let current_pos = Tensor::from_vec(vec![sequence_length as i64 - 1], (1,), device)?;
+            let current_pos = self
+                .config
+                .model_config
+                .create_current_pos_tensor(sequence_length as i64 - 1, device)?;
             let prefill_output = self.run_ffn_prefill_with_inputs(
                 embeddings,
                 &position_ids,
@@ -623,7 +629,7 @@ impl QwenModel {
     ) -> Result<Tensor, CandleError> {
         let context_length = self.config.context_length();
 
-    trace!(
+        trace!(
             "Running infer for position {} using SHARED state from prefill (FIXED: last token pos)",
             current_position
         );
@@ -635,7 +641,7 @@ impl QwenModel {
                 "No unified state available - prefill must be run first".to_string(),
             ));
         }
-    trace!("Using SHARED state populated by prefill (like working tests)");
+        trace!("Using SHARED state populated by prefill (like working tests)");
 
         // Create infer inputs (config-driven to support variant shapes)
         let position_ids = self
@@ -649,20 +655,20 @@ impl QwenModel {
         let current_pos = position_ids.clone();
 
         // Run infer with the shared state to get next-step hidden states
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: token_embedding shape={:?}",
             token_embedding.dims()
         );
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: position_ids shape={:?} vals={:?}",
             position_ids.dims(),
             position_ids.to_vec1::<i64>().unwrap_or_default()
         );
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: causal_mask shape={:?}",
             causal_mask.dims()
         );
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: current_pos shape={:?} vals={:?}",
             current_pos.dims(),
             current_pos.to_vec1::<i64>().unwrap_or_default()
@@ -674,7 +680,7 @@ impl QwenModel {
             &current_pos,
         )?;
 
-    trace!("Infer complete - processing through LM head");
+        trace!("Infer complete - processing through LM head");
 
         // Run through LM head to get logits (using granular method)
         let combined_logits = self.run_lm_head_with_inputs(&hidden_states)?;

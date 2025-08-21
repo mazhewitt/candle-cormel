@@ -95,6 +95,7 @@ fn get_qwen_model_path() -> Option<PathBuf> {
 fn create_test_qwen_model() -> Option<QwenModel> {
     let model_path = get_qwen_model_path()?;
     // Use the correct model configuration for the standard ANEMLL model
+    #[allow(deprecated)]
     let config =
         QwenConfig::for_model_id("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4").ok()?;
 

@@ -82,7 +82,8 @@ impl QwenConfig {
         &self,
         tokens: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_embeddings_input_tensor(tokens, &self.device)
+        self.model_config
+            .create_embeddings_input_tensor(tokens, &self.device)
     }
 
     /// Create position IDs tensor for FFN prefill with proper shape
@@ -90,7 +91,8 @@ impl QwenConfig {
         &self,
         positions: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_ffn_position_ids_tensor(positions, &self.device)
+        self.model_config
+            .create_ffn_position_ids_tensor(positions, &self.device)
     }
 
     /// Create causal mask tensor for FFN with proper shape
@@ -99,7 +101,8 @@ impl QwenConfig {
         batch_size: usize,
         context_length: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_ffn_causal_mask_tensor(batch_size, context_length, &self.device)
+        self.model_config
+            .create_ffn_causal_mask_tensor(batch_size, context_length, &self.device)
     }
 
     /// Create single token hidden states tensor for LM head
@@ -107,7 +110,8 @@ impl QwenConfig {
         &self,
         tokens: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_single_token_hidden_states(tokens, &self.device)
+        self.model_config
+            .create_single_token_hidden_states(tokens, &self.device)
     }
 
     /// Create position IDs tensor for inference (single position)
@@ -115,7 +119,8 @@ impl QwenConfig {
         &self,
         position: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_infer_position_ids_tensor(position as i64, &self.device)
+        self.model_config
+            .create_infer_position_ids_tensor(position as i64, &self.device)
     }
 
     /// Create causal mask tensor for inference
@@ -160,43 +165,43 @@ impl QwenConfig {
     ) -> Result<candle_core::Tensor, CandleError> {
         if is_prefill {
             // Use prefill shape (batch-sized)
-            self.create_ffn_position_ids_tensor(positions)
-        } else {
-            // For infer, check if we have separate ffn_infer component
-            if self.model_config.components.contains_key("ffn_infer") {
-                // Use infer-specific shape
-                if let Some(infer_shape) =
-                    self.model_config
-                        .get_tensor_shape("ffn_infer", "position_ids", true)
-                {
-                    if infer_shape[0] == 1 {
-                        // Single position for infer - FORCE infer tensor creation
-                        debug!("🔧 SHAPE FIX: Using infer position_ids tensor (shape [1])");
-                        return self.create_infer_position_ids_tensor(positions[0] as usize);
-                    } else {
-                        debug!(
-                            "⚠️ SHAPE WARNING: ffn_infer position_ids shape is not [1]: {:?}",
-                            infer_shape
-                        );
-                    }
-                } else {
-                    debug!("⚠️ SHAPE WARNING: No shape found for ffn_infer position_ids");
-                }
-            } else {
-                debug!("⚠️ SHAPE WARNING: No ffn_infer component found");
-            }
-
-            // CRITICAL FIX: For single-token inference, ALWAYS use infer tensor shape
-            // This prevents falling back to the prefill shape when we need infer shape
-            if positions.len() == 1 {
-                debug!("🔧 SHAPE FIX: Forcing infer position_ids tensor for single position");
-                return self.create_infer_position_ids_tensor(positions[0] as usize);
-            }
-
-            // Fallback to prefill shape or model configuration (this should rarely happen now)
-            debug!("⚠️ SHAPE WARNING: Falling back to prefill position_ids tensor");
-            self.create_ffn_position_ids_tensor(positions)
+            return self.create_ffn_position_ids_tensor(positions);
         }
+
+        // Infer mode: determine expected length from config
+        let expected_len = if let Some(infer_shape) =
+            self.model_config
+                .get_tensor_shape("ffn_infer", "position_ids", true)
+        {
+            infer_shape[0]
+        } else if let Some(prefill_shape) = self
+            .model_config
+            .get_tensor_shape("ffn_prefill", "position_ids", true)
+        {
+            prefill_shape[0]
+        } else {
+            positions.len()
+        };
+
+        if expected_len == 1 {
+            // Model expects a single position scalar in infer
+            debug!("🔧 SHAPE: Using [1] infer position_ids as per config");
+            return self.create_infer_position_ids_tensor(positions[0] as usize);
+        }
+
+        // Model expects a vector length > 1 (e.g., 64/128). Build a full vector.
+        let current_pos = positions.get(0).copied().unwrap_or(0);
+        let mut full_positions: Vec<i64> = (0..expected_len as i64).collect();
+        // Zero out entries after current_pos to match prefill-style encoding
+        let cutoff = (current_pos as usize).saturating_add(1).min(expected_len);
+        for item in full_positions.iter_mut().take(expected_len).skip(cutoff) {
+            *item = 0;
+        }
+        debug!(
+            "🔧 SHAPE: Using infer position_ids vector of len {} (current_pos={})",
+            expected_len, current_pos
+        );
+        candle_core::Tensor::from_vec(full_positions, (expected_len,), &self.device)
     }
 
     /// Create causal mask tensor with mode detection (prefill vs infer)
@@ -247,23 +252,25 @@ impl QwenConfig {
             self.create_infer_causal_mask_tensor(position, context_length)
         }
     }
-    
+
     /// Create current position tensor for FFN (delegates to ModelConfig)
     pub fn create_current_pos_tensor(
         &self,
         position: i64,
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_current_pos_tensor(position, &self.device)
+        self.model_config
+            .create_current_pos_tensor(position, &self.device)
     }
 
     /// Create a QwenConfig for a known model ID (deprecated - use UnifiedModelLoader instead)
-    #[deprecated(note = "Use UnifiedModelLoader to load models dynamically instead of hardcoded configs")]
+    #[deprecated(
+        note = "Use UnifiedModelLoader to load models dynamically instead of hardcoded configs"
+    )]
     pub fn for_model_id(model_id: &str) -> Result<Self, CandleError> {
         // This method is deprecated. Users should use UnifiedModelLoader which automatically
         // downloads models and generates configs dynamically.
         Err(CandleError::Msg(format!(
-            "for_model_id is deprecated. Use UnifiedModelLoader to load model '{}' dynamically",
-            model_id
+            "for_model_id is deprecated. Use UnifiedModelLoader to load model '{model_id}' dynamically"
         )))
     }
 
@@ -446,9 +453,10 @@ mod tests {
     #[test]
     fn test_qwen_config_for_model_id() {
         // Test that for_model_id is now deprecated and returns error
+        #[allow(deprecated)]
         let unknown_result = QwenConfig::for_model_id("unknown/model");
         assert!(unknown_result.is_err());
-        
+
         // Test modern approach using default config
         let default_config = ModelConfig::default_qwen();
         let qwen_config = QwenConfig::from_model_config(default_config);
@@ -464,11 +472,11 @@ mod tests {
         // This is expected since default_qwen() is a minimal config template
         let validation_result = standard_config.validate();
         assert!(validation_result.is_err());
-        
+
         // Validation fails because it's missing required components
         let error_msg = validation_result.unwrap_err().to_string();
         assert!(error_msg.contains("Missing required component"));
-        
+
         // Note: For valid configs with components, use UnifiedModelLoader which
         // automatically generates complete configurations from .mlpackage files
     }

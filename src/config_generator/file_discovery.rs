@@ -9,6 +9,12 @@ use tracing::debug;
 
 pub struct FileDiscovery;
 
+impl Default for FileDiscovery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileDiscovery {
     pub fn new() -> Self {
         Self
@@ -61,7 +67,7 @@ impl FileDiscovery {
             .to_string();
 
         debug!("🔍 Using filename as component name: {}", filename);
-        
+
         // Clean up filename for use as component key
         filename.replace(['-', '.'], "_").to_lowercase()
     }
@@ -96,13 +102,14 @@ impl FileDiscovery {
     /// Get summary information about discovered packages
     pub fn analyze_packages(&self, packages: &[PathBuf]) -> PackageAnalysis {
         let mut analysis = PackageAnalysis::default();
-        
+
         for package in packages {
-            let filename = package.file_name()
+            let filename = package
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_lowercase();
-                
+
             if filename.contains("embedding") {
                 analysis.embeddings_packages.push(package.clone());
             } else if filename.contains("ffn") || filename.contains("transformer") {
@@ -113,7 +120,7 @@ impl FileDiscovery {
                 analysis.other_packages.push(package.clone());
             }
         }
-        
+
         analysis.total_packages = packages.len();
         analysis
     }
@@ -148,9 +155,9 @@ pub struct PackageAnalysis {
 impl PackageAnalysis {
     /// Check if this looks like a standard transformer architecture
     pub fn is_transformer_like(&self) -> bool {
-        !self.embeddings_packages.is_empty() && 
-        !self.transformer_packages.is_empty() && 
-        !self.head_packages.is_empty()
+        !self.embeddings_packages.is_empty()
+            && !self.transformer_packages.is_empty()
+            && !self.head_packages.is_empty()
     }
 
     /// Get a summary string of the package distribution

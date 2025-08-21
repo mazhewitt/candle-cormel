@@ -104,7 +104,8 @@ impl QwenModel {
         let embeddings_time = embeddings_start.elapsed();
         trace!(
             "⚡ Cached embeddings took: {:?} for {} tokens",
-            embeddings_time, context_pos
+            embeddings_time,
+            context_pos
         );
 
         // If model is configured for single-token sequential prefill, use simplified path
@@ -235,13 +236,13 @@ impl QwenModel {
         let prefill_start = std::time::Instant::now();
         self.run_chatpy_prefill(&tokens, context_pos)?;
         let prefill_time = prefill_start.elapsed();
-    trace!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
+        trace!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
 
         // PHASE 2: SINGLE TOKEN INFER (chat.py architecture with embeddings optimization)
         let infer_start = std::time::Instant::now();
         let next_token = self.run_chatpy_infer(&tokens, context_pos)?;
         let infer_time = infer_start.elapsed();
-    trace!("⚡ Optimized chat.py infer took: {:?}", infer_time);
+        trace!("⚡ Optimized chat.py infer took: {:?}", infer_time);
 
         let total_time = start_time.elapsed();
         trace!(
@@ -267,7 +268,7 @@ impl QwenModel {
         let next_token = indexed_logits[0].0 as i64;
 
         // Show top predictions for debugging
-    trace!("Top 5 extract_next_token predictions:");
+        trace!("Top 5 extract_next_token predictions:");
         for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
             let decoded = self
                 .tokenizer
@@ -300,7 +301,7 @@ impl QwenModel {
             return self.prefill_full_sequence_chunk(&embeddings, context_pos - 1, &causal_mask);
         }
 
-    trace!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
+        trace!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
         let batch_size = self.config.batch_size(); // 64
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
@@ -434,7 +435,8 @@ impl QwenModel {
 
         trace!(
             "✅ Optimized chat.py infer: Generated token {} at position {}",
-            next_token, pos
+            next_token,
+            pos
         );
         Ok(next_token)
     }

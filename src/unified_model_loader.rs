@@ -87,7 +87,10 @@ impl UnifiedModelLoader {
                     if let Some(model_path_str) = &cached_config.model_info.path {
                         let model_path = std::path::PathBuf::from(model_path_str);
                         if model_path.exists() {
-                            info!("🔍 Regenerating config from existing model at {}", model_path.display());
+                            info!(
+                                "🔍 Regenerating config from existing model at {}",
+                                model_path.display()
+                            );
                             let config = self.config_generator.generate_config_from_directory(
                                 &model_path,
                                 model_id,
@@ -137,7 +140,9 @@ impl UnifiedModelLoader {
             .find(|(name, _)| name.to_lowercase().contains("ffn"))
             .and_then(|(_, comp)| comp.file_path.as_ref());
 
-        let Some(ffn_path_str) = ffn_component else { return false };
+        let Some(ffn_path_str) = ffn_component else {
+            return false;
+        };
         let ffn_path = std::path::Path::new(ffn_path_str);
 
         // Determine manifest path (.mlpackage -> Manifest.json, .mlmodelc -> metadata.json)
@@ -150,8 +155,12 @@ impl UnifiedModelLoader {
         };
 
         // Read and parse manifest
-        let Ok(content) = std::fs::read_to_string(&manifest_path) else { return false };
-        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else { return false };
+        let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+            return false;
+        };
+        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else {
+            return false;
+        };
 
         // Extract functions array
         let funcs = json

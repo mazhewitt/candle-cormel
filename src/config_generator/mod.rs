@@ -5,7 +5,7 @@
 
 use crate::cache_manager::CacheManager;
 use crate::model_config::{ComponentConfig, ModelConfig, NamingConfig};
-use anyhow::{Error as E, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -79,13 +79,8 @@ impl ConfigGenerator {
         }
 
         // Generate final configuration
-        let config = self.build_model_config(
-            model_id,
-            model_type,
-            model_dir,
-            components,
-            &packages,
-        )?;
+        let config =
+            self.build_model_config(model_id, model_type, model_dir, components, &packages)?;
 
         info!(
             "✅ Generated config for {} with {} components",
@@ -125,11 +120,9 @@ impl ConfigGenerator {
         let base_component_name = self.file_discovery.infer_component_name(package_path);
 
         // Parse package into component configurations
-        let parsed_components = self.manifest_parser.parse_package(
-            package_path,
-            &manifest,
-            &base_component_name,
-        )?;
+        let parsed_components =
+            self.manifest_parser
+                .parse_package(package_path, &manifest, &base_component_name)?;
 
         // Add all components to the collection
         for (name, config) in parsed_components {
@@ -164,7 +157,179 @@ impl ConfigGenerator {
         let ffn_execution = self.manifest_parser.infer_execution_mode(&component_list);
         info!("🔧 Detected execution mode: {}", ffn_execution);
 
-        let final_components: HashMap<String, ComponentConfig> = component_list.into_iter().collect();
+        // Start with discovered components
+        let mut final_components: HashMap<String, ComponentConfig> =
+            component_list.into_iter().collect();
+
+        // Normalize file paths to be relative to model_dir (the loader joins with model_dir)
+        for (_name, comp) in final_components.iter_mut() {
+            if let Some(fp) = &comp.file_path {
+                let p = PathBuf::from(fp);
+                if p.is_absolute() {
+                    if let Ok(rel) = p.strip_prefix(model_dir) {
+                        comp.file_path = Some(rel.to_string_lossy().to_string());
+                    } else {
+                        // If not under model_dir, keep as-is (loader will handle absolute path by skipping join)
+                        // But prefer to store filename only when possible
+                        if let Some(fname) = p.file_name() {
+                            comp.file_path = Some(fname.to_string_lossy().to_string());
+                        }
+                    }
+                }
+            }
+        }
+
+        // Assign standard role keys expected by the runtime: embeddings, ffn_prefill, ffn_infer, lm_head
+        // Heuristics based on component names and IO signatures. Use scoped, short-lived borrows.
+        // Embeddings: prefer a component with input_ids -> hidden_states or name containing "embed"
+        if !final_components.contains_key("embeddings") {
+            let candidate_key: Option<String> = {
+                // primary: IO signature
+                if let Some((k, _)) = final_components.iter().find(|(name, comp)| {
+                    let lname = name.to_lowercase();
+                    let looks_like = lname.contains("embed");
+                    let has_io = comp.inputs.contains_key("input_ids")
+                        && comp.outputs.contains_key("hidden_states");
+                    looks_like || has_io
+                }) {
+                    Some(k.clone())
+                } else {
+                    // secondary: name contains embedding(s)
+                    final_components
+                        .keys()
+                        .find(|k| {
+                            let lname = k.to_lowercase();
+                            lname.contains("embedding") || lname.contains("embeddings")
+                        })
+                        .cloned()
+                }
+            };
+
+            if let Some(key) = candidate_key {
+                let comp = final_components.get(&key).cloned().unwrap();
+                final_components.insert("embeddings".to_string(), comp);
+            }
+        }
+
+        // LM head: prefer a component with logits output or name containing "lm_head"/"head"
+        if !final_components.contains_key("lm_head") {
+            let candidate_key: Option<String> = {
+                if let Some((k, _)) = final_components.iter().find(|(name, comp)| {
+                    let lname = name.to_lowercase();
+                    let looks_like = lname.contains("lm_head")
+                        || lname.ends_with("_head")
+                        || lname.contains("head");
+                    let has_logits = comp.outputs.keys().any(|k| k.starts_with("logits"));
+                    looks_like || has_logits
+                }) {
+                    Some(k.clone())
+                } else {
+                    final_components
+                        .keys()
+                        .find(|k| {
+                            let lname = k.to_lowercase();
+                            lname.contains("lm_head") || lname.contains("head")
+                        })
+                        .cloned()
+                }
+            };
+
+            if let Some(key) = candidate_key {
+                let comp = final_components.get(&key).cloned().unwrap();
+                final_components.insert("lm_head".to_string(), comp);
+            }
+        }
+
+        // FFN prefill: prefer an FFN/transformer package (with functions), avoid *_prefill_chunk files
+        if !final_components.contains_key("ffn_prefill") {
+            let candidate_key: Option<String> = {
+                // First prefer explicit FFN/transformer component
+                if let Some(k) = final_components
+                    .keys()
+                    .find(|k| {
+                        let lname = k.to_lowercase();
+                        lname.contains("ffn") || lname.contains("transformer")
+                    })
+                {
+                    Some(k.clone())
+                } else {
+                    // Fallback to any prefill-named component
+                    final_components
+                        .keys()
+                        .find(|k| k.to_lowercase().contains("prefill"))
+                        .cloned()
+                }
+            };
+
+            if let Some(key) = candidate_key {
+                let comp = final_components.get(&key).cloned().unwrap();
+                final_components.insert("ffn_prefill".to_string(), comp);
+            }
+        }
+
+        // FFN infer: prefer a component whose name contains "infer"; otherwise choose a generic ffn/transformer (can be same file as prefill)
+        if !final_components.contains_key("ffn_infer") {
+            let candidate_key: Option<String> = {
+                if let Some(k) = final_components
+                    .keys()
+                    .find(|k| k.to_lowercase().contains("infer"))
+                {
+                    Some(k.clone())
+                } else {
+                    final_components
+                        .keys()
+                        .find(|k| {
+                            let lname = k.to_lowercase();
+                            lname.contains("ffn") || lname.contains("transformer")
+                        })
+                        .cloned()
+                }
+            };
+
+            if let Some(key) = candidate_key {
+                let mut comp = final_components.get(&key).cloned().unwrap();
+                // Ensure we have a file path; if missing, try to reuse from prefill
+                if comp.file_path.is_none() {
+                    if let Some(prefill) = final_components.get("ffn_prefill") {
+                        comp.file_path = prefill.file_path.clone();
+                    }
+                }
+                // Adjust shapes for infer-time function: seq_len=1 and scalar vectors
+                // hidden_states: [1, 1, hidden]
+                if let Some(hs) = comp.inputs.get_mut("hidden_states") {
+                    if hs.shape.len() == 3 {
+                        hs.shape[1] = 1;
+                    }
+                }
+                // Infer often expects scalar vectors for positions
+                if let Some(pos) = comp.inputs.get_mut("position_ids") {
+                    pos.shape = vec![1];
+                }
+                if let Some(cur) = comp.inputs.get_mut("current_pos") {
+                    cur.shape = vec![1];
+                }
+                // causal_mask: [1, 1, 1, context]
+                if let Some(cm) = comp.inputs.get_mut("causal_mask") {
+                    if cm.shape.len() == 4 {
+                        cm.shape[2] = 1;
+                    }
+                }
+                // outputs: output_hidden_states should have seq_len=1 if present
+                if let Some(out) = comp.outputs.get_mut("output_hidden_states") {
+                    if out.shape.len() == 3 {
+                        out.shape[1] = 1;
+                    }
+                }
+                final_components.insert("ffn_infer".to_string(), comp);
+            }
+        }
+
+        // If we created a distinct ffn_infer with different shapes, treat execution as split
+        let exec_mode = if final_components.contains_key("ffn_infer") {
+            "split".to_string()
+        } else {
+            ffn_execution
+        };
 
         Ok(ModelConfig {
             model_info: crate::model_config::ModelInfo {
@@ -176,7 +341,7 @@ impl ConfigGenerator {
             shapes: shape_config,
             components: final_components,
             naming: naming_config,
-            ffn_execution: Some(ffn_execution),
+            ffn_execution: Some(exec_mode),
         })
     }
 
@@ -223,20 +388,18 @@ impl ConfigGenerator {
     pub fn extract_function_based_components(
         &self,
         package_path: &Path,
-        base_config: &ComponentConfig,
+        _base_config: &ComponentConfig,
     ) -> Result<Option<HashMap<String, ComponentConfig>>> {
         let manifest = self.file_discovery.read_manifest(package_path)?;
         let base_component_name = self.file_discovery.infer_component_name(package_path);
 
-        let parsed_components = self.manifest_parser.parse_package(
-            package_path,
-            &manifest,
-            &base_component_name,
-        )?;
+        let parsed_components =
+            self.manifest_parser
+                .parse_package(package_path, &manifest, &base_component_name)?;
 
         if parsed_components.len() > 1 {
             // Has multiple function-based components
-            let function_components: HashMap<String, ComponentConfig> = 
+            let function_components: HashMap<String, ComponentConfig> =
                 parsed_components.into_iter().collect();
             Ok(Some(function_components))
         } else {
@@ -246,12 +409,18 @@ impl ConfigGenerator {
     }
 
     /// Parse tensor configurations from schema (legacy interface)
-    pub fn parse_tensor_configs_from_schema(&self, schema: &[serde_json::Value]) -> Result<HashMap<String, crate::model_config::TensorConfig>> {
+    pub fn parse_tensor_configs_from_schema(
+        &self,
+        schema: &[serde_json::Value],
+    ) -> Result<HashMap<String, crate::model_config::TensorConfig>> {
         self.schema_extractor.parse_tensor_configs(schema)
     }
 
     /// Compute shape info (legacy interface)
-    pub fn compute_shape_info_generic(&self, components: &HashMap<String, ComponentConfig>) -> crate::model_config::ShapeConfig {
+    pub fn compute_shape_info_generic(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> crate::model_config::ShapeConfig {
         self.shape_inference.infer_shapes(components)
     }
 
@@ -261,8 +430,12 @@ impl ConfigGenerator {
     }
 
     /// Determine execution mode (legacy interface)
-    pub fn determine_execution_mode_generic(&self, components: &HashMap<String, ComponentConfig>) -> String {
-        let component_list: Vec<(String, ComponentConfig)> = components.iter()
+    pub fn determine_execution_mode_generic(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> String {
+        let component_list: Vec<(String, ComponentConfig)> = components
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         self.manifest_parser.infer_execution_mode(&component_list)
@@ -281,7 +454,7 @@ mod tests {
 
     /// Create a mock .mlpackage directory structure for testing
     fn create_mock_mlpackage(temp_dir: &Path, name: &str) -> Result<PathBuf> {
-        let package_path = temp_dir.join(format!("{}.mlpackage", name));
+        let package_path = temp_dir.join(format!("{name}.mlpackage"));
         std::fs::create_dir_all(&package_path)?;
 
         // Create a minimal manifest.json
@@ -308,10 +481,10 @@ mod tests {
     #[test]
     fn test_modular_config_generator_creation() -> Result<()> {
         let generator = ConfigGenerator::new()?;
-        
+
         // Should have all modules initialized
         assert!(!generator.caching.has_cached_config("nonexistent")); // Should return false but not crash
-        
+
         Ok(())
     }
 
@@ -325,12 +498,24 @@ mod tests {
         create_mock_mlpackage(temp_dir.path(), "transformer")?;
         create_mock_mlpackage(temp_dir.path(), "head")?;
 
-        let packages = generator.file_discovery.find_coreml_packages(temp_dir.path())?;
-        
+        let packages = generator
+            .file_discovery
+            .find_coreml_packages(temp_dir.path())?;
+
         assert_eq!(packages.len(), 3);
-        assert!(packages.iter().any(|p| p.file_name().unwrap().to_string_lossy().contains("embeddings")));
-        assert!(packages.iter().any(|p| p.file_name().unwrap().to_string_lossy().contains("transformer")));
-        assert!(packages.iter().any(|p| p.file_name().unwrap().to_string_lossy().contains("head")));
+        assert!(packages.iter().any(|p| p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("embeddings")));
+        assert!(packages.iter().any(|p| p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("transformer")));
+        assert!(packages
+            .iter()
+            .any(|p| p.file_name().unwrap().to_string_lossy().contains("head")));
 
         Ok(())
     }

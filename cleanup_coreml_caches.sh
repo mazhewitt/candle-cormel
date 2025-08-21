@@ -148,14 +148,18 @@ echo "   • System CoreML caches (Apple managed)"
 echo ""
 
 # Confirmation prompt with more detailed options
-echo "Choose cleanup action:"
-echo "1) Remove all found caches (recommended)"
-echo "2) Interactive selection"
-echo "3) Dry run (show what would be deleted)"
-echo "4) Cancel"
-echo ""
-read -p "Select option (1-4): " -n 1 -r option
-echo
+if [[ "$1" == "--yes" || "$1" == "-y" ]]; then
+    option=1
+else
+    echo "Choose cleanup action:"
+    echo "1) Remove all found caches (recommended)"
+    echo "2) Interactive selection"
+    echo "3) Dry run (show what would be deleted)"
+    echo "4) Cancel"
+    echo ""
+    read -p "Select option (1-4): " -n 1 -r option
+    echo
+fi
 
 case $option in
     1)
