@@ -1,11 +1,12 @@
 //! Qwen 0.6B Interactive Chat with ANE Acceleration
 //!
 //! This example demonstrates real-time chat using Anemll's ANE-optimized Qwen 0.6B model
-//! with the now-working QwenModel forward_text() method that correctly replicates Python chat.py behavior.
+//! with the new UnifiedModelLoader system that provides automatic config generation.
 //!
 //! Features:
 //! - ANE-accelerated inference for maximum performance
-//! - Scientifically validated pipeline matching Python reference (87 t/s performance)
+//! - Automatic config generation and shape detection
+//! - Universal model compatibility (works with any ANEMLL model)
 //! - Real HuggingFace tokenizer integration
 //! - Temperature and sampling controls
 //! - Automatic model and tokenizer download
@@ -24,10 +25,9 @@
 //! ```
 
 use anyhow::{Error as E, Result};
-use candle_coreml::qwen::{QwenConfig, QwenModel};
+use candle_coreml::{QwenModel, UnifiedModelLoader};
 use clap::Parser;
 use std::io::{self, Write};
-use std::path::PathBuf;
 use std::time::Instant;
 
 const DEFAULT_TEMPERATURE: f32 = 0.7;
@@ -59,11 +59,11 @@ struct Args {
     #[arg(short, long)]
     verbose: bool,
 
-    /// Use local model instead of downloading
+    /// Use local model instead of downloading (deprecated with UnifiedModelLoader)
     #[arg(long)]
     local: bool,
 
-    /// Path to local model directory
+    /// Path to local model directory (deprecated with UnifiedModelLoader)
     #[arg(long)]
     model_path: Option<String>,
 
@@ -148,35 +148,35 @@ impl QwenChatWrapper {
     }
 }
 
-fn download_model(args: &Args) -> Result<PathBuf> {
-    if let Some(path) = &args.model_path {
-        return Ok(PathBuf::from(path));
+fn load_model_with_unified_loader(args: &Args) -> Result<QwenModel> {
+    if let Some(_path) = &args.model_path {
+        return Err(E::msg(
+            "Local model paths not supported with UnifiedModelLoader.\n\
+            Use the --model-id option with HuggingFace model IDs instead."
+        ));
     }
 
     if args.local {
-        let local_path = PathBuf::from("models/qwen");
-        if local_path.exists() {
-            return Ok(local_path);
-        } else {
-            return Err(E::msg(format!(
-                "Local model directory not found at: {}\n\
-                Run without --local to download from HuggingFace",
-                local_path.display()
-            )));
-        }
+        return Err(E::msg(
+            "Local model loading not supported with UnifiedModelLoader.\n\
+            Use the --model-id option with HuggingFace model IDs instead."
+        ));
     }
 
     println!(
-        "📥 Ensuring Qwen model from {} is available...",
+        "🚀 Loading model with UnifiedModelLoader: {}",
         args.model_id
     );
 
-    // Use the ensure_model_downloaded function from candle-coreml
-    let model_dir = candle_coreml::ensure_model_downloaded(&args.model_id, false)
-        .map_err(|e| E::msg(format!("Failed to download model: {e}")))?;
+    // Use the new UnifiedModelLoader
+    let loader = UnifiedModelLoader::new()
+        .map_err(|e| E::msg(format!("Failed to create UnifiedModelLoader: {e}")))?;
+    
+    let model = loader.load_model(&args.model_id)
+        .map_err(|e| E::msg(format!("Failed to load model: {e}")))?;
 
-    println!("✅ Model available at: {}", model_dir.display());
-    Ok(model_dir)
+    println!("✅ Model loaded successfully");
+    Ok(model)
 }
 
 #[cfg(target_os = "macos")]
@@ -188,19 +188,15 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
     println!("Max tokens: {}", args.max_tokens);
     println!();
 
-    // Download model directory
-    let model_dir = download_model(args)?;
-
-    // Load QwenModel using the granular API
-    println!("🔄 Loading QwenModel with granular API...");
+    // Load model using the new UnifiedModelLoader
+    println!("🔄 Loading QwenModel with UnifiedModelLoader...");
+    println!("   🤖 Automatic config generation and shape detection");
     println!("   📦 This model has 4 components: embeddings, FFN prefill, FFN infer, LM head");
     println!("   ⏱️  Each component requires compilation (expect ~30-60s total)");
     println!("   💡 Set RUST_LOG=debug to see detailed component loading progress");
     let start_time = Instant::now();
 
-    let qwen_config = QwenConfig::default();
-    let qwen_model = QwenModel::load_from_directory(&model_dir, Some(qwen_config))
-        .map_err(|e| E::msg(format!("Failed to load QwenModel: {e}")))?;
+    let qwen_model = load_model_with_unified_loader(args)?;
 
     println!("✅ QwenModel loaded in {:?}", start_time.elapsed());
 
@@ -221,7 +217,7 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
         println!("🚀 Multi-token mode: Generates full responses");
         println!("💡 Try: 'What is the capital of France?' or 'Tell me about AI'");
     }
-    println!("⚡ Note: Uses scientifically validated QwenModel pipeline");
+    println!("⚡ Note: Uses new UnifiedModelLoader with automatic config generation");
     println!();
 
     loop {
