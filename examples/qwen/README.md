@@ -27,11 +27,20 @@ Our candle-coreml crate provides comprehensive support for Anemll's architecture
 ### Example Structure
 ```
 examples/qwen/
-├── qwen_chat.rs              # Single-model interface (for reference)
-├── qwen_multi_component.rs   # 🌟 Full multi-component implementation
-├── qwen_benchmark.rs         # Performance comparison framework  
-└── README.md                 # This documentation
+├── qwen_chat.rs                    # ✅ Interactive chat with UnifiedModelLoader
+├── qwen_multi_component.rs         # 🌟 Full multi-component implementation 
+├── qwen_benchmark.rs               # ✅ Performance benchmarks with UnifiedModelLoader
+├── qwen_performance_benchmark.rs   # ✅ Forward text benchmarking
+├── qwen_demo_patterns.rs           # 📚 Educational patterns demo
+└── README.md                       # This documentation
 ```
+
+**Updated with UnifiedModelLoader System:**
+- ✅ **qwen_chat.rs**: Now uses automatic config generation 
+- ✅ **qwen_benchmark.rs**: Updated to use UnifiedModelLoader
+- ✅ **qwen_performance_benchmark.rs**: Updated to use UnifiedModelLoader
+- 📚 **qwen_demo_patterns.rs**: Educational (no changes needed)
+- 🔧 **qwen_multi_component.rs**: Low-level implementation (preserved for learning)
 
 ## 🔧 Usage Examples
 

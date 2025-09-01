@@ -8,6 +8,17 @@ use serde_json::Value;
 use std::collections::HashMap;
 use tracing::debug;
 
+/// Component role detected from tensor signatures
+#[derive(Debug, Clone, PartialEq)]
+pub enum ComponentRole {
+    Embeddings,      // input_ids -> hidden_states
+    FfnPrefill,      // hidden_states + causal_mask -> output_hidden_states (no update_mask)
+    FfnInfer,        // hidden_states + causal_mask + update_mask -> output_hidden_states
+    FfnUnified,      // hidden_states -> output_hidden_states (combined prefill/infer)
+    LmHead,          // hidden_states -> logits (single or multiple chunks)
+    Unknown,         // Unable to determine role from tensor signatures
+}
+
 pub struct SchemaExtractor;
 
 impl SchemaExtractor {
@@ -270,5 +281,137 @@ impl SchemaExtractor {
         }
         
         Ok(dims)
+    }
+
+    /// Detect component role based on tensor signatures (metadata-driven approach)
+    /// This replaces filename-based detection with pure metadata analysis
+    pub fn detect_component_role(
+        &self, 
+        inputs: &HashMap<String, TensorConfig>, 
+        outputs: &HashMap<String, TensorConfig>
+    ) -> ComponentRole {
+        debug!("🔍 Analyzing tensor signatures for component role detection");
+        debug!("   Inputs: {:?}", inputs.keys().collect::<Vec<_>>());
+        debug!("   Outputs: {:?}", outputs.keys().collect::<Vec<_>>());
+        
+        // Special case: If no tensor information extracted, try filename-based fallback
+        if inputs.is_empty() && outputs.is_empty() {
+            debug!("⚠️ No tensor information available for component role detection");
+            return ComponentRole::Unknown;
+        }
+        
+        // 1. Check for embeddings component: input_ids -> hidden_states
+        if inputs.contains_key("input_ids") && outputs.contains_key("hidden_states") {
+            debug!("✅ Detected EMBEDDINGS component (input_ids -> hidden_states)");
+            return ComponentRole::Embeddings;
+        }
+        
+        // 2. Check for lm_head component: multiple logits outputs or single logits output
+        if outputs.keys().any(|k| k.starts_with("logits")) {
+            let logit_count = outputs.keys().filter(|k| k.starts_with("logits")).count();
+            debug!("✅ Detected LM_HEAD component ({} logits outputs)", logit_count);
+            return ComponentRole::LmHead;
+        }
+        
+        // 3. Differentiate between FFN prefill and infer based on input signatures
+        if inputs.contains_key("hidden_states") && outputs.contains_key("output_hidden_states") {
+            // Check for key differentiating tensors
+            let has_causal_mask = inputs.contains_key("causal_mask");
+            let has_update_mask = inputs.contains_key("update_mask");
+            
+            if has_update_mask && has_causal_mask {
+                debug!("✅ Detected FFN_INFER component (has update_mask + causal_mask)");
+                return ComponentRole::FfnInfer;
+            } else if has_causal_mask && !has_update_mask {
+                debug!("✅ Detected FFN component with causal_mask (prefill/infer ambiguous - needs filename fallback)");
+                // Return Unknown so filename fallback can differentiate prefill vs infer
+                return ComponentRole::Unknown;
+            } else {
+                debug!("✅ Detected FFN_UNIFIED component (no distinctive masks)");
+                return ComponentRole::FfnUnified;
+            }
+        }
+        
+        debug!("❓ Could not determine component role from tensor signatures");
+        ComponentRole::Unknown
+    }
+
+    /// Detect component role from filename as fallback when tensor signatures fail
+    /// This handles cases where manifest parsing doesn't extract tensor info properly
+    /// Follows ANEMLL naming convention: https://github.com/Anemll/Anemll/blob/main/docs/compile_models.md#L61
+    pub fn detect_component_role_from_filename(&self, filename: &str) -> ComponentRole {
+        let filename_lower = filename.to_lowercase();
+        
+        if filename_lower.contains("embedding") {
+            debug!("🏷️ Filename-based detection: EMBEDDINGS ({})", filename);
+            return ComponentRole::Embeddings;
+        }
+        
+        if filename_lower.contains("lm_head") || filename_lower.contains("lmhead") {
+            debug!("🏷️ Filename-based detection: LM_HEAD ({})", filename);
+            return ComponentRole::LmHead;
+        }
+        
+        // ANEMLL FFN patterns - order matters!
+        
+        // 1. Unified FFN pattern: prefix_FFN_PF_lut{N}_chunk_{X}of{Y}.mlpackage
+        // This indicates a single model that handles both prefill and infer
+        if filename_lower.contains("ffn_pf") {
+            debug!("🏷️ Filename-based detection: FFN_UNIFIED (ANEMLL FFN_PF pattern: {})", filename);
+            return ComponentRole::FfnUnified;
+        }
+        
+        // 2. Split FFN patterns (custom/typo-fixer models)
+        // Pattern: "prefix_prefill_chunk_01of01.mlpackage" for prefill
+        if filename_lower.contains("prefill") && !filename_lower.contains("ffn_pf") {
+            debug!("🏷️ Filename-based detection: FFN_PREFILL (split architecture: {})", filename);
+            return ComponentRole::FfnPrefill;
+        }
+        
+        // Pattern: "prefix_infer_chunk_01of01.mlpackage" or "prefix_FFN_chunk_01of01.mlpackage" for infer
+        // Note: FFN without PF suffix indicates infer component in split architecture
+        if filename_lower.contains("infer") || 
+           (filename_lower.contains("ffn_chunk") && !filename_lower.contains("ffn_pf") && !filename_lower.contains("prefill")) {
+            debug!("🏷️ Filename-based detection: FFN_INFER (split architecture: {})", filename);
+            return ComponentRole::FfnInfer;
+        }
+        
+        debug!("🏷️ Filename-based detection: UNKNOWN ({})", filename);
+        ComponentRole::Unknown
+    }
+    
+    /// Calculate total vocabulary size from multiple logits outputs
+    /// This handles the chunked logits pattern in typo-fixer models (logits1...logits16)
+    pub fn calculate_vocab_size_from_logits(&self, outputs: &HashMap<String, TensorConfig>) -> Option<usize> {
+        let mut total_vocab_size = 0;
+        let mut logits_found = false;
+        
+        // Check for single logits output first (standard case)
+        if let Some(logits_tensor) = outputs.get("logits") {
+            if let Some(&vocab_dim) = logits_tensor.shape.last() {
+                debug!("📊 Single logits tensor found, vocab_size: {}", vocab_dim);
+                return Some(vocab_dim);
+            }
+        }
+        
+        // Handle chunked logits (logits1, logits2, ... logitsN)
+        for (name, tensor) in outputs {
+            if name.starts_with("logits") && name != "logits" {
+                if let Some(&chunk_size) = tensor.shape.last() {
+                    total_vocab_size += chunk_size;
+                    logits_found = true;
+                    debug!("📊 Found logits chunk {}: size {}", name, chunk_size);
+                }
+            }
+        }
+        
+        if logits_found {
+            debug!("📊 Total vocab size from {} chunks: {}", 
+                   outputs.keys().filter(|k| k.starts_with("logits") && *k != "logits").count(),
+                   total_vocab_size);
+            Some(total_vocab_size)
+        } else {
+            None
+        }
     }
 }

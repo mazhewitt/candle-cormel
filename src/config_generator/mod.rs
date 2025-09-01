@@ -5,12 +5,13 @@
 
 use crate::cache_manager::CacheManager;
 use crate::model_config::{ComponentConfig, ModelConfig, NamingConfig};
-use anyhow::{Error as E, Result};
+use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
 pub mod caching;
+pub mod coreml_metadata;
 pub mod file_discovery;
 pub mod manifest_parser;
 pub mod schema_extractor;
@@ -22,6 +23,11 @@ use manifest_parser::ManifestParser;
 use schema_extractor::SchemaExtractor;
 use shape_inference::ShapeInference;
 
+// Re-export ComponentRole for external use
+pub use schema_extractor::ComponentRole;
+// Re-export CoreML metadata extractor for testing
+pub use coreml_metadata::CoreMLMetadataExtractor;
+
 /// Modular configuration generator for auto-detecting model parameters
 pub struct ConfigGenerator {
     file_discovery: FileDiscovery,
@@ -29,6 +35,7 @@ pub struct ConfigGenerator {
     schema_extractor: SchemaExtractor,
     shape_inference: ShapeInference,
     caching: ConfigCaching,
+    metadata_extractor: CoreMLMetadataExtractor,
 }
 
 impl ConfigGenerator {
@@ -43,10 +50,68 @@ impl ConfigGenerator {
             schema_extractor: SchemaExtractor::new(),
             shape_inference: ShapeInference::new(),
             caching,
+            metadata_extractor: coreml_metadata::CoreMLMetadataExtractor::new(),
         })
     }
 
-    /// Generate a config from a downloaded model directory
+    /// Generate a config from a downloaded model directory using enhanced metadata-driven detection
+    ///
+    /// This function inspects .mlpackage files in a directory and generates a complete 
+    /// ModelConfig with proper shapes and component configurations, using metadata-driven
+    /// component role detection to support both unified and split FFN architectures.
+    pub fn generate_config_from_directory_enhanced(
+        &self,
+        model_dir: &Path,
+        model_id: &str,
+        model_type: &str,
+    ) -> Result<ModelConfig> {
+        info!("🔍 Generating config (enhanced) for model: {}", model_id);
+        debug!("   Model directory: {}", model_dir.display());
+        debug!("   Model type: {}", model_type);
+
+        // Validate and discover CoreML packages
+        self.file_discovery.validate_model_directory(model_dir)?;
+        let packages = self.file_discovery.find_coreml_packages(model_dir)?;
+
+        info!("📦 Found {} CoreML model files", packages.len());
+        for package in &packages {
+            debug!(
+                "   • {}",
+                package.file_name().unwrap_or_default().to_string_lossy()
+            );
+        }
+
+        // Analyze and parse each package using metadata-driven detection
+        let mut components = HashMap::new();
+        for package_path in &packages {
+            self.process_package_with_metadata_detection(package_path, &mut components)?;
+        }
+
+        // Check for required components
+        self.validate_required_components(&components)?;
+
+        // Generate final configuration with enhanced shape inference
+        let config = self.build_model_config_enhanced(
+            model_id,
+            model_type,
+            model_dir,
+            components,
+            &packages,
+        )?;
+
+        info!(
+            "✅ Generated enhanced config for {} with {} components",
+            model_id,
+            config.components.len()
+        );
+
+        // Cache the generated config
+        self.caching.cache_config(model_id, &config)?;
+
+        Ok(config)
+    }
+
+    /// Generate a config from a downloaded model directory (legacy method)
     ///
     /// This function inspects .mlpackage files in a directory and generates
     /// a complete ModelConfig with proper shapes and component configurations.
@@ -145,6 +210,108 @@ impl ConfigGenerator {
         Ok(())
     }
 
+    fn process_package_with_metadata_detection(
+        &self,
+        package_path: &Path,
+        components: &mut HashMap<String, ComponentConfig>,
+    ) -> Result<()> {
+        // Get manifest source to determine parsing strategy
+        let manifest_source = self.file_discovery.find_manifest_source(package_path)?;
+        let manifest = self.file_discovery.read_manifest(package_path)?;
+
+        debug!("🔍 Processing package with source: {:?}", manifest_source);
+
+        // Parse package using enhanced method that handles all source types
+        let parsed_components = self.manifest_parser.parse_package_enhanced(
+            package_path,
+            &manifest_source,
+            &manifest,
+            &self.schema_extractor,
+        )?;
+
+        // Add all components to the collection
+        for (name, config) in parsed_components {
+            debug!(
+                "📋 Enhanced component '{}': inputs={:?} outputs={:?}",
+                name,
+                config.inputs.keys().collect::<Vec<_>>(),
+                config.outputs.keys().collect::<Vec<_>>()
+            );
+            components.insert(name, config);
+        }
+
+        Ok(())
+    }
+
+    fn validate_required_components(&self, components: &HashMap<String, ComponentConfig>) -> Result<()> {
+        let required_components = ["embeddings", "lm_head"];
+        let missing_components: Vec<_> = required_components
+            .iter()
+            .filter(|&comp| !components.contains_key(*comp))
+            .collect();
+
+        if !missing_components.is_empty() {
+            let found_components: Vec<_> = components.keys().collect();
+            debug!("🔍 Found components: {:?}", found_components);
+            debug!("❌ Missing required components: {:?}", missing_components);
+            
+            return Err(anyhow::Error::msg(format!(
+                "ModelConfig missing required components: {:?}. Found: {:?}",
+                missing_components, found_components
+            )));
+        }
+
+        // Check for FFN components (either unified or split)
+        let has_unified_ffn = components.contains_key("ffn_prefill") && 
+                              !components.contains_key("ffn_infer");
+        let has_split_ffn = components.contains_key("ffn_prefill") && 
+                           components.contains_key("ffn_infer");
+
+        if !has_unified_ffn && !has_split_ffn {
+            return Err(anyhow::Error::msg(
+                "ModelConfig missing FFN components. Expected either 'ffn_prefill' (unified) or both 'ffn_prefill' and 'ffn_infer' (split)"
+            ));
+        }
+
+        info!("✅ All required components found: embeddings, FFN, lm_head");
+        Ok(())
+    }
+
+    fn build_model_config_enhanced(
+        &self,
+        model_id: &str,
+        model_type: &str,
+        model_dir: &Path,
+        components: HashMap<String, ComponentConfig>,
+        packages: &[PathBuf],
+    ) -> Result<ModelConfig> {
+        // Compute shape configuration using enhanced inference
+        let shape_config = self.shape_inference.infer_shapes_with_schema_extractor(&components, &self.schema_extractor);
+
+        // Generate naming patterns (generic approach)
+        let naming_config = self.generate_naming_config(packages);
+
+        // Determine execution mode using enhanced detection
+        let component_list: Vec<(String, ComponentConfig)> = components.into_iter().collect();
+        let ffn_execution = self.manifest_parser.infer_execution_mode(&component_list);
+        info!("🔧 Detected execution mode: {}", ffn_execution);
+
+        let final_components: HashMap<String, ComponentConfig> = component_list.into_iter().collect();
+
+        Ok(ModelConfig {
+            model_info: crate::model_config::ModelInfo {
+                model_id: Some(model_id.to_string()),
+                path: Some(model_dir.to_string_lossy().to_string()),
+                model_type: model_type.to_string(),
+                discovered_at: Some(chrono::Utc::now().to_rfc3339()),
+            },
+            shapes: shape_config,
+            components: final_components,
+            naming: naming_config,
+            ffn_execution: Some(ffn_execution),
+        })
+    }
+
     fn build_model_config(
         &self,
         model_id: &str,
@@ -223,7 +390,7 @@ impl ConfigGenerator {
     pub fn extract_function_based_components(
         &self,
         package_path: &Path,
-        base_config: &ComponentConfig,
+        _base_config: &ComponentConfig,
     ) -> Result<Option<HashMap<String, ComponentConfig>>> {
         let manifest = self.file_discovery.read_manifest(package_path)?;
         let base_component_name = self.file_discovery.infer_component_name(package_path);

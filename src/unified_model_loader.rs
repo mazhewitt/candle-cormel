@@ -62,7 +62,7 @@ impl UnifiedModelLoader {
                         if let Some(model_path_str) = &cached_config.model_info.path {
                             let model_path = std::path::PathBuf::from(model_path_str);
                             if model_path.exists() {
-                                let config = self.config_generator.generate_config_from_directory(
+                                let config = self.config_generator.generate_config_from_directory_enhanced(
                                     &model_path,
                                     model_id,
                                     "qwen",
@@ -88,7 +88,7 @@ impl UnifiedModelLoader {
                         let model_path = std::path::PathBuf::from(model_path_str);
                         if model_path.exists() {
                             info!("🔍 Regenerating config from existing model at {}", model_path.display());
-                            let config = self.config_generator.generate_config_from_directory(
+                            let config = self.config_generator.generate_config_from_directory_enhanced(
                                 &model_path,
                                 model_id,
                                 "qwen",
@@ -112,7 +112,7 @@ impl UnifiedModelLoader {
 
         // Step 3: Generate config from downloaded files
         info!("🔍 Generating config from downloaded model");
-        let config = self.config_generator.generate_config_from_directory(
+        let config = self.config_generator.generate_config_from_directory_enhanced(
             &model_path,
             model_id,
             "qwen", // Auto-detect this in the future
@@ -210,7 +210,7 @@ impl UnifiedModelLoader {
         let model_path = self.ensure_model_available(model_id)?;
 
         self.config_generator
-            .generate_config_from_directory(&model_path, model_id, "qwen")
+            .generate_config_from_directory_enhanced(&model_path, model_id, "qwen")
     }
 
     /// List all cached models and their status

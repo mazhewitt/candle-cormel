@@ -3,6 +3,9 @@
 //! Handles different CoreML package formats and function-based components
 
 use crate::model_config::{ComponentConfig, TensorConfig};
+use super::schema_extractor::{ComponentRole, SchemaExtractor};
+use super::coreml_metadata::CoreMLMetadataExtractor;
+use super::file_discovery::ManifestSource;
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -16,7 +19,156 @@ impl ManifestParser {
         Self
     }
 
-    /// Parse a CoreML package into component configurations
+    /// Parse a CoreML package using enhanced manifest source detection
+    pub fn parse_package_enhanced(
+        &self,
+        package_path: &Path,
+        manifest_source: &ManifestSource,
+        manifest: &Value,
+        schema_extractor: &SchemaExtractor,
+    ) -> Result<Vec<(String, ComponentConfig)>> {
+        match manifest_source {
+            ManifestSource::MetadataJson(_) | ManifestSource::ManifestJson(_) => {
+                // Use existing manifest-based parsing
+                self.parse_package_with_metadata_detection(package_path, manifest, schema_extractor)
+            }
+            ManifestSource::ModelFile(model_path) => {
+                // Parse directly from model.mlmodel file
+                self.parse_package_from_model_file(package_path, model_path, schema_extractor)
+            }
+            ManifestSource::FilenameOnly => {
+                // Use pure filename-based detection
+                self.parse_package_filename_only(package_path, schema_extractor)
+            }
+        }
+    }
+
+    /// Parse package from direct model.mlmodel file (typo-fixer style)
+    fn parse_package_from_model_file(
+        &self,
+        package_path: &Path,
+        model_path: &Path,
+        schema_extractor: &SchemaExtractor,
+    ) -> Result<Vec<(String, ComponentConfig)>> {
+        debug!("📦 Parsing from model.mlmodel file: {}", model_path.display());
+
+        // Use CoreML metadata extractor to get tensor signatures
+        let metadata_extractor = CoreMLMetadataExtractor::new();
+        match metadata_extractor.extract_tensor_signatures(model_path) {
+            Ok((inputs, outputs)) => {
+                debug!("✅ Extracted {} inputs and {} outputs from model file", inputs.len(), outputs.len());
+                
+                // Detect component role from tensor signatures
+                let role = schema_extractor.detect_component_role(&inputs, &outputs);
+                
+                let component_config = ComponentConfig {
+                    file_path: Some(package_path.to_string_lossy().to_string()),
+                    inputs,
+                    outputs,
+                    functions: Vec::new(),
+                    input_order: None,
+                };
+                
+                let component_name = self.role_to_component_name(&role);
+                debug!("🏷️ Model file detection: {} -> {}", package_path.display(), component_name);
+                
+                Ok(vec![(component_name, component_config)])
+            }
+            Err(e) => {
+                debug!("⚠️ Failed to extract from model.mlmodel: {}", e);
+                // Fall back to filename-only detection
+                self.parse_package_filename_only(package_path, schema_extractor)
+            }
+        }
+    }
+
+    /// Parse package using only filename patterns (ultimate fallback)
+    pub fn parse_package_filename_only(
+        &self,
+        package_path: &Path,
+        schema_extractor: &SchemaExtractor,
+    ) -> Result<Vec<(String, ComponentConfig)>> {
+        debug!("📦 Using filename-only parsing: {}", package_path.display());
+
+        let filename = package_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown");
+
+        // Use schema extractor's filename-based detection
+        let role = schema_extractor.detect_component_role_from_filename(filename);
+        
+        // Create empty component config (no tensor info available)
+        let component_config = ComponentConfig {
+            file_path: Some(package_path.to_string_lossy().to_string()),
+            inputs: HashMap::new(),
+            outputs: HashMap::new(),
+            functions: Vec::new(),
+            input_order: None,
+        };
+        
+        let component_name = self.role_to_component_name(&role);
+        debug!("🏷️ Filename-only detection: {} -> {}", filename, component_name);
+        
+        Ok(vec![(component_name, component_config)])
+    }
+
+    /// Parse a CoreML package into component configurations using metadata-driven detection
+    pub fn parse_package_with_metadata_detection(
+        &self,
+        package_path: &Path,
+        manifest: &Value,
+        schema_extractor: &SchemaExtractor,
+    ) -> Result<Vec<(String, ComponentConfig)>> {
+        let mut components = Vec::new();
+
+        // First try to extract tensor signatures directly from the model.mlmodel file
+        if let Some((inputs, outputs)) = self.extract_tensor_signatures_from_model(package_path)? {
+            debug!("✅ Extracted tensor signatures from model.mlmodel file");
+            let role = schema_extractor.detect_component_role(&inputs, &outputs);
+            
+            let component_config = ComponentConfig {
+                file_path: Some(package_path.to_string_lossy().to_string()),
+                inputs,
+                outputs,
+                functions: Vec::new(),
+                input_order: None,
+            };
+            
+            let component_name = self.role_to_component_name(&role);
+            components.push((component_name, component_config));
+        } else {
+            debug!("⚠️ Failed to extract from model.mlmodel, falling back to manifest parsing");
+            
+            // Fall back to manifest-based extraction
+            if let Some(function_components) = self.extract_function_components_with_roles(manifest, schema_extractor)? {
+                components.extend(function_components);
+            } else {
+                // Fall back to single component with role detection
+                let component_config = self.create_base_component(package_path, manifest)?;
+                let inputs = &component_config.inputs;
+                let outputs = &component_config.outputs;
+                
+                // Try tensor-based detection first
+                let mut role = schema_extractor.detect_component_role(inputs, outputs);
+                
+                // If tensor detection fails, try filename-based detection
+                if role == ComponentRole::Unknown {
+                    let filename = package_path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown");
+                    role = schema_extractor.detect_component_role_from_filename(filename);
+                }
+                
+                let component_name = self.role_to_component_name(&role);
+                components.push((component_name, component_config));
+            }
+        }
+
+        Ok(components)
+    }
+
+    /// Parse a CoreML package into component configurations (legacy method)
     pub fn parse_package(
         &self,
         package_path: &Path,
@@ -194,29 +346,153 @@ impl ManifestParser {
         Ok(dims)
     }
 
-    /// Determine execution mode from parsed components
+    /// Extract function-based components with metadata-driven role detection
+    fn extract_function_components_with_roles(
+        &self,
+        manifest: &Value,
+        schema_extractor: &SchemaExtractor,
+    ) -> Result<Option<Vec<(String, ComponentConfig)>>> {
+        let functions = manifest.get(0).and_then(|m| m.get("functions").and_then(|f| f.as_array()));
+        
+        let Some(funcs) = functions else {
+            return Ok(None);
+        };
+
+        let mut function_components = Vec::new();
+
+        for function in funcs {
+            if let Some(function_name) = function.get("name").and_then(|n| n.as_str()) {
+                let component_config = self.create_function_component(function)?;
+                
+                // Detect component role from tensor signatures
+                let inputs = &component_config.inputs;
+                let outputs = &component_config.outputs;
+                let role = schema_extractor.detect_component_role(inputs, outputs);
+                
+                // Use metadata-driven component name instead of function name
+                let component_name = match role {
+                    ComponentRole::FfnPrefill => format!("ffn_{}", function_name),  // e.g., "ffn_prefill"
+                    ComponentRole::FfnInfer => format!("ffn_{}", function_name),    // e.g., "ffn_infer"
+                    ComponentRole::FfnUnified => "ffn_prefill".to_string(),        // Unified functions go to prefill
+                    _ => self.role_to_component_name(&role),
+                };
+
+                debug!(
+                    "📋 Metadata-driven component '{}' (role: {:?}): inputs={:?} outputs={:?}",
+                    component_name,
+                    role,
+                    component_config.inputs.keys().collect::<Vec<_>>(),
+                    component_config.outputs.keys().collect::<Vec<_>>()
+                );
+                
+                function_components.push((component_name, component_config));
+            }
+        }
+
+        if function_components.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(function_components))
+        }
+    }
+
+    /// Convert component role to standard component name
+    pub fn role_to_component_name(&self, role: &ComponentRole) -> String {
+        match role {
+            ComponentRole::Embeddings => "embeddings".to_string(),
+            ComponentRole::FfnPrefill => "ffn_prefill".to_string(),
+            ComponentRole::FfnInfer => "ffn_infer".to_string(),
+            ComponentRole::FfnUnified => "ffn_prefill".to_string(),  // Unified functions go to prefill
+            ComponentRole::LmHead => "lm_head".to_string(),
+            ComponentRole::Unknown => "unknown".to_string(),
+        }
+    }
+
+    /// Determine execution mode from parsed components based on split vs unified FFN architecture
+    /// Follows ANEMLL naming convention for FFN_PF (unified) vs separate prefill/infer (split)
     pub fn infer_execution_mode(&self, components: &[(String, ComponentConfig)]) -> String {
-        // Count components with multiple functions
+        // Check for split FFN architecture (separate ffn_prefill and ffn_infer components)
+        let has_ffn_prefill = components.iter().any(|(name, _)| name == "ffn_prefill");
+        let has_ffn_infer = components.iter().any(|(name, _)| name == "ffn_infer");
+        
+        if has_ffn_prefill && has_ffn_infer {
+            debug!("🔧 Found separate ffn_prefill and ffn_infer components - using split mode");
+            return "split".to_string();
+        }
+        
+        // Check for ANEMLL unified FFN pattern (FFN_PF in filename)
+        // This indicates a single model that handles both prefill and infer modes
+        let has_ffn_pf_pattern = components.iter().any(|(_, config)| {
+            if let Some(file_path) = &config.file_path {
+                let filename = std::path::Path::new(file_path)
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
+                filename.contains("ffn_pf")
+            } else {
+                false
+            }
+        });
+        
+        if has_ffn_pf_pattern {
+            debug!("🔧 Found ANEMLL FFN_PF pattern in filename - using unified mode");
+            return "unified".to_string();
+        }
+        
+        // Check for unified FFN (single component with multiple functions)
         let multi_function_components = components
             .iter()
             .filter(|(_, config)| config.functions.len() > 1)
             .count();
 
-        // Count total number of function-based components
-        let function_based_components = components
-            .iter()
-            .filter(|(_, config)| !config.functions.is_empty())
-            .count();
-
         if multi_function_components > 0 {
             debug!("🔧 Found {} multi-function components - using unified mode", multi_function_components);
             "unified".to_string()
-        } else if function_based_components > 1 {
-            debug!("🔧 Found {} separate function components - using split mode", function_based_components);
-            "split".to_string()
         } else {
-            debug!("🔧 Standard component structure - using unified mode");
-            "unified".to_string()
+            // Check if we have any FFN-like component
+            let has_ffn_like = components.iter().any(|(name, _)| name.starts_with("ffn"));
+            
+            if has_ffn_like {
+                debug!("🔧 Found FFN component(s) but no clear split pattern - defaulting to unified mode");
+                "unified".to_string()
+            } else {
+                debug!("🔧 Standard component structure - defaulting to unified mode");
+                "unified".to_string()
+            }
+        }
+    }
+
+    /// Extract tensor signatures directly from model.mlmodel file using CoreML metadata
+    fn extract_tensor_signatures_from_model(
+        &self,
+        package_path: &Path,
+    ) -> Result<Option<(HashMap<String, TensorConfig>, HashMap<String, TensorConfig>)>> {
+        // Look for the model.mlmodel file within the package
+        let model_file_path = package_path.join("Data/com.apple.CoreML/model.mlmodel");
+        
+        if !model_file_path.exists() {
+            // Try alternative path structure
+            let alt_model_path = package_path.join("model.mlmodel");
+            if !alt_model_path.exists() {
+                debug!("❌ No model.mlmodel found in {}", package_path.display());
+                return Ok(None);
+            }
+        }
+
+        debug!("🔍 Attempting to extract metadata from: {}", model_file_path.display());
+
+        // Use CoreML metadata extractor
+        let extractor = CoreMLMetadataExtractor::new();
+        match extractor.extract_tensor_signatures(&model_file_path) {
+            Ok((inputs, outputs)) => {
+                debug!("✅ Successfully extracted {} inputs and {} outputs", inputs.len(), outputs.len());
+                Ok(Some((inputs, outputs)))
+            }
+            Err(e) => {
+                debug!("⚠️ Failed to extract metadata: {}", e);
+                Ok(None)
+            }
         }
     }
 }

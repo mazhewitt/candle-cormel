@@ -3,6 +3,7 @@
 //! Infers model dimensions (batch size, hidden size, etc.) from actual tensor configurations
 
 use crate::model_config::{ComponentConfig, ShapeConfig};
+use super::schema_extractor::SchemaExtractor;
 use std::collections::HashMap;
 use tracing::debug;
 
@@ -13,7 +14,31 @@ impl ShapeInference {
         Self
     }
 
-    /// Compute overall shape configuration from components (generic approach)
+    /// Compute overall shape configuration from components (enhanced with metadata-driven detection)
+    pub fn infer_shapes_with_schema_extractor(
+        &self, 
+        components: &HashMap<String, ComponentConfig>,
+        schema_extractor: &SchemaExtractor
+    ) -> ShapeConfig {
+        let batch_size = self.infer_batch_size(components);
+        let hidden_size = self.infer_hidden_size(components);
+        let context_length = self.infer_context_length(components);
+        let vocab_size = self.infer_vocab_size_with_chunking(components, schema_extractor);
+
+        debug!(
+            "📊 Inferred shapes (enhanced): batch={}, context={}, hidden={}, vocab={}",
+            batch_size, context_length, hidden_size, vocab_size
+        );
+
+        ShapeConfig {
+            batch_size,
+            context_length,
+            hidden_size,
+            vocab_size,
+        }
+    }
+
+    /// Compute overall shape configuration from components (legacy approach)
     pub fn infer_shapes(&self, components: &HashMap<String, ComponentConfig>) -> ShapeConfig {
         let batch_size = self.infer_batch_size(components);
         let hidden_size = self.infer_hidden_size(components);
@@ -87,7 +112,28 @@ impl ShapeInference {
         seq_lengths.into_iter().max().unwrap_or(256)
     }
 
-    /// Infer vocabulary size from the largest output dimension
+    /// Infer vocabulary size with chunked logits support (typo-fixer model pattern)
+    fn infer_vocab_size_with_chunking(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+        schema_extractor: &SchemaExtractor,
+    ) -> usize {
+        // First, try to find the lm_head component and use schema extractor's logic
+        for (name, component) in components {
+            if name == "lm_head" || name.contains("lm_head") {
+                if let Some(vocab_size) = schema_extractor.calculate_vocab_size_from_logits(&component.outputs) {
+                    debug!("📊 Using chunked logits vocab size calculation: {}", vocab_size);
+                    return vocab_size;
+                }
+            }
+        }
+        
+        // Fallback to legacy logic
+        debug!("📊 Using legacy vocab size detection");
+        self.infer_vocab_size(components)
+    }
+
+    /// Infer vocabulary size from the largest output dimension (legacy)
     fn infer_vocab_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut output_sizes = Vec::new();
         

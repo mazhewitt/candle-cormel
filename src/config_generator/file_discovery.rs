@@ -7,6 +7,19 @@ use serde_json::Value;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+/// Different sources for manifest/model information
+#[derive(Debug, Clone)]
+pub enum ManifestSource {
+    /// Standard .mlmodelc format with metadata.json
+    MetadataJson(PathBuf),
+    /// Standard .mlpackage format with Manifest.json  
+    ManifestJson(PathBuf),
+    /// Direct CoreML model file (typo-fixer style .mlpackage)
+    ModelFile(PathBuf),
+    /// Filename-only detection fallback
+    FilenameOnly,
+}
+
 pub struct FileDiscovery;
 
 impl FileDiscovery {
@@ -41,15 +54,33 @@ impl FileDiscovery {
     pub fn read_manifest(&self, package_path: &Path) -> Result<Value> {
         debug!("🔎 Reading manifest from: {}", package_path.display());
 
-        // Look for the manifest file inside the package
-        // .mlpackage uses Manifest.json, .mlmodelc uses metadata.json
-        let manifest_path = self.find_manifest_file(package_path)?;
+        // Look for the manifest file inside the package  
+        let manifest_source = self.find_manifest_source(package_path)?;
 
-        // Read and parse the manifest
-        let manifest_content = std::fs::read_to_string(&manifest_path)?;
-        let manifest: Value = serde_json::from_str(&manifest_content)?;
+        match manifest_source {
+            ManifestSource::MetadataJson(path) | ManifestSource::ManifestJson(path) => {
+                debug!("📖 Reading JSON manifest: {}", path.display());
+                let manifest_content = std::fs::read_to_string(&path)?;
+                let manifest: Value = serde_json::from_str(&manifest_content)?;
+                Ok(manifest)
+            }
+            ManifestSource::ModelFile(path) => {
+                debug!("📖 Reading CoreML model file: {}", path.display());
+                // For model.mlmodel files, we return an empty JSON array since 
+                // the actual parsing will be handled by the CoreMLMetadataExtractor
+                Ok(Value::Array(vec![]))
+            }
+            ManifestSource::FilenameOnly => {
+                debug!("📖 Using filename-only detection");
+                // Return empty JSON for filename-only detection
+                Ok(Value::Array(vec![]))
+            }
+        }
+    }
 
-        Ok(manifest)
+    /// Get the manifest source type for a package
+    pub fn find_manifest_source(&self, package_path: &Path) -> Result<ManifestSource> {
+        self.find_manifest_file(package_path)
     }
 
     /// Generate component name from package filename
@@ -64,6 +95,13 @@ impl FileDiscovery {
         
         // Clean up filename for use as component key
         filename.replace(['-', '.'], "_").to_lowercase()
+    }
+
+    /// Detect if a package appears to be a typo-fixer style .mlpackage
+    pub fn is_typo_fixer_style(&self, package_path: &Path) -> bool {
+        package_path.extension().map_or(false, |ext| ext == "mlpackage") &&
+        !package_path.join("Manifest.json").exists() &&
+        package_path.join("Data/com.apple.CoreML/model.mlmodel").exists()
     }
 
     /// Validate that a directory contains CoreML packages
@@ -120,19 +158,22 @@ impl FileDiscovery {
 
     // Private helper methods
 
-    fn find_manifest_file(&self, package_path: &Path) -> Result<PathBuf> {
-        let manifest_path = if package_path.join("Manifest.json").exists() {
-            package_path.join("Manifest.json")
-        } else if package_path.join("metadata.json").exists() {
-            package_path.join("metadata.json")
+    fn find_manifest_file(&self, package_path: &Path) -> Result<ManifestSource> {
+        // Priority order: metadata.json (mlmodelc) > Manifest.json (mlpackage) > model.mlmodel (direct) > filename only
+        
+        if package_path.join("metadata.json").exists() {
+            debug!("🔍 Found metadata.json (.mlmodelc format)");
+            Ok(ManifestSource::MetadataJson(package_path.join("metadata.json")))
+        } else if package_path.join("Manifest.json").exists() {
+            debug!("🔍 Found Manifest.json (.mlpackage format)");
+            Ok(ManifestSource::ManifestJson(package_path.join("Manifest.json")))
+        } else if package_path.join("Data/com.apple.CoreML/model.mlmodel").exists() {
+            debug!("🔍 Found direct model.mlmodel (typo-fixer style .mlpackage)");
+            Ok(ManifestSource::ModelFile(package_path.join("Data/com.apple.CoreML/model.mlmodel")))
         } else {
-            return Err(E::msg(format!(
-                "Neither Manifest.json nor metadata.json found in package: {}",
-                package_path.display()
-            )));
-        };
-
-        Ok(manifest_path)
+            debug!("🔍 No manifest files found, using filename-only detection");
+            Ok(ManifestSource::FilenameOnly)
+        }
     }
 }
 
