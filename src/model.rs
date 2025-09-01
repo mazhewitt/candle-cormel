@@ -84,31 +84,92 @@ impl CoreMLModel {
             }
 
             autoreleasepool(|_| {
-                let url =
-                    unsafe { NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())) };
-
-                // Show loading progress for large models
-                info!("Loading and compiling CoreML model at {}", path.display());
-                let load_start = std::time::Instant::now();
-
-                // Create configuration with function name if provided
-                let model_result = if let Some(func_name) = function_name {
-                    let config = unsafe { MLModelConfiguration::new() };
-                    let ns_func_name = NSString::from_str(func_name);
-                    unsafe { config.setFunctionName(Some(&ns_func_name)) };
-                    unsafe { MLModel::modelWithContentsOfURL_configuration_error(&url, &config) }
-                } else {
-                    unsafe { MLModel::modelWithContentsOfURL_error(&url) }
+                let url = unsafe {
+                    NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
                 };
 
-                let load_time = load_start.elapsed();
+                // Helper: load from URL with or without configuration (preserve function_name)
+                unsafe fn load_with_config(
+                    url: &NSURL,
+                    function_name: Option<&str>,
+                ) -> Result<Retained<MLModel>, CandleError> {
+                    if let Some(func) = function_name {
+                        let ml_cfg = MLModelConfiguration::new();
+                        let ns_name = NSString::from_str(func);
+                        ml_cfg.setFunctionName(Some(&ns_name));
+                        MLModel::modelWithContentsOfURL_configuration_error(url, &ml_cfg)
+                            .map_err(|e| {
+                                CandleError::Msg(format!(
+                                    "Failed to load CoreML model with configuration: {e:?}"
+                                ))
+                            })
+                    } else {
+                        MLModel::modelWithContentsOfURL_error(url).map_err(|e| {
+                            CandleError::Msg(format!(
+                                "Failed to load CoreML model: {e:?}"
+                            ))
+                        })
+                    }
+                }
 
-                // Try to load the model with function name support
-                match model_result {
+                // Determine the artifact type to avoid compiling compiled bundles
+                let is_dir = path.is_dir();
+                let ext = path
+                    .extension()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or_default()
+                    .to_ascii_lowercase();
+                let looks_like_modelc = ext == "mlmodelc"
+                    || (is_dir && path.to_string_lossy().ends_with(".mlmodelc"));
+                let looks_like_package = ext == "mlpackage"
+                    || (is_dir && path.to_string_lossy().ends_with(".mlpackage"));
+                // Special-case: some packages are folders with Data/com.apple.CoreML/model.mlmodel
+                // and no Manifest.json ("typo-fixer style"). For those, compile the inner .mlmodel.
+                let manifest_json_exists = path.join("Manifest.json").exists();
+                let inner_mlmodel_path = path.join("Data/com.apple.CoreML/model.mlmodel");
+                let has_inner_mlmodel = inner_mlmodel_path.exists();
+
+                // Show loading progress for large models
+                info!("Loading CoreML model at {}", path.display());
+                let load_start = std::time::Instant::now();
+
+                // If it's a compiled .mlmodelc bundle, never attempt compilation. Just load.
+                if looks_like_modelc {
+                    match unsafe { load_with_config(&url, function_name) } {
+                        Ok(model) => {
+                            info!(
+                                "Model loaded in {:.1}s",
+                                load_start.elapsed().as_secs_f32()
+                            );
+                            return Ok(CoreMLModel {
+                                inner: model,
+                                config: config.clone(),
+                                function_name: function_name.map(|s| s.to_string()),
+                            });
+                        }
+                        Err(err) => {
+                            // Common CoreML version mismatch message handling
+                            let msg = format!("{err}");
+                            if msg.contains("compiler major version")
+                                && msg.contains("more recent than this framework")
+                            {
+                                return Err(CandleError::Msg(format!(
+                                    "CoreML version compatibility issue: {msg}\n\
+                                     Update macOS or use a model compiled for this framework version."
+                                )));
+                            }
+                            return Err(err);
+                        }
+                    }
+                }
+
+                // Otherwise, attempt direct load first. If it fails and the artifact is a
+                // source (.mlmodel/.mlpackage), try compiling then load the compiled URL.
+                match unsafe { load_with_config(&url, function_name) } {
                     Ok(model) => {
                         info!(
-                            "Model loaded and compiled in {:.1}s",
-                            load_time.as_secs_f32()
+                            "Model loaded in {:.1}s",
+                            load_start.elapsed().as_secs_f32()
                         );
                         Ok(CoreMLModel {
                             inner: model,
@@ -116,23 +177,27 @@ impl CoreMLModel {
                             function_name: function_name.map(|s| s.to_string()),
                         })
                     }
-                    Err(err) => {
-                        // If direct loading fails, try compiling first
-                        let err_msg = format!("{err:?}");
-                        if err_msg.contains("Compile the model") {
-                            debug!("Model requires compilation, compiling now");
+                    Err(load_err) => {
+                        // Only try to compile for non-compiled artifacts
+                        if looks_like_package || ext == "mlmodel" || !is_dir {
+                            debug!("Direct load failed, attempting compilation: {load_err}");
                             #[allow(deprecated)]
-                            match unsafe { MLModel::compileModelAtURL_error(&url) } {
+                            // Choose compile target: for 'typo-fixer style' packages, compile the inner model.mlmodel
+                            match unsafe {
+                                if looks_like_package && !manifest_json_exists && has_inner_mlmodel {
+                                    let inner_url = NSURL::fileURLWithPath(&NSString::from_str(&inner_mlmodel_path.to_string_lossy()));
+                                    MLModel::compileModelAtURL_error(&inner_url)
+                                } else {
+                                    MLModel::compileModelAtURL_error(&url)
+                                }
+                            } {
                                 Ok(compiled_url) => {
                                     debug!("Compilation completed, loading compiled model");
-                                    // Try loading the compiled model
-                                    match unsafe {
-                                        MLModel::modelWithContentsOfURL_error(&compiled_url)
-                                    } {
+                                    match unsafe { load_with_config(&compiled_url, function_name) } {
                                         Ok(model) => {
                                             info!(
                                                 "Compiled model loaded in {:.1}s total",
-                                                load_time.as_secs_f32()
+                                                load_start.elapsed().as_secs_f32()
                                             );
                                             Ok(CoreMLModel {
                                                 inner: model,
@@ -140,34 +205,18 @@ impl CoreMLModel {
                                                 function_name: function_name.map(|s| s.to_string()),
                                             })
                                         }
-                                        Err(compile_err) => Err(CandleError::Msg(format!(
-                                            "Failed to load compiled CoreML model: {compile_err:?}"
+                                        Err(err) => Err(CandleError::Msg(format!(
+                                            "Failed to load compiled CoreML model: {err}"
                                         ))),
                                     }
                                 }
                                 Err(compile_err) => Err(CandleError::Msg(format!(
-                                    "Failed to compile CoreML model: {compile_err:?}. Original error: {err:?}"
+                                    "Failed to compile CoreML model: {compile_err}. Original load error: {load_err}"
                                 ))),
                             }
                         } else {
-                            // Check for common CoreML version compatibility issues
-                            let err_msg = format!("{err:?}");
-                            if err_msg.contains("compiler major version")
-                                && err_msg.contains("more recent than this framework")
-                            {
-                                Err(CandleError::Msg(format!(
-                                    "CoreML version compatibility issue: {err_msg}\n\
-                                    This model was compiled with a newer CoreML compiler than this system supports.\n\
-                                    Solutions:\n\
-                                    • Update to a newer macOS version\n\
-                                    • Use models compiled for your CoreML framework version\n\
-                                    • Set RUST_LOG=debug for more details"
-                                )))
-                            } else {
-                                Err(CandleError::Msg(format!(
-                                    "Failed to load CoreML model: {err:?}"
-                                )))
-                            }
+                            // Not a compilable artifact and load failed
+                            Err(load_err)
                         }
                     }
                 }

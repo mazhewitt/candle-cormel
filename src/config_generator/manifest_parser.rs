@@ -61,6 +61,13 @@ impl ManifestParser {
                 // Detect component role from tensor signatures
                 let role = schema_extractor.detect_component_role(&inputs, &outputs);
                 
+                // If tensor signature detection fails (returns Unknown) or produces empty results,
+                // fall back to filename-based detection
+                if matches!(role, ComponentRole::Unknown) || (inputs.is_empty() && outputs.is_empty()) {
+                    debug!("⚠️ Tensor signature detection returned Unknown or empty tensors, using filename fallback");
+                    return self.parse_package_filename_only(package_path, schema_extractor);
+                }
+                
                 let component_config = ComponentConfig {
                     file_path: Some(package_path.to_string_lossy().to_string()),
                     inputs,
@@ -97,12 +104,39 @@ impl ManifestParser {
 
         // Use schema extractor's filename-based detection
         let role = schema_extractor.detect_component_role_from_filename(filename);
-        
-        // Create empty component config (no tensor info available)
+
+        // Try extracting tensor signatures from inner model file when available
+        let (inputs, outputs) = {
+            let inner_model = package_path.join("Data/com.apple.CoreML/model.mlmodel");
+            if inner_model.exists() {
+                let extractor = CoreMLMetadataExtractor::new();
+                match extractor.extract_tensor_signatures(&inner_model) {
+                    Ok((ins, outs)) => {
+                        debug!(
+                            "📖 Filename-only: populated tensors from inner model (inputs={}, outputs={})",
+                            ins.len(),
+                            outs.len()
+                        );
+                        (ins, outs)
+                    }
+                    Err(e) => {
+                        debug!(
+                            "⚠️ Filename-only: failed to extract inner model tensors: {}",
+                            e
+                        );
+                        (HashMap::new(), HashMap::new())
+                    }
+                }
+            } else {
+                (HashMap::new(), HashMap::new())
+            }
+        };
+
+        // Create component config using any extracted tensors
         let component_config = ComponentConfig {
             file_path: Some(package_path.to_string_lossy().to_string()),
-            inputs: HashMap::new(),
-            outputs: HashMap::new(),
+            inputs,
+            outputs,
             functions: Vec::new(),
             input_order: None,
         };
@@ -125,8 +159,19 @@ impl ManifestParser {
         // First try to extract tensor signatures directly from the model.mlmodel file
         if let Some((inputs, outputs)) = self.extract_tensor_signatures_from_model(package_path)? {
             debug!("✅ Extracted tensor signatures from model.mlmodel file");
-            let role = schema_extractor.detect_component_role(&inputs, &outputs);
-            
+            let mut role = schema_extractor.detect_component_role(&inputs, &outputs);
+
+            // If metadata-driven detection didn't yield a clear role (or tensors are empty),
+            // fall back to filename-based detection to avoid returning an 'unknown' component.
+            if matches!(role, ComponentRole::Unknown) || (inputs.is_empty() && outputs.is_empty()) {
+                debug!("⚠️ Role unknown or empty tensors from metadata, falling back to filename-based detection");
+                let filename = package_path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("unknown");
+                role = schema_extractor.detect_component_role_from_filename(filename);
+            }
+
             let component_config = ComponentConfig {
                 file_path: Some(package_path.to_string_lossy().to_string()),
                 inputs,
@@ -134,7 +179,7 @@ impl ManifestParser {
                 functions: Vec::new(),
                 input_order: None,
             };
-            
+
             let component_name = self.role_to_component_name(&role);
             components.push((component_name, component_config));
         } else {
@@ -363,12 +408,21 @@ impl ManifestParser {
         for function in funcs {
             if let Some(function_name) = function.get("name").and_then(|n| n.as_str()) {
                 let component_config = self.create_function_component(function)?;
-                
+
                 // Detect component role from tensor signatures
                 let inputs = &component_config.inputs;
                 let outputs = &component_config.outputs;
-                let role = schema_extractor.detect_component_role(inputs, outputs);
-                
+                let mut role = schema_extractor.detect_component_role(inputs, outputs);
+
+                // Fallback: if role is Unknown, use function name to infer FFN component
+                if matches!(role, ComponentRole::Unknown) {
+                    if function_name == "prefill" {
+                        role = ComponentRole::FfnPrefill;
+                    } else if function_name == "infer" {
+                        role = ComponentRole::FfnInfer;
+                    }
+                }
+
                 // Use metadata-driven component name instead of function name
                 let component_name = match role {
                     ComponentRole::FfnPrefill => format!("ffn_{}", function_name),  // e.g., "ffn_prefill"

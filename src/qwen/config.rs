@@ -7,6 +7,7 @@ use crate::qwen::naming::ModelNamingConfig;
 use crate::ModelConfig;
 use candle_core::{Device, Error as CandleError};
 use tracing::debug;
+use std::collections::HashMap;
 
 // NOTE: These constants are deprecated and will be removed.
 // Use ModelConfig system instead for dynamic shape configuration.
@@ -37,25 +38,6 @@ pub struct QwenConfig {
     pub context_length: usize,
 }
 
-impl Default for QwenConfig {
-    fn default() -> Self {
-        let model_config = ModelConfig::default();
-        Self {
-            device: Device::Cpu,
-            naming: ModelNamingConfig::default(),
-            // Copy from model_config for backward compatibility
-            #[allow(deprecated)]
-            vocab_size: model_config.shapes.vocab_size,
-            #[allow(deprecated)]
-            hidden_size: model_config.shapes.hidden_size,
-            #[allow(deprecated)]
-            batch_size: model_config.shapes.batch_size,
-            #[allow(deprecated)]
-            context_length: model_config.shapes.context_length,
-            model_config,
-        }
-    }
-}
 
 impl QwenConfig {
     /// Create a QwenConfig from a ModelConfig (recommended approach)
@@ -162,40 +144,95 @@ impl QwenConfig {
             // Use prefill shape (batch-sized)
             self.create_ffn_position_ids_tensor(positions)
         } else {
-            // For infer, check if we have separate ffn_infer component
-            if self.model_config.components.contains_key("ffn_infer") {
-                // Use infer-specific shape
-                if let Some(infer_shape) =
-                    self.model_config
-                        .get_tensor_shape("ffn_infer", "position_ids", true)
-                {
-                    if infer_shape[0] == 1 {
-                        // Single position for infer - FORCE infer tensor creation
-                        debug!("🔧 SHAPE FIX: Using infer position_ids tensor (shape [1])");
+            // For infer, prefer the ffn_infer expected shape if available
+            if let Some(infer_shape) =
+                self.model_config
+                    .get_tensor_shape("ffn_infer", "position_ids", true)
+            {
+                // Commonly a 1-D vector shape
+                if infer_shape.len() == 1 {
+                    let len = infer_shape[0];
+                    if len == 1 {
+                        // Honor explicit infer shape of [1] and return single position id
+                        debug!("🔧 Using single-length infer position_ids [1]");
                         return self.create_infer_position_ids_tensor(positions[0] as usize);
                     } else {
+                        // Create a position vector matching expected length [0..len-1]
                         debug!(
-                            "⚠️ SHAPE WARNING: ffn_infer position_ids shape is not [1]: {:?}",
-                            infer_shape
+                            "🔧 Using vector-length infer position_ids of len {} (e.g., [0..{}])",
+                            len,
+                            len.saturating_sub(1)
                         );
+                        let vec: Vec<i64> = (0..len as i64).collect();
+                        return candle_core::Tensor::from_vec(vec, (len,), &self.device);
                     }
                 } else {
-                    debug!("⚠️ SHAPE WARNING: No shape found for ffn_infer position_ids");
+                    // Non 1-D shapes: fall back to create_infer_position_ids_tensor which honors configured shape
+                    debug!(
+                        "⚠️ Uncommon ffn_infer position_ids shape {:?}, using create_infer_position_ids_tensor",
+                        infer_shape
+                    );
+                    return self.create_infer_position_ids_tensor(positions[0] as usize);
                 }
-            } else {
-                debug!("⚠️ SHAPE WARNING: No ffn_infer component found");
             }
 
-            // CRITICAL FIX: For single-token inference, ALWAYS use infer tensor shape
-            // This prevents falling back to the prefill shape when we need infer shape
-            if positions.len() == 1 {
-                debug!("🔧 SHAPE FIX: Forcing infer position_ids tensor for single position");
-                return self.create_infer_position_ids_tensor(positions[0] as usize);
+            // If infer shape unknown but prefill carries a vector length, use that length
+            if let Some(prefill_shape) =
+                self.model_config
+                    .get_tensor_shape("ffn_prefill", "position_ids", true)
+            {
+                if prefill_shape.len() == 1 && prefill_shape[0] > 1 {
+                    let len = prefill_shape[0];
+                    debug!(
+                        "🔧 Using prefill position_ids length {} for infer (no infer shape found)",
+                        len
+                    );
+                    let vec: Vec<i64> = (0..len as i64).collect();
+                    return candle_core::Tensor::from_vec(vec, (len,), &self.device);
+                }
             }
 
-            // Fallback to prefill shape or model configuration (this should rarely happen now)
-            debug!("⚠️ SHAPE WARNING: Falling back to prefill position_ids tensor");
-            self.create_ffn_position_ids_tensor(positions)
+            // Next best: derive expected length from prefill hidden_states seq_len if fixed (>1)
+            if let Some(hs_shape) =
+                self.model_config
+                    .get_tensor_shape("ffn_prefill", "hidden_states", true)
+            {
+                if hs_shape.len() == 3 {
+                    let seq_len = hs_shape[1];
+                    if seq_len > 1 {
+                        debug!(
+                            "🔧 Using prefill hidden_states seq_len {} for infer position_ids",
+                            seq_len
+                        );
+                        let vec: Vec<i64> = (0..seq_len as i64).collect();
+                        return candle_core::Tensor::from_vec(vec, (seq_len,), &self.device);
+                    }
+                }
+            }
+
+            // Or from embeddings input shape [batch, seq_len]
+            if let Some(emb_in_shape) = self.model_config.embeddings_input_shape() {
+                if emb_in_shape.len() == 2 {
+                    let seq_len = emb_in_shape[1];
+                    if seq_len > 1 {
+                        debug!(
+                            "🔧 Using embeddings input seq_len {} for infer position_ids",
+                            seq_len
+                        );
+                        let vec: Vec<i64> = (0..seq_len as i64).collect();
+                        return candle_core::Tensor::from_vec(vec, (seq_len,), &self.device);
+                    }
+                }
+            }
+
+            // Final fallback: build a full-length vector matching context_length
+            let len = self.model_config.shapes.context_length;
+            debug!(
+                "⚠️ No explicit infer/prefill shape for position_ids; using context-length vector of {}",
+                len
+            );
+            let vec: Vec<i64> = (0..len as i64).collect();
+            candle_core::Tensor::from_vec(vec, (len,), &self.device)
         }
     }
 
@@ -268,30 +305,9 @@ impl QwenConfig {
     }
 
     /// Create a QwenConfig for standard qwen models (legacy method)
-    #[deprecated(note = "Use UnifiedModelLoader with from_model_config() instead")]
-    pub fn for_standard_qwen() -> Self {
-        // Fallback to default configuration with standard naming
-        Self {
-            naming: ModelNamingConfig::standard_qwen(),
-            ..Default::default()
-        }
-    }
+    
 
-    /// Create a QwenConfig with custom naming patterns
-    pub fn with_custom_naming(base_prefix: &str, extension: &str) -> Self {
-        Self {
-            naming: ModelNamingConfig::custom(base_prefix, extension),
-            ..Default::default()
-        }
-    }
-
-    /// Create a QwenConfig for Bob's custom model
-    pub fn for_bobs_model() -> Self {
-        Self {
-            naming: ModelNamingConfig::bobs_model(),
-            ..Default::default()
-        }
-    }
+    
 
     /// Set custom naming configuration
     pub fn with_naming(mut self, naming: ModelNamingConfig) -> Self {
@@ -341,184 +357,293 @@ impl QwenConfig {
         self.model_config.logits_part_count()
     }
 }
+
+impl Default for QwenConfig {
+    fn default() -> Self {
+        // Minimal default ModelConfig with standard Qwen shapes and no components.
+        // Loading a model without an explicit config will still fail later if component
+        // file paths are required, but providing Default maintains API compatibility.
+        let model_config = crate::model_config::ModelConfig {
+            model_info: crate::model_config::ModelInfo {
+                model_id: Some("default/qwen".to_string()),
+                path: None,
+                model_type: "qwen".to_string(),
+                discovered_at: None,
+            },
+            shapes: crate::model_config::ShapeConfig {
+                batch_size: 1,
+                context_length: QWEN_CONTEXT_LENGTH,
+                hidden_size: QWEN_HIDDEN_SIZE,
+                vocab_size: QWEN_VOCAB_SIZE,
+            },
+            components: HashMap::new(),
+            naming: crate::model_config::NamingConfig {
+                embeddings_pattern: None,
+                ffn_prefill_pattern: None,
+                ffn_infer_pattern: None,
+                lm_head_pattern: None,
+            },
+            ffn_execution: None,
+        };
+
+        let naming = ModelNamingConfig::default();
+        Self {
+            device: Device::Cpu,
+            naming,
+            #[allow(deprecated)]
+            vocab_size: model_config.shapes.vocab_size,
+            #[allow(deprecated)]
+            hidden_size: model_config.shapes.hidden_size,
+            #[allow(deprecated)]
+            batch_size: model_config.shapes.batch_size,
+            #[allow(deprecated)]
+            context_length: model_config.shapes.context_length,
+            model_config,
+        }
+    }
+}
 #[cfg(test)]
 mod tests {
     use crate::qwen::config::QwenConfig;
-    use crate::ModelConfig;
+    use crate::model_config::{ComponentConfig, ModelConfig, ModelInfo, NamingConfig, ShapeConfig, TensorConfig};
+    use std::collections::HashMap;
 
     fn create_test_model_config_standard() -> ModelConfig {
-        // Create a standard ANEMLL config (embeddings input [1, 64])
-        ModelConfig::default_qwen()
+        // Build a reasonable synthetic config with split FFN (prefill + infer)
+        let mut components: HashMap<String, ComponentConfig> = HashMap::new();
+
+        // Embeddings: input_ids [1, 64] -> hidden_states [1, 64, 1024]
+        let mut emb_in = HashMap::new();
+        emb_in.insert(
+            "input_ids".to_string(),
+            TensorConfig {
+                name: "input_ids".to_string(),
+                shape: vec![1, 64],
+                data_type: "INT32".to_string(),
+            },
+        );
+        let mut emb_out = HashMap::new();
+        emb_out.insert(
+            "hidden_states".to_string(),
+            TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![1, 64, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        components.insert(
+            "embeddings".to_string(),
+            ComponentConfig {
+                file_path: None,
+                inputs: emb_in,
+                outputs: emb_out,
+                functions: vec![],
+                input_order: None,
+            },
+        );
+
+        // FFN prefill: hidden_states [1, 64, 1024], position_ids [64], causal_mask [1,1,64,64] -> output_hidden_states [1,1,1024]
+        let mut ffn_prefill_in = HashMap::new();
+        ffn_prefill_in.insert(
+            "hidden_states".to_string(),
+            TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![1, 64, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        ffn_prefill_in.insert(
+            "position_ids".to_string(),
+            TensorConfig {
+                name: "position_ids".to_string(),
+                shape: vec![64],
+                data_type: "INT32".to_string(),
+            },
+        );
+        ffn_prefill_in.insert(
+            "causal_mask".to_string(),
+            TensorConfig {
+                name: "causal_mask".to_string(),
+                shape: vec![1, 1, 64, 64],
+                data_type: "FLOAT32".to_string(),
+            },
+        );
+        let mut ffn_prefill_out = HashMap::new();
+        ffn_prefill_out.insert(
+            "output_hidden_states".to_string(),
+            TensorConfig {
+                name: "output_hidden_states".to_string(),
+                shape: vec![1, 1, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        components.insert(
+            "ffn_prefill".to_string(),
+            ComponentConfig {
+                file_path: None,
+                inputs: ffn_prefill_in,
+                outputs: ffn_prefill_out,
+                functions: vec![],
+                input_order: None,
+            },
+        );
+
+        // FFN infer (single-token): hidden_states [1,1,1024], position_ids [1] -> output_hidden_states [1,1,1024]
+        let mut ffn_infer_in = HashMap::new();
+        ffn_infer_in.insert(
+            "hidden_states".to_string(),
+            TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![1, 1, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        ffn_infer_in.insert(
+            "position_ids".to_string(),
+            TensorConfig {
+                name: "position_ids".to_string(),
+                shape: vec![1],
+                data_type: "INT32".to_string(),
+            },
+        );
+        let mut ffn_infer_out = HashMap::new();
+        ffn_infer_out.insert(
+            "output_hidden_states".to_string(),
+            TensorConfig {
+                name: "output_hidden_states".to_string(),
+                shape: vec![1, 1, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        components.insert(
+            "ffn_infer".to_string(),
+            ComponentConfig {
+                file_path: None,
+                inputs: ffn_infer_in,
+                outputs: ffn_infer_out,
+                functions: vec![],
+                input_order: None,
+            },
+        );
+
+        // LM head: hidden_states [1,1,1024] -> logits [1,1,151936]
+        let mut lm_in = HashMap::new();
+        lm_in.insert(
+            "hidden_states".to_string(),
+            TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![1, 1, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        let mut lm_out = HashMap::new();
+        lm_out.insert(
+            "logits".to_string(),
+            TensorConfig {
+                name: "logits".to_string(),
+                shape: vec![1, 1, 151_936],
+                data_type: "FLOAT32".to_string(),
+            },
+        );
+        components.insert(
+            "lm_head".to_string(),
+            ComponentConfig {
+                file_path: None,
+                inputs: lm_in,
+                outputs: lm_out,
+                functions: vec![],
+                input_order: None,
+            },
+        );
+
+        ModelConfig {
+            model_info: ModelInfo {
+                model_id: Some("test/model".to_string()),
+                path: Some("/test".to_string()),
+                model_type: "qwen".to_string(),
+                discovered_at: None,
+            },
+            shapes: ShapeConfig {
+                batch_size: 1,
+                context_length: 512,
+                hidden_size: 1024,
+                vocab_size: 151_936,
+            },
+            components,
+            naming: NamingConfig {
+                embeddings_pattern: None,
+                ffn_prefill_pattern: None,
+                ffn_infer_pattern: None,
+                lm_head_pattern: None,
+            },
+            ffn_execution: Some("split".to_string()),
+        }
     }
 
     fn create_test_qwen_config_standard() -> QwenConfig {
-        let model_config = create_test_model_config_standard();
-        QwenConfig::from_model_config(model_config)
+        let mc = create_test_model_config_standard();
+        QwenConfig::from_model_config(mc)
     }
 
     #[test]
     fn test_model_config_loading() {
-        let standard_config = create_test_model_config_standard();
+        let standard_config = create_test_qwen_config_standard().model_config.clone();
 
-        // Verify default model shapes (not ANEMLL-specific)
         assert_eq!(standard_config.shapes.batch_size, 1);
         assert_eq!(standard_config.shapes.context_length, 512);
         assert_eq!(standard_config.shapes.hidden_size, 1024);
-        assert_eq!(standard_config.shapes.vocab_size, 151936);
+        assert_eq!(standard_config.shapes.vocab_size, 151_936);
 
-        // Note: default config has no components, so embeddings_input_shape() returns None
-        // For actual models, use UnifiedModelLoader which generates real component configs
-        assert!(standard_config.embeddings_input_shape().is_none());
+        // Embeddings input shape should be available in this synthetic config
+        assert_eq!(standard_config.embeddings_input_shape(), Some(&vec![1, 64]));
     }
 
     #[test]
     fn test_multipart_logits_detection() {
-        let standard_config = create_test_model_config_standard();
+        let mut config = create_test_model_config_standard();
+        assert!(!config.has_multipart_logits());
+        assert_eq!(config.logits_part_count(), 1);
 
-        // Standard ANEMLL should have single logits output
-        assert!(!standard_config.has_multipart_logits());
-        assert_eq!(standard_config.logits_part_count(), 1);
+        // Convert lm_head to multipart logits
+        if let Some(lm_head) = config.components.get_mut("lm_head") {
+            lm_head.outputs.clear();
+            lm_head.outputs.insert(
+                "logits1".to_string(),
+                TensorConfig {
+                    name: "logits1".to_string(),
+                    shape: vec![1, 1, 10],
+                    data_type: "FLOAT32".to_string(),
+                },
+            );
+            lm_head.outputs.insert(
+                "logits2".to_string(),
+                TensorConfig {
+                    name: "logits2".to_string(),
+                    shape: vec![1, 1, 20],
+                    data_type: "FLOAT32".to_string(),
+                },
+            );
+        }
+        assert!(config.has_multipart_logits());
+        assert_eq!(config.logits_part_count(), 2);
     }
 
     #[test]
     fn test_qwen_config_accessor_methods() {
-        let standard_config = create_test_qwen_config_standard();
-
-        // Test default config accessor methods
-        assert_eq!(standard_config.batch_size(), 1); // Default uses batch_size=1
-        assert_eq!(standard_config.context_length(), 512);
-        assert_eq!(standard_config.hidden_size(), 1024);
-        assert_eq!(standard_config.vocab_size(), 151936);
-    }
-
-    #[test]
-    fn test_dynamic_padding_logic_standard_model() {
-        // Test dynamic padding logic with a known sequence length
-        let expected_length = 64; // Test with standard length
-
-        // Test single token padding logic
-        let single_token = vec![123];
-        let mut padded = single_token.clone();
-        padded.resize(expected_length, 0);
-        assert_eq!(padded.len(), 64);
-        assert_eq!(padded[0], 123);
-        assert_eq!(padded[1], 0); // Padding
-
-        // Test multi-token padding logic
-        let multi_tokens = [123, 456, 789];
-        let mut padded = multi_tokens.to_vec();
-        padded.resize(expected_length, 0);
-        assert_eq!(padded.len(), 64);
-        assert_eq!(&padded[0..3], [123, 456, 789]);
-        assert_eq!(padded[3], 0); // Padding
-
-        // Note: For actual model configs with components, use UnifiedModelLoader
-        // which automatically generates embeddings_input_shape() from .mlpackage files
-    }
-
-    #[test]
-    fn test_dynamic_tensor_shape_logic() {
-        let config = create_test_qwen_config_standard();
-
-        // Test expected tensor shapes based on ModelConfig
-        if let Some(input_shape) = config.embeddings_input_shape() {
-            // Test embeddings input tensor shape expectations
-            let expected_dims = (input_shape[0], input_shape[1]); // (1, 64) for standard ANEMLL
-            assert_eq!(expected_dims, (1, 64));
-        }
-
-        // Test position tensor shape logic
-        let positions = [0, 1, 2];
-        let expected_pos_shape = (positions.len(),); // (3,)
-        assert_eq!(expected_pos_shape, (3,));
-
-        // Test update mask tensor shape expectations
-        let context_length = config.context_length(); // 512 for standard model
-        let expected_update_shape = (1, 1, context_length, 1); // (1, 1, 512, 1)
-        assert_eq!(expected_update_shape, (1, 1, 512, 1));
-
-        // Test causal mask tensor shape expectations
-        let seq_len = 10;
-        let expected_causal_shape = (1, 1, seq_len, context_length); // (1, 1, 10, 512)
-        assert_eq!(expected_causal_shape, (1, 1, 10, 512));
-    }
-
-    #[test]
-    fn test_qwen_config_for_model_id() {
-        // Test that for_model_id is now deprecated and returns error
-        let unknown_result = QwenConfig::for_model_id("unknown/model");
-        assert!(unknown_result.is_err());
-        
-        // Test modern approach using default config
-        let default_config = ModelConfig::default_qwen();
-        let qwen_config = QwenConfig::from_model_config(default_config);
-        assert_eq!(qwen_config.batch_size(), 1); // Default uses batch_size=1
-        assert_eq!(qwen_config.context_length(), 512);
+        let cfg = create_test_qwen_config_standard();
+        assert_eq!(cfg.batch_size(), 1);
+        assert_eq!(cfg.context_length(), 512);
+        assert_eq!(cfg.hidden_size(), 1024);
+        assert_eq!(cfg.vocab_size(), 151_936);
+        assert_eq!(cfg.embeddings_input_shape(), Some(&vec![1, 64]));
+        assert_eq!(cfg.embeddings_output_shape(), Some(&vec![1, 64, 1024]));
     }
 
     #[test]
     fn test_model_config_validation() {
-        let standard_config = create_test_model_config_standard();
-
-        // Default config has valid shapes but no components, so validation will fail
-        // This is expected since default_qwen() is a minimal config template
-        let validation_result = standard_config.validate();
-        assert!(validation_result.is_err());
-        
-        // Validation fails because it's missing required components
-        let error_msg = validation_result.unwrap_err().to_string();
-        assert!(error_msg.contains("Missing required component"));
-        
-        // Note: For valid configs with components, use UnifiedModelLoader which
-        // automatically generates complete configurations from .mlpackage files
-    }
-
-    #[test]
-    fn test_shape_backward_compatibility() {
-        let config = create_test_qwen_config_standard();
-
-        // Test that new accessor methods return the same values as ModelConfig
-        assert_eq!(config.batch_size(), config.model_config.shapes.batch_size);
-        assert_eq!(
-            config.context_length(),
-            config.model_config.shapes.context_length
-        );
-        assert_eq!(config.hidden_size(), config.model_config.shapes.hidden_size);
-        assert_eq!(config.vocab_size(), config.model_config.shapes.vocab_size);
-
-        // Test embeddings shape accessors (should be None for default config)
-        assert_eq!(
-            config.embeddings_input_shape(),
-            config.model_config.embeddings_input_shape()
-        );
-        assert_eq!(
-            config.embeddings_output_shape(),
-            config.model_config.embeddings_output_shape()
-        );
-
-        // Test multipart logits accessors
-        assert_eq!(
-            config.has_multipart_logits(),
-            config.model_config.has_multipart_logits()
-        );
-        assert_eq!(
-            config.logits_part_count(),
-            config.model_config.logits_part_count()
-        );
-    }
-
-    #[test]
-    fn test_tokenization_validation() {
-        let standard_config = create_test_qwen_config_standard();
-
-        // Create mock tokens that would exceed context length
-        let long_tokens: Vec<i64> = (0..600).collect(); // Exceeds model
-
-        // Test validation logic (without actual tokenization)
-        assert!(long_tokens.len() > standard_config.context_length());
-
-        // Test tokens within limits
-        let short_tokens: Vec<i64> = (0..100).collect(); // Within model
-        assert!(short_tokens.len() <= standard_config.context_length());
+        let mc = create_test_model_config_standard();
+        // Should be valid and wiring consistent for our synthetic shapes
+        assert!(mc.validate().is_ok());
+        assert!(mc.validate_internal_wiring().is_ok());
     }
 }

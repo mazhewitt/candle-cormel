@@ -40,16 +40,14 @@ impl QwenModel {
             if let Some(pos_cfg) = infer_component.inputs.get("position_ids") {
                 if pos_cfg.shape.len() == 1 && pos_cfg.shape[0] == 1 {
                     if let Ok(actual_len) = position_ids.dim(0) {
+                        // If we intentionally built a full-length vector (actual_len > 1) because other
+                        // shapes indicated that, don't slice it back to [1]. Trust the runtime override.
                         if actual_len > 1 {
                             debug!(
-                                "🔧 adapt_position_ids_for_infer: slicing length {} -> 1 (last index)",
+                                "🔧 adapt_position_ids_for_infer: keeping full-length vector of {} (override)",
                                 actual_len
                             );
-                            return position_ids.narrow(0, actual_len - 1, 1).map_err(|e| {
-                                CandleError::Msg(format!(
-                                    "Failed to narrow position_ids for infer: {e}"
-                                ))
-                            });
+                            return Ok(position_ids.clone());
                         }
                     }
                 }

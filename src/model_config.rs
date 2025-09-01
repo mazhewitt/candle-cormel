@@ -78,6 +78,31 @@ pub struct NamingConfig {
 }
 
 impl ModelConfig {
+    /// Create a minimal default Qwen ModelConfig (no components). Useful for tests and fallbacks.
+    pub fn default_qwen() -> Self {
+        Self {
+            model_info: ModelInfo {
+                model_id: Some("default/qwen".to_string()),
+                path: None,
+                model_type: "qwen".to_string(),
+                discovered_at: None,
+            },
+            shapes: ShapeConfig {
+                batch_size: 1,
+                context_length: 512,
+                hidden_size: 1024,
+                vocab_size: 151_936,
+            },
+            components: HashMap::new(),
+            naming: NamingConfig {
+                embeddings_pattern: None,
+                ffn_prefill_pattern: None,
+                ffn_infer_pattern: None,
+                lm_head_pattern: None,
+            },
+            ffn_execution: None,
+        }
+    }
     /// Load configuration from a JSON file
     pub fn load_from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let path = path.as_ref();
@@ -103,31 +128,7 @@ impl ModelConfig {
     }
 
 
-    /// Create a default configuration with standard Qwen shapes
-    pub fn default_qwen() -> Self {
-        Self {
-            model_info: ModelInfo {
-                model_id: None,
-                path: None,
-                model_type: "qwen".to_string(),
-                discovered_at: None,
-            },
-            shapes: ShapeConfig {
-                batch_size: 1,
-                context_length: 512,
-                hidden_size: 1024,
-                vocab_size: 151936,
-            },
-            components: HashMap::new(),
-            naming: NamingConfig {
-                embeddings_pattern: None,
-                ffn_prefill_pattern: None,
-                ffn_infer_pattern: None,
-                lm_head_pattern: None,
-            },
-            ffn_execution: None,
-        }
-    }
+    
 
     /// Get the shape configuration for a specific component and tensor
     pub fn get_tensor_shape(
@@ -412,10 +413,31 @@ impl ModelConfig {
         let expected_shape = self
             .get_tensor_shape("ffn_prefill", "position_ids", true)
             .ok_or_else(|| CandleError::Msg("No FFN prefill position_ids shape found".to_string()))?;
-        let expected_len = expected_shape[0];
+
+        // Heuristic: some manifests report position_ids length as [1] even for prefill.
+        // When that happens, derive the true sequence length from other known shapes.
+        let mut expected_len = expected_shape[0];
+        if expected_len == 1 {
+            // Prefer prefill hidden_states seq_len if available and > 1
+            if let Some(hs_shape) = self.get_tensor_shape("ffn_prefill", "hidden_states", true)
+            {
+                if hs_shape.len() == 3 && hs_shape[1] > 1 {
+                    expected_len = hs_shape[1];
+                }
+            }
+            // Or embeddings input seq_len if available and > 1
+            if expected_len == 1 {
+                if let Some(emb) = self.embeddings_input_shape() {
+                    if emb.len() == 2 && emb[1] > 1 {
+                        expected_len = emb[1];
+                    }
+                }
+            }
+            // As a final fallback, keep 1 (some exotic models may actually expect [1])
+        }
 
         // Create position sequence up to expected length
-        let mut position_ids = Vec::with_capacity(expected_len);
+    let mut position_ids = Vec::with_capacity(expected_len);
         for i in 0..expected_len {
             if i < positions.len() {
                 position_ids.push(positions[i]);
@@ -435,10 +457,9 @@ impl ModelConfig {
         device: &Device,
     ) -> Result<Tensor, CandleError> {
         // Prefer explicit shape from config; otherwise synthesize a reasonable default
-        let fallback_shape = vec![1, 1, 1, self.shapes.context_length];
         let expected_shape = self
             .get_tensor_shape("ffn_prefill", "causal_mask", true)
-            .unwrap_or(&fallback_shape);
+            .ok_or_else(|| CandleError::Msg("No FFN prefill causal_mask shape found".to_string()))?;
         let mask_batch_size = expected_shape[2];
         let mask_context_length = expected_shape[3];
 
@@ -513,11 +534,6 @@ impl ModelConfig {
     }
 }
 
-impl Default for ModelConfig {
-    fn default() -> Self {
-        Self::default_qwen()
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -710,13 +726,5 @@ mod tests {
         assert!(invalid_shapes.validate().is_err());
     }
 
-    #[test]
-    fn test_default_config() {
-        let config = ModelConfig::default();
-        assert_eq!(config.model_info.model_type, "qwen");
-        assert_eq!(config.shapes.batch_size, 1);
-        assert_eq!(config.shapes.context_length, 512);
-        assert_eq!(config.shapes.hidden_size, 1024);
-        assert_eq!(config.shapes.vocab_size, 151936);
-    }
+   
 }

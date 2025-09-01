@@ -270,11 +270,22 @@ impl QwenModel {
 
         // FFN Prefill function (for initial sequence processing)
         debug!("Loading FFN prefill component from {}", ffn_path.display());
-        let ffn_prefill = CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?;
+        let ffn_prefill_has_function = !ffn_component.functions.is_empty()
+            || ffn_component
+                .input_order
+                .as_ref()
+                .map(|_| false)
+                .unwrap_or(false);
+        let ffn_prefill = if ffn_prefill_has_function {
+            CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?
+        } else {
+            // Split package with a dedicated prefill model (no functions)
+            CoreMLModel::load_from_file(&ffn_path, &ffn_config_base)?
+        };
 
         // FFN Infer function (for token-by-token generation)
         // Check if there's a separate ffn_infer component, otherwise use the same file as prefill
-        let (ffn_infer_path, ffn_infer_config) = if let Some(ffn_infer_component) =
+    let (ffn_infer_path, ffn_infer_config, ffn_infer_has_function) = if let Some(ffn_infer_component) =
             config.model_config.components.get("ffn_infer")
         {
             let infer_path = if let Some(file_path) = &ffn_infer_component.file_path {
@@ -309,18 +320,24 @@ impl QwenModel {
                 vocab_size: config.hidden_size(),
                 model_type: "qwen-ffn-infer".to_string(),
             };
-            (infer_path, infer_config)
+            let has_func = !ffn_infer_component.functions.is_empty();
+            (infer_path, infer_config, has_func)
         } else {
             // Use same file as prefill with infer function
-            (ffn_path.clone(), ffn_config_base.clone())
+            // Determine if the shared package exposes functions.
+            let has_func = ffn_prefill_has_function;
+            (ffn_path.clone(), ffn_config_base.clone(), has_func)
         };
 
         debug!(
             "Loading FFN infer component from {}",
             ffn_infer_path.display()
         );
-        let ffn_infer =
-            CoreMLModel::load_with_function(&ffn_infer_path, &ffn_infer_config, "infer")?;
+        let ffn_infer = if ffn_infer_has_function {
+            CoreMLModel::load_with_function(&ffn_infer_path, &ffn_infer_config, "infer")?
+        } else {
+            CoreMLModel::load_from_file(&ffn_infer_path, &ffn_infer_config)?
+        };
 
         // Configure and load LM head
         let lm_output = config
@@ -646,7 +663,8 @@ impl QwenModel {
             context_length,
             false,
         )?;
-        let current_pos = position_ids.clone();
+    // Ensure current_pos is always a scalar-like [1] tensor with the current position
+    let current_pos = Tensor::from_vec(vec![current_position as i64], (1,), &self.config.device)?;
 
         // Run infer with the shared state to get next-step hidden states
     trace!(

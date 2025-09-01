@@ -413,7 +413,8 @@ impl QwenModel {
                 "Position {mask_pos} exceeds causal mask context length {context_length}. Input may be too long for chunked processing."
             )));
         }
-        let current_pos = position_ids.clone();
+    // current_pos is a scalar-like [1] tensor with the current position index
+    let current_pos = candle_core::Tensor::from_vec(vec![mask_pos as i64], (1,), &self.config.device)?;
 
         // Use mode-aware causal mask creation (infer mode)
         let infer_causal_mask =

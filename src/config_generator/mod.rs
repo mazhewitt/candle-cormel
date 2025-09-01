@@ -538,4 +538,59 @@ mod tests {
 
         Ok(())
     }
+
+    /// Create a mock "typo-fixer style" .mlpackage without Manifest.json but with Data/com.apple.CoreML/model.mlmodel
+    fn create_typo_fixer_style_mlpackage(temp_dir: &Path, name: &str) -> Result<PathBuf> {
+        let package_path = temp_dir.join(format!("{}.mlpackage", name));
+        let data_dir = package_path.join("Data/com.apple.CoreML");
+        std::fs::create_dir_all(&data_dir)?;
+        // Place a placeholder model.mlmodel (no real content needed for filename fallback)
+        std::fs::write(data_dir.join("model.mlmodel"), b"placeholder")?;
+        Ok(package_path)
+    }
+
+    #[test]
+    fn test_filename_fallback_for_typo_fixer_style_packages() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let generator = ConfigGenerator::new()?;
+
+        // Create typo-fixer style packages named like the real model
+        let emb = create_typo_fixer_style_mlpackage(temp_dir.path(), "qwen-typo-fixer_embeddings")?;
+        let ffn_prefill = create_typo_fixer_style_mlpackage(temp_dir.path(), "qwen-typo-fixer_prefill_chunk_01of01")?;
+        let ffn_infer = create_typo_fixer_style_mlpackage(temp_dir.path(), "qwen-typo-fixer_FFN_chunk_01of01")?;
+        let lm = create_typo_fixer_style_mlpackage(temp_dir.path(), "qwen-typo-fixer_lm_head")?;
+
+        // Run discovery and enhanced generation
+        let packages = generator.file_discovery.find_coreml_packages(temp_dir.path())?;
+        assert_eq!(packages.len(), 4);
+        assert!(emb.exists() && ffn_prefill.exists() && ffn_infer.exists() && lm.exists());
+
+        let config = generator.generate_config_from_directory_enhanced(temp_dir.path(), "test/typo", "qwen")?;
+
+        // Ensure required components are present via filename fallback
+        assert!(config.components.contains_key("embeddings"));
+        assert!(config.components.contains_key("lm_head"));
+        assert!(config.components.contains_key("ffn_prefill"));
+        assert!(config.components.contains_key("ffn_infer"));
+        Ok(())
+    }
+
+    #[test]
+    fn test_enhanced_parsing_falls_back_to_filename_when_metadata_empty() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let generator = ConfigGenerator::new()?;
+
+        // Create a mock package named "embeddings" with Manifest.json and an empty model file.
+        // This simulates environments where metadata extraction yields empty inputs/outputs.
+        let pkg_path = create_mock_mlpackage(temp_dir.path(), "embeddings")?;
+
+        let mut components = std::collections::HashMap::new();
+        generator
+            .process_package_with_metadata_detection(&pkg_path, &mut components)
+            .expect("enhanced parsing should not fail");
+
+        // Expect that we classified the component as "embeddings" via filename fallback
+        assert!(components.contains_key("embeddings"), "expected 'embeddings' component, got: {:?}", components.keys().collect::<Vec<_>>());
+        Ok(())
+    }
 }
