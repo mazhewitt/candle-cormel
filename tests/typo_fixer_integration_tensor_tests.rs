@@ -23,12 +23,44 @@ mod typo_fixer_integration_tensor_tests {
         let package_path = temp_dir.join(format!("{}.mlpackage", package_name));
         let data_dir = package_path.join("Data/com.apple.CoreML");
         std::fs::create_dir_all(&data_dir)?;
-        
-        // Create a minimal model.mlmodel file
-        // This would normally contain the actual tensor metadata, but for testing
-        // we'll rely on our mock tensor extraction
+
+        // Create a minimal model.mlmodel file (placeholder)
         std::fs::write(data_dir.join("model.mlmodel"), b"mock_model_with_tensors")?;
-        
+
+        // Also create a metadata.json at the package root to describe tensor schemas
+        // This mimics the .mlmodelc metadata format our parser understands.
+        let mut input_schema: Vec<serde_json::Value> = Vec::new();
+        for (_name, t) in &inputs {
+            input_schema.push(serde_json::json!({
+                "name": t.name,
+                "shape": format!("{:?}", t.shape),
+                "dataType": t.data_type,
+            }));
+        }
+
+        let mut output_schema: Vec<serde_json::Value> = Vec::new();
+        for (_name, t) in &outputs {
+            output_schema.push(serde_json::json!({
+                "name": t.name,
+                "shape": format!("{:?}", t.shape),
+                "dataType": t.data_type,
+            }));
+        }
+
+        // Our manifest/metadata reader expects an array with the first entry
+        // containing inputSchema/outputSchema fields.
+        let metadata = serde_json::json!([
+            {
+                "inputSchema": input_schema,
+                "outputSchema": output_schema
+            }
+        ]);
+
+        std::fs::write(
+            package_path.join("metadata.json"),
+            serde_json::to_string_pretty(&metadata).unwrap(),
+        )?;
+
         Ok(package_path)
     }
 
@@ -481,11 +513,19 @@ mod typo_fixer_integration_tensor_tests {
             data_type: "Float16".to_string(),
         });
         let mut lm_outputs = HashMap::new();
-        // Simplified: just create a few logits outputs for testing
-        for i in 0..4 {
+        // Create 4 chunked logits outputs that sum exactly to 151,669
+        let vocab_size_total = 151_669usize;
+        let chunks = 4usize;
+        let base = vocab_size_total / chunks; // 37,917
+        for i in 0..chunks {
+            let size = if i == chunks - 1 {
+                vocab_size_total - base * i // remainder on last chunk: 37,918
+            } else {
+                base
+            };
             lm_outputs.insert(format!("logits_{}", i), TensorConfig {
                 name: format!("logits_{}", i),
-                shape: vec![1, 1, 37917],  // 151669 / 4 ≈ 37917
+                shape: vec![1, 1, size],
                 data_type: "Float16".to_string(),
             });
         }
