@@ -36,7 +36,7 @@ impl QwenModel {
         &mut self,
         embeddings: &Tensor,
         pos: usize,
-        causal_mask_full: &Tensor,
+    _causal_mask_full: &Tensor,
     ) -> Result<(), CandleError> {
         let device = &self.config.device;
         let actual_seq = embeddings.dim(1)?;
@@ -56,8 +56,7 @@ impl QwenModel {
         let context_length = self.config.context_length();
         let causal_mask = self
             .config
-            .create_infer_causal_mask_tensor(pos, context_length)
-            .unwrap_or_else(|_| causal_mask_full.clone());
+            .create_infer_causal_mask_tensor(pos, context_length)?;
         let current_pos = Tensor::from_vec(vec![pos as i64], (1,), device)?;
         let prefill_output = self.run_ffn_prefill_with_inputs(
             &token_embed,
@@ -77,7 +76,7 @@ impl QwenModel {
         embeddings_chunk: &Tensor,
         local_pos: usize,
         global_pos: usize,
-        causal_mask_full: &Tensor,
+    _causal_mask_full: &Tensor,
     ) -> Result<(), CandleError> {
         let device = &self.config.device;
         let actual_seq = embeddings_chunk.dim(1)?;
@@ -90,8 +89,7 @@ impl QwenModel {
         let context_length = self.config.context_length();
         let causal_mask = self
             .config
-            .create_infer_causal_mask_tensor(global_pos, context_length)
-            .unwrap_or_else(|_| causal_mask_full.clone());
+            .create_infer_causal_mask_tensor(global_pos, context_length)?;
         let current_pos = Tensor::from_vec(vec![global_pos as i64], (1,), device)?;
         let prefill_output = self.run_ffn_prefill_with_inputs(
             &token_embed,
@@ -117,15 +115,22 @@ impl QwenModel {
         let seq_len = embeddings_chunk.dim(1)?;
 
         // Create position_ids for the full sequence [0, 1, 2, ..., seq_len-1]
+        // IMPORTANT: Use ModelConfig helper to handle manifests that report [1] length for prefill
+        // This will expand to the true fixed sequence length (e.g., 128) based on other shapes.
         let position_ids_vec: Vec<i64> = (0..seq_len as i64).collect();
-        let position_ids = self.create_position_tensor(position_ids_vec)?;
+        let position_ids = self
+            .config
+            .create_ffn_position_ids_tensor(&position_ids_vec)
+            .map_err(|e| CandleError::Msg(format!(
+                "Failed to create full-sequence position_ids tensor: {e}"
+            )))?;
 
-        // Use the full causal mask (should already be correctly sized for the sequence)
-        let causal_mask = causal_mask_full.clone();
+    // Use the full causal mask (should already be correctly sized for the sequence)
+    let causal_mask = causal_mask_full.clone();
 
-        // Set current_pos to 0 for prefill (matches Python behavior)
-        // Python uses batch_pos=0 for prefill, not the last position
-        let current_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
+    // Set current_pos to 0 for prefill (matches Python behavior)
+    // Python uses batch_pos=0 for prefill, not the last position
+    let current_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
 
     trace!(
             "🚀 FULL-SEQUENCE PREFILL: Processing full sequence with shape {:?}, max_pos: {}",
@@ -343,7 +348,7 @@ impl QwenModel {
         let lm_output = config
             .model_config
             .lm_head_primary_output_name()
-            .unwrap_or_else(|| "logits1".to_string());
+            .ok_or_else(|| CandleError::Msg("LM head has no logits output configured. Expected an output named 'logits' or 'logits1'. Update ModelConfig.lm_head.outputs to include a logits output.".to_string()))?;
 
         let lm_head_config = CoreMLConfig {
             input_names: vec!["hidden_states".to_string()],
@@ -485,7 +490,7 @@ impl QwenModel {
     }
 
     /// Pad tokens to appropriate batch size for embeddings using dynamic configuration
-    pub fn pad_tokens(&self, tokens: &[i64]) -> Vec<i64> {
+    pub fn pad_tokens(&self, tokens: &[i64]) -> Result<Vec<i64>, CandleError> {
     trace!(
             "🔍 PAD_TOKENS: Called with {} tokens: {:?}",
             tokens.len(),
@@ -493,7 +498,7 @@ impl QwenModel {
         );
 
         // Use the dynamic embeddings input shape from ModelConfig
-        if let Some(input_shape) = self.config.embeddings_input_shape() {
+    if let Some(input_shape) = self.config.embeddings_input_shape() {
             let expected_length = input_shape[1]; // Shape is [batch, seq_len]
             trace!(
                 "✅ PAD_TOKENS: Found embeddings_input_shape: {input_shape:?}, expected_length: {expected_length}"
@@ -507,7 +512,7 @@ impl QwenModel {
                     tokens.len(),
                     padded.len()
                 );
-                padded
+                Ok(padded)
             } else {
                 // Truncate if too long
                 trace!(
@@ -517,25 +522,13 @@ impl QwenModel {
                 );
                 let truncated = tokens[..expected_length].to_vec();
                 trace!("✂️ PAD_TOKENS: Truncated to {} tokens", truncated.len());
-                truncated
+                Ok(truncated)
             }
         } else {
-            // Fallback to old behavior if shape discovery failed
-            trace!("❌ PAD_TOKENS: No embeddings input shape found in ModelConfig, using legacy padding");
-            if tokens.len() == 1 {
-                trace!(
-                    "📦 PAD_TOKENS: Single token mode: keeping {} tokens",
-                    tokens.len()
-                );
-                tokens.to_vec() // Single token mode (1, 1)
-            } else {
-                // Pad to batch size (1, 64)
-                let mut padded = tokens.to_vec();
-                let batch_size = self.config.batch_size();
-                padded.resize(batch_size, 0);
-                trace!("📦 PAD_TOKENS: Legacy multi-token mode: padded {} tokens to {} (batch_size: {})", tokens.len(), padded.len(), batch_size);
-                padded
-            }
+            // Strict error if shape discovery failed
+            return Err(CandleError::Msg(
+                "Missing embeddings input shape in ModelConfig (embeddings.input_ids [batch, seq_len]). Unable to pad/truncate tokens deterministically. Ensure the generated ModelConfig includes embeddings.input_ids shape.".to_string(),
+            ));
         }
     }
 
@@ -596,15 +589,10 @@ impl QwenModel {
                 .config
                 .model_config
                 .get_tensor_shape("ffn_prefill", "position_ids", true)
-                .map(|v| v[0])
-                .unwrap_or(batch_size);
-            let position_ids = if expected_pos_len == 1 {
-                self.config
-                    .create_position_ids_with_mode_detection(&[sequence_length as i64 - 1], true)?
-            } else {
-                let vec: Vec<i64> = (0..batch_size as i64).collect();
-                Tensor::from_vec(vec, (batch_size,), device)?
-            };
+                .ok_or_else(|| CandleError::Msg("Missing shape for ffn_prefill.position_ids in ModelConfig. Provide a concrete vector length (e.g., [128]) for prefill.".to_string()))?[0];
+
+            let vec: Vec<i64> = (0..expected_pos_len as i64).collect();
+            let position_ids = Tensor::from_vec(vec, (expected_pos_len,), device)?;
             let causal_mask = if let Some(mask) = &self.cached_causal_mask {
                 mask.clone()
             } else {

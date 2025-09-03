@@ -417,7 +417,9 @@ fn test_step3_embeddings_and_padding_match_fixture_minimal() -> anyhow::Result<(
         .collect();
 
     // Compare padded input to fixture batch_input
-    let padded = model.pad_tokens(&expected_tokens);
+    let padded = model
+        .pad_tokens(&expected_tokens)
+        .expect("pad_tokens should succeed with valid ModelConfig shapes");
     let batch_input_fx: Vec<i64> = v3["data"]["batch_input"][0]
         .as_array()
         .unwrap()

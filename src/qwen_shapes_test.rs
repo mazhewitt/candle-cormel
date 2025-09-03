@@ -101,6 +101,62 @@ mod tests {
             },
         );
 
+        // FFN infer component (single-token)
+        let mut ffn_infer_inputs = HashMap::new();
+        ffn_infer_inputs.insert(
+            "hidden_states".to_string(),
+            TensorConfig {
+                name: "hidden_states".to_string(),
+                shape: vec![1, 1, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+        ffn_infer_inputs.insert(
+            "position_ids".to_string(),
+            TensorConfig {
+                name: "position_ids".to_string(),
+                shape: vec![1],
+                data_type: "INT64".to_string(),
+            },
+        );
+        ffn_infer_inputs.insert(
+            "causal_mask".to_string(),
+            TensorConfig {
+                name: "causal_mask".to_string(),
+                shape: vec![1, 1, 1, 512],
+                data_type: "FLOAT32".to_string(),
+            },
+        );
+        ffn_infer_inputs.insert(
+            "current_pos".to_string(),
+            TensorConfig {
+                name: "current_pos".to_string(),
+                shape: vec![1],
+                data_type: "INT64".to_string(),
+            },
+        );
+
+        let mut ffn_infer_outputs = HashMap::new();
+        ffn_infer_outputs.insert(
+            "output_hidden_states".to_string(),
+            TensorConfig {
+                name: "output_hidden_states".to_string(),
+                shape: vec![1, 1, 1024],
+                data_type: "FLOAT16".to_string(),
+            },
+        );
+
+        components.insert(
+            "ffn_infer".to_string(),
+            ComponentConfig {
+                file_path: None,
+                inputs: ffn_infer_inputs,
+                outputs: ffn_infer_outputs,
+                functions: vec!["infer".to_string()],
+                input_order: None,
+            },
+        );
+
         // LM head component - expects single token input
         let mut lm_head_inputs = HashMap::new();
         lm_head_inputs.insert(
@@ -175,8 +231,9 @@ mod tests {
         assert_eq!(embeddings_input.dims(), expected_shape);
 
         // Test position ids tensor creation
+        let prefill_vec: Vec<i64> = (0..64).map(|x| x as i64).collect();
         let position_ids = config
-            .create_ffn_position_ids_tensor(&[0, 1, 2, 3])
+            .create_ffn_position_ids_tensor(&prefill_vec)
             .unwrap();
         let expected_pos_shape = config
             .model_config
@@ -252,7 +309,8 @@ mod tests {
         let embeddings_input = config.create_embeddings_input_tensor(&tokens).unwrap();
         assert_eq!(embeddings_input.dims()[1], 32); // Padded to batch_size=32
 
-        let position_ids = config.create_ffn_position_ids_tensor(&[0, 1, 2]).unwrap();
-        assert_eq!(position_ids.dims()[0], 32); // position_ids length matches batch_size
+    let prefill_vec: Vec<i64> = (0..32).map(|x| x as i64).collect();
+    let position_ids = config.create_ffn_position_ids_tensor(&prefill_vec).unwrap();
+    assert_eq!(position_ids.dims()[0], 32); // position_ids length matches batch_size
     }
 }

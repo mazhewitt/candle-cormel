@@ -109,7 +109,7 @@ impl QwenConfig {
         let expected_shape = self
             .model_config
             .get_tensor_shape("ffn_prefill", "causal_mask", true)
-            .unwrap();
+            .ok_or_else(|| CandleError::Msg("Missing shape for ffn_prefill.causal_mask in ModelConfig. Expected a 4-D mask shape like [1,1,seq_len,seq_len]".to_string()))?;
         let mask_batch_size = expected_shape[2];
         let mask_context_length = expected_shape[3];
 
@@ -169,63 +169,10 @@ impl QwenConfig {
                 }
             }
 
-            // If infer shape unknown but prefill carries a vector length, use that length
-            if let Some(prefill_shape) =
-                self.model_config
-                    .get_tensor_shape("ffn_prefill", "position_ids", true)
-            {
-                if prefill_shape.len() == 1 && prefill_shape[0] > 1 {
-                    let len = prefill_shape[0];
-                    debug!(
-                        "🔧 Using prefill position_ids length {} for infer (no infer shape found)",
-                        len
-                    );
-                    let vec: Vec<i64> = (0..len as i64).collect();
-                    return candle_core::Tensor::from_vec(vec, (len,), &self.device);
-                }
-            }
-
-            // Next best: derive expected length from prefill hidden_states seq_len if fixed (>1)
-            if let Some(hs_shape) =
-                self.model_config
-                    .get_tensor_shape("ffn_prefill", "hidden_states", true)
-            {
-                if hs_shape.len() == 3 {
-                    let seq_len = hs_shape[1];
-                    if seq_len > 1 {
-                        debug!(
-                            "🔧 Using prefill hidden_states seq_len {} for infer position_ids",
-                            seq_len
-                        );
-                        let vec: Vec<i64> = (0..seq_len as i64).collect();
-                        return candle_core::Tensor::from_vec(vec, (seq_len,), &self.device);
-                    }
-                }
-            }
-
-            // Or from embeddings input shape [batch, seq_len]
-            if let Some(emb_in_shape) = self.model_config.embeddings_input_shape() {
-                if emb_in_shape.len() == 2 {
-                    let seq_len = emb_in_shape[1];
-                    if seq_len > 1 {
-                        debug!(
-                            "🔧 Using embeddings input seq_len {} for infer position_ids",
-                            seq_len
-                        );
-                        let vec: Vec<i64> = (0..seq_len as i64).collect();
-                        return candle_core::Tensor::from_vec(vec, (seq_len,), &self.device);
-                    }
-                }
-            }
-
-            // Final fallback: build a full-length vector matching context_length
-            let len = self.model_config.shapes.context_length;
-            debug!(
-                "⚠️ No explicit infer/prefill shape for position_ids; using context-length vector of {}",
-                len
-            );
-            let vec: Vec<i64> = (0..len as i64).collect();
-            candle_core::Tensor::from_vec(vec, (len,), &self.device)
+            // If infer shape unknown, error out to force explicit configuration
+            Err(CandleError::Msg(
+                "Missing shape for ffn_infer.position_ids in ModelConfig. Provide infer position_ids shape (commonly [1]).".to_string(),
+            ))
         }
     }
 
@@ -236,7 +183,7 @@ impl QwenConfig {
         context_length: usize,
         is_prefill: bool,
     ) -> Result<candle_core::Tensor, CandleError> {
-        if is_prefill {
+    if is_prefill {
             // Use prefill shape (batch-sized)
             self.create_ffn_causal_mask_tensor(0, context_length)
         } else {
@@ -273,7 +220,7 @@ impl QwenConfig {
                 }
             }
 
-            // Fallback to the original infer mask creation
+            // Require presence of prefill causal mask shape to derive infer mask; otherwise error
             self.create_infer_causal_mask_tensor(position, context_length)
         }
     }
