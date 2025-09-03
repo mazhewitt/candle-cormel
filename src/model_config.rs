@@ -457,15 +457,37 @@ impl ModelConfig {
         device: &Device,
     ) -> Result<Tensor, CandleError> {
         // Prefer explicit shape from config; otherwise synthesize a reasonable default
-        let expected_shape = self
-            .get_tensor_shape("ffn_prefill", "causal_mask", true)
-            .ok_or_else(|| CandleError::Msg("No FFN prefill causal_mask shape found".to_string()))?;
-        let mask_batch_size = expected_shape[2];
-        let mask_context_length = expected_shape[3];
+        let expected_shape_vec = if let Some(shape) =
+            self.get_tensor_shape("ffn_prefill", "causal_mask", true)
+        {
+            shape.clone()
+        } else {
+            // Derive a default square mask [1,1,seq_len,seq_len]
+            let mut seq_len = 0usize;
+            if let Some(hs) = self.get_tensor_shape("ffn_prefill", "hidden_states", true) {
+                if hs.len() == 3 && hs[1] > 0 {
+                    seq_len = hs[1];
+                }
+            }
+            if seq_len == 0 {
+                if let Some(emb) = self.embeddings_input_shape() {
+                    if emb.len() == 2 && emb[1] > 0 {
+                        seq_len = emb[1];
+                    }
+                }
+            }
+            if seq_len == 0 {
+                seq_len = self.shapes.context_length;
+            }
+            vec![1, 1, seq_len, seq_len]
+        };
+
+        let mask_rows = expected_shape_vec[2];
+        let mask_context_length = expected_shape_vec[3];
 
         // Create causal mask data
-        let mut mask_data = vec![f32::NEG_INFINITY; mask_batch_size * mask_context_length];
-        for i in 0..mask_batch_size {
+        let mut mask_data = vec![f32::NEG_INFINITY; mask_rows * mask_context_length];
+        for i in 0..mask_rows {
             for j in 0..=i.min(mask_context_length - 1) {
                 mask_data[i * mask_context_length + j] = 0.0;
             }
@@ -474,10 +496,10 @@ impl ModelConfig {
         Tensor::from_vec(
             mask_data,
             (
-                expected_shape[0],
-                expected_shape[1],
-                expected_shape[2],
-                expected_shape[3],
+                expected_shape_vec[0],
+                expected_shape_vec[1],
+                expected_shape_vec[2],
+                expected_shape_vec[3],
             ),
             device,
         )

@@ -151,21 +151,14 @@ impl QwenConfig {
             {
                 // Commonly a 1-D vector shape
                 if infer_shape.len() == 1 {
-                    let len = infer_shape[0];
-                    if len == 1 {
-                        // Honor explicit infer shape of [1] and return single position id
-                        debug!("🔧 Using single-length infer position_ids [1]");
-                        return self.create_infer_position_ids_tensor(positions[0] as usize);
-                    } else {
-                        // Create a position vector matching expected length [0..len-1]
+                    // Regardless of reported length, inference expects a single position id [1]
+                    if infer_shape[0] != 1 {
                         debug!(
-                            "🔧 Using vector-length infer position_ids of len {} (e.g., [0..{}])",
-                            len,
-                            len.saturating_sub(1)
+                            "⚠️ Config reports infer position_ids len={} but infer expects [1]; overriding to [1]",
+                            infer_shape[0]
                         );
-                        let vec: Vec<i64> = (0..len as i64).collect();
-                        return candle_core::Tensor::from_vec(vec, (len,), &self.device);
                     }
+                    return candle_core::Tensor::from_vec(vec![positions[0]], (1,), &self.device);
                 } else {
                     // Non 1-D shapes: fall back to create_infer_position_ids_tensor which honors configured shape
                     debug!(

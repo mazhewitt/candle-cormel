@@ -105,31 +105,28 @@ impl ManifestParser {
         // Use schema extractor's filename-based detection
         let role = schema_extractor.detect_component_role_from_filename(filename);
 
-        // Try extracting tensor signatures from inner model file when available
-        let (inputs, outputs) = {
-            let inner_model = package_path.join("Data/com.apple.CoreML/model.mlmodel");
-            if inner_model.exists() {
-                let extractor = CoreMLMetadataExtractor::new();
-                match extractor.extract_tensor_signatures(&inner_model) {
-                    Ok((ins, outs)) => {
-                        debug!(
-                            "📖 Filename-only: populated tensors from inner model (inputs={}, outputs={})",
-                            ins.len(),
-                            outs.len()
-                        );
-                        (ins, outs)
-                    }
-                    Err(e) => {
-                        debug!(
-                            "⚠️ Filename-only: failed to extract inner model tensors: {}",
-                            e
-                        );
-                        (HashMap::new(), HashMap::new())
-                    }
+        // Try extracting tensor signatures from inner model file when available.
+        // If not available (pure filename-only scenario), proceed with empty tensors.
+        let inner_model = package_path.join("Data/com.apple.CoreML/model.mlmodel");
+        let (inputs, outputs) = if inner_model.exists() {
+            let extractor = CoreMLMetadataExtractor::new();
+            match extractor.extract_tensor_signatures(&inner_model) {
+                Ok((ins, outs)) => {
+                    debug!(
+                        "📖 Filename-only: populated tensors from inner model (inputs={}, outputs={})",
+                        ins.len(),
+                        outs.len()
+                    );
+                    (ins, outs)
                 }
-            } else {
-                (HashMap::new(), HashMap::new())
+                Err(e) => {
+                    debug!("⚠️ Filename-only: failed to extract metadata from inner model: {}. Proceeding with empty tensors.", e);
+                    (HashMap::new(), HashMap::new())
+                }
             }
+        } else {
+            debug!("ℹ️ Filename-only: no inner model file found, proceeding with empty tensors");
+            (HashMap::new(), HashMap::new())
         };
 
         // Create component config using any extracted tensors

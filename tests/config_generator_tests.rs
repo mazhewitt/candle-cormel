@@ -795,15 +795,22 @@ mod typo_fixer_bug_reproduction_tests {
                 
             }
             Err(e) => {
-                println!("❌ Config generation failed: {}", e);
+                println!("✅ Config generation failed with proper error: {}", e);
                 
-                // This could be the expected behavior if the system properly rejects empty configs
-                // Check if the error message is meaningful
+                // Validate that we get a meaningful error message for empty tensor metadata
                 let error_msg = format!("{}", e);
-                assert!(error_msg.contains("tensor") || error_msg.contains("input") || error_msg.contains("output") || error_msg.contains("component"),
-                       "Error message should be descriptive about tensor/component issues: {}", error_msg);
+                assert!(error_msg.contains("Configuration generation failed for component") || 
+                       error_msg.contains("empty tensor metadata") ||
+                       error_msg.contains("metadata extraction") ||
+                       error_msg.contains("model.mlmodel"),
+                       "Error message should describe the specific metadata issue: {}", error_msg);
+                
+                // Check for actionable guidance in error message
+                assert!(error_msg.contains("💡") || error_msg.contains("🛠️") || error_msg.contains("Solutions"),
+                       "Error message should provide actionable guidance: {}", error_msg);
                 
                 println!("✅ Config generation properly rejected empty metadata with clear error");
+                println!("✅ Error message provides actionable guidance for fixing the issue");
             }
         }
         
@@ -863,41 +870,46 @@ mod typo_fixer_bug_reproduction_tests {
         let execution_mode = parser.infer_execution_mode(&components);
         println!("🔧 Execution mode inferred: {}", execution_mode);
         
-        // Test shape inference with empty components
-        let shape_config = generator.compute_shape_info_generic(&components.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
+        // Test shape inference with empty components - should now error properly
+        println!("🔍 Testing shape inference with empty tensor maps (should error):");
         
-        println!("📊 Shape config with empty tensors:");
-        println!("   • vocab_size: {}", shape_config.vocab_size);
-        println!("   • hidden_size: {}", shape_config.hidden_size);
-        println!("   • context_length: {}", shape_config.context_length);
-        println!("   • batch_size: {}", shape_config.batch_size);
+        let shape_result = generator.compute_shape_info_generic(&components.iter().map(|(k, v)| (k.clone(), v.clone())).collect());
         
-        // STRICT: The system should either provide correct shapes or reject empty tensor configs
-        println!("🔍 Analyzing shape inference behavior with empty tensor maps:");
-        
-        // Reference values for typo-fixer model
-        let expected_min_vocab_size = 100000;  // Typo-fixer has 151,669
-        let expected_min_hidden_size = 1024;   // Should be at least 1024
-        
-        if shape_config.vocab_size == 0 || shape_config.hidden_size == 0 {
-            panic!("TYPO-FIXER BUG: Empty tensor maps led to zero shapes - vocab_size: {}, hidden_size: {}. The config generation system should either populate tensor info from metadata or reject empty configs with clear error messages.",
-                   shape_config.vocab_size, shape_config.hidden_size);
+        match shape_result {
+            Ok(shape_config) => {
+                // If shape inference succeeds, validate it has correct values (bug is fixed)
+                println!("✅ Shape inference succeeded with:");
+                println!("   • vocab_size: {}", shape_config.vocab_size);
+                println!("   • hidden_size: {}", shape_config.hidden_size);
+                println!("   • context_length: {}", shape_config.context_length);
+                println!("   • batch_size: {}", shape_config.batch_size);
+                
+                // Validate the shapes are reasonable for typo-fixer
+                if shape_config.vocab_size >= 100000 && shape_config.hidden_size >= 1024 {
+                    println!("✅ Shape inference provided correct typo-fixer shapes - bug is FIXED!");
+                } else {
+                    panic!("TYPO-FIXER BUG: Shape inference succeeded but produced incorrect values: vocab_size={}, hidden_size={}. Expected vocab_size >= 100000, hidden_size >= 1024.",
+                           shape_config.vocab_size, shape_config.hidden_size);
+                }
+            }
+            Err(e) => {
+                println!("✅ Shape inference properly rejected empty tensor maps with error:");
+                println!("   {}", e);
+                
+                // Validate error message is meaningful
+                let error_msg = format!("{}", e);
+                assert!(error_msg.contains("empty tensor metadata") || 
+                       error_msg.contains("Components have empty tensor") ||
+                       error_msg.contains("insufficient tensor metadata"),
+                       "Error message should describe empty tensor metadata issue: {}", error_msg);
+                
+                assert!(error_msg.contains("💡") || error_msg.contains("🛠️"),
+                       "Error message should provide actionable guidance: {}", error_msg);
+                
+                println!("✅ This is the correct behavior - system properly rejects empty tensor metadata");
+                println!("✅ Error message provides clear guidance for resolution");
+            }
         }
-        
-        // STRICT: Shape inference should produce correct values or the test should fail
-        if shape_config.vocab_size < expected_min_vocab_size {
-            panic!("TYPO-FIXER BUG: vocab_size {} is too small for typo-fixer model (expected >= {}). This indicates shape inference from empty tensor metadata produces incorrect values. The bug causes CLI failures at runtime.",
-                   shape_config.vocab_size, expected_min_vocab_size);
-        }
-        
-        if shape_config.hidden_size < expected_min_hidden_size {
-            panic!("TYPO-FIXER BUG: hidden_size {} is too small for typo-fixer model (expected >= {}). This indicates shape inference issues.",
-                   shape_config.hidden_size, expected_min_hidden_size);
-        }
-        
-        // If we reach here, the config generation system has been fixed
-        println!("✅ Shape inference provided correct typo-fixer shapes despite empty tensors");
-        println!("✅ This indicates the config generation bug has been FIXED");
         
         println!("🎯 Test completed: Config generation with empty tensor maps");
     }

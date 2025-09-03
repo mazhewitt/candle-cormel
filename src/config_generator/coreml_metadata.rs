@@ -91,58 +91,76 @@ import coremltools as ct
 import json
 import sys
 
+def extract_shape_and_dtype(t):
+    # Handle tensorType (MLProgram) first
+    if hasattr(t, 'tensorType') and t.HasField('tensorType'):
+        tt = t.tensorType
+        dtype = getattr(tt, 'dataType', None)
+        dtype = str(dtype).split('.')[-1] if dtype is not None else 'UNKNOWN'
+        shape = []
+        if tt.HasField('shape'):
+            dims = []
+            for d in tt.shape.dimensions:
+                if hasattr(d, 'size') and d.HasField('size'):
+                    dims.append(int(d.size))
+                elif hasattr(d, 'enumeratedSizes') and d.HasField('enumeratedSizes'):
+                    sizes = list(d.enumeratedSizes.sizes)
+                    dims.append(int(max(sizes))) if sizes else dims.append(0)
+                else:
+                    dims.append(0)
+            shape = dims
+        return shape, dtype
+    # Fallback to legacy multiArrayType
+    if t.HasField('multiArrayType'):
+        mat = t.multiArrayType
+        shape = list(mat.shape)
+        dtype = str(mat.dataType).split('.')[-1]
+        return shape, dtype
+    return [], 'UNKNOWN'
+
 try:
-    model = ct.models.MLModel("{}")
-    spec = model.get_spec()
-    
+    # Use load_spec to avoid heavy validation paths
+    spec = ct.models.utils.load_spec("{}")
+
     # Extract inputs
     inputs = {{}}
     for input_desc in spec.description.input:
-        shape = []
-        if input_desc.type.HasField("multiArrayType"):
-            shape = list(input_desc.type.multiArrayType.shape)
-            dtype = str(input_desc.type.multiArrayType.dataType).split('.')[-1]
-        else:
-            dtype = "UNKNOWN"
-        
+        shape, dtype = extract_shape_and_dtype(input_desc.type)
         inputs[input_desc.name] = {{
-            "name": input_desc.name,
-            "shape": shape,
-            "data_type": dtype
+            'name': input_desc.name,
+            'shape': shape,
+            'data_type': dtype
         }}
-    
+
     # Extract outputs
     outputs = {{}}
     for output_desc in spec.description.output:
-        shape = []
-        if output_desc.type.HasField("multiArrayType"):
-            shape = list(output_desc.type.multiArrayType.shape)
-            dtype = str(output_desc.type.multiArrayType.dataType).split('.')[-1]
-        else:
-            dtype = "UNKNOWN"
-        
+        shape, dtype = extract_shape_and_dtype(output_desc.type)
         outputs[output_desc.name] = {{
-            "name": output_desc.name,
-            "shape": shape,
-            "data_type": dtype
+            'name': output_desc.name,
+            'shape': shape,
+            'data_type': dtype
         }}
-    
-    # Check for functions
+
+    # Check for functions (MLProgram)
     functions = []
     if hasattr(spec, 'mlProgram') and spec.mlProgram:
+        # spec.mlProgram.functions is a map<string, Function>
         for func_name in spec.mlProgram.functions:
             functions.append(func_name)
-    
+
     result = {{
-        "inputs": inputs,
-        "outputs": outputs,
-        "functions": functions
+        'inputs': inputs,
+        'outputs': outputs,
+        'functions': functions
     }}
-    
+
     print(json.dumps(result))
-    
+
 except Exception as e:
-    print(f"{{\"error\": \"{{}}\"}}", file=sys.stderr)
+    import traceback
+    traceback.print_exc()
+    print(json.dumps({{'error': str(e)}}), file=sys.stderr)
     sys.exit(1)
 "#, model_path.display());
 
