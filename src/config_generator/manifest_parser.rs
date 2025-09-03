@@ -52,33 +52,94 @@ impl ManifestParser {
     ) -> Result<Vec<(String, ComponentConfig)>> {
         debug!("📦 Parsing from model.mlmodel file: {}", model_path.display());
 
-        // Use CoreML metadata extractor to get tensor signatures
+        // Use CoreML metadata extractor to get per-function tensor signatures when available
         let metadata_extractor = CoreMLMetadataExtractor::new();
-        match metadata_extractor.extract_tensor_signatures(model_path) {
-            Ok((inputs, outputs)) => {
-                debug!("✅ Extracted {} inputs and {} outputs from model file", inputs.len(), outputs.len());
-                
+        match metadata_extractor.extract_full_metadata(model_path) {
+            Ok((model_inputs, model_outputs, functions)) => {
+                // If per-function metadata exists, build components accordingly
+                if !functions.is_empty() {
+                    let mut components: Vec<(String, ComponentConfig)> = Vec::new();
+
+                    for (fname, (inputs, outputs)) in functions {
+                        // Determine role from tensors first
+                        let mut role = schema_extractor.detect_component_role(&inputs, &outputs);
+                        // Fallback: infer from common function names
+                        if matches!(role, ComponentRole::Unknown) {
+                            let lname = fname.to_lowercase();
+                            if lname.contains("prefill") {
+                                role = ComponentRole::FfnPrefill;
+                            } else if lname.contains("infer") || lname.contains("decode") {
+                                role = ComponentRole::FfnInfer;
+                            }
+                        }
+
+                        let component_name = self.role_to_component_name(&role);
+                        let mut functions_vec = Vec::new();
+                        functions_vec.push(fname);
+                        let config = ComponentConfig {
+                            file_path: Some(package_path.to_string_lossy().to_string()),
+                            inputs,
+                            outputs,
+                            functions: functions_vec,
+                            input_order: None,
+                        };
+                        debug!(
+                            "🏷️ Function component: {} (role: {:?})",
+                            component_name, role
+                        );
+                        components.push((component_name, config));
+                    }
+
+                    // If we ended up with duplicate names (e.g., both map to ffn_prefill), keep both by disambiguating
+                    // with function names appended.
+                    let mut seen: HashMap<String, usize> = HashMap::new();
+                    for (name, _) in &mut components {
+                        let count = seen.entry(name.clone()).or_insert(0);
+                        if *count > 0 {
+                            // append index
+                            name.push_str(&format!("_{}", count));
+                        }
+                        *count += 1;
+                    }
+
+                    return Ok(components);
+                }
+
+                // No per-function info; fall back to model-level IO
+                debug!(
+                    "ℹ️ No per-function IO; using model-level IO ({} in, {} out)",
+                    model_inputs.len(),
+                    model_outputs.len()
+                );
+
                 // Detect component role from tensor signatures
-                let role = schema_extractor.detect_component_role(&inputs, &outputs);
-                
-                // If tensor signature detection fails (returns Unknown) or produces empty results,
-                // fall back to filename-based detection
-                if matches!(role, ComponentRole::Unknown) || (inputs.is_empty() && outputs.is_empty()) {
-                    debug!("⚠️ Tensor signature detection returned Unknown or empty tensors, using filename fallback");
+                let role = schema_extractor.detect_component_role(&model_inputs, &model_outputs);
+
+                // If detection fails or tensors empty, fallback to filename
+                if matches!(role, ComponentRole::Unknown)
+                    || (model_inputs.is_empty() && model_outputs.is_empty())
+                {
+                    debug!(
+                        "⚠️ Model-level detection unknown/empty, using filename fallback"
+                    );
                     return self.parse_package_filename_only(package_path, schema_extractor);
                 }
-                
+
                 let component_config = ComponentConfig {
                     file_path: Some(package_path.to_string_lossy().to_string()),
-                    inputs,
-                    outputs,
+                    inputs: model_inputs,
+                    outputs: model_outputs,
                     functions: Vec::new(),
                     input_order: None,
                 };
-                
+
                 let component_name = self.role_to_component_name(&role);
-                debug!("🏷️ Model file detection: {} -> {}", package_path.display(), component_name);
-                
+                debug!(
+                    "🏷️ Model file detection: {} -> {}",
+                    package_path.display(),
+                    component_name
+                );
+
                 Ok(vec![(component_name, component_config)])
             }
             Err(e) => {
