@@ -24,7 +24,40 @@ impl QwenModel {
             "💾 CACHE MISS: Computing embeddings for sequence {:?}",
             tokens
         );
-        let input_tensor = self.create_embeddings_input_tensor(tokens)?;
+        
+        // For models expecting full-sequence prefill (like typo-fixer), 
+        // create embeddings with the full sequence length expected by FFN
+        let input_tensor = if self.config.model_config.expects_full_sequence_prefill() {
+            // Get the expected sequence length from FFN prefill or FFN infer
+            let expected_seq_len = if let Some(ffn_prefill) = self.config.model_config.components.get("ffn_prefill") {
+                ffn_prefill.inputs.get("hidden_states")
+                    .map(|hs| hs.shape[1])
+                    .unwrap_or(1)
+            } else if let Some(ffn_infer) = self.config.model_config.components.get("ffn_infer") {
+                ffn_infer.inputs.get("hidden_states")
+                    .map(|hs| hs.shape[1])
+                    .unwrap_or(1)
+            } else {
+                1
+            };
+            
+            if expected_seq_len > 1 {
+                debug!("🚀 Creating full-sequence embeddings input with seq_len={}", expected_seq_len);
+                // Pad tokens to expected sequence length
+                let mut padded_tokens = tokens.to_vec();
+                padded_tokens.resize(expected_seq_len, 0); // Pad with 0s
+                Tensor::from_vec(
+                    padded_tokens,
+                    (1, expected_seq_len),
+                    &self.config.device,
+                )?
+            } else {
+                self.create_embeddings_input_tensor(tokens)?
+            }
+        } else {
+            self.create_embeddings_input_tensor(tokens)?
+        };
+        
         let embeddings = self.embeddings.forward(&[&input_tensor])?;
         // Cache the result
         self.last_sequence_embeddings = Some((tokens.to_vec(), embeddings.clone()));
@@ -152,8 +185,15 @@ impl QwenModel {
         tokens: &[i64],
         _pos: usize,
     ) -> Result<Tensor, CandleError> {
-        // Get the expected FFN input shape
-        let expected_shape = if let Some(ffn_prefill_config) =
+        // Get the expected FFN input shape - check ffn_infer first, then fall back to ffn_prefill
+        let expected_shape = if let Some(ffn_infer_config) =
+            self.config.model_config.components.get("ffn_infer")
+        {
+            ffn_infer_config
+                .inputs
+                .get("hidden_states")
+                .map(|hidden_states_config| hidden_states_config.shape.clone())
+        } else if let Some(ffn_prefill_config) =
             self.config.model_config.components.get("ffn_prefill")
         {
             ffn_prefill_config

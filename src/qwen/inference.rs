@@ -399,7 +399,15 @@ impl QwenModel {
         let _causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
 
         // 🚀 OPTIMIZATION: Get appropriate hidden states based on model architecture
-        let hidden_states = self.get_infer_hidden_states(tokens, pos)?;
+        // For models that expect full-sequence prefill (like typo-fixer with split FFN),
+        // use full-sequence embeddings even during inference
+        let hidden_states = if self.config.model_config.expects_full_sequence_prefill() {
+            trace!("🚀 INFER: Using full-sequence embeddings for model expecting full-sequence prefill");
+            self.get_full_sequence_embeddings_for_infer(tokens, pos)?
+        } else {
+            trace!("🔄 INFER: Using single-token embeddings for standard model");
+            self.get_infer_hidden_states(tokens, pos)?
+        };
 
         // 🚀 OPTIMIZATION: Use mode-aware position IDs creation (infer mode)
         let position_ids = self

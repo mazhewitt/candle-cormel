@@ -52,7 +52,10 @@ objc2-core-ml = "0.3"
 block2 = "0.6"
 
 [workspace]
-# Empty workspace table to prevent being part of parent workspace
+# Workspace for the root crate plus local tools/crates
+members = [
+	"typo-fixer-cli",
+]
 
 [features]
 default = []

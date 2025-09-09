@@ -14,6 +14,8 @@ impl QwenModel {
     fn adapt_hidden_states_for_infer(&self, hidden_states: &Tensor) -> Result<Tensor, CandleError> {
         if let Some(infer_component) = self.config.model_config.components.get("ffn_infer") {
             if let Some(hs_cfg) = infer_component.inputs.get("hidden_states") {
+                // Only narrow if FFN infer expects seq_len=1 (single token)
+                // For typo-fixer models, FFN infer might expect full sequences (seq_len > 1)
                 if hs_cfg.shape.len() == 3 && hs_cfg.shape[1] == 1 {
                     if let Ok(actual_seq) = hidden_states.dim(1) {
                         if actual_seq > 1 {
@@ -28,6 +30,13 @@ impl QwenModel {
                             });
                         }
                     }
+                } else if hs_cfg.shape.len() == 3 && hs_cfg.shape[1] > 1 {
+                    // FFN infer expects full sequence (like typo-fixer models)
+                    debug!(
+                        "🔧 adapt_hidden_states_for_infer: FFN infer expects full sequence (shape={:?}), not narrowing",
+                        hs_cfg.shape
+                    );
+                    // Don't narrow, keep full sequence
                 }
             }
         }
