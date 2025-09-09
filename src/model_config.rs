@@ -412,53 +412,41 @@ impl ModelConfig {
     ) -> Result<Tensor, CandleError> {
         let expected_shape = self
             .get_tensor_shape("ffn_prefill", "position_ids", true)
-            .ok_or_else(|| CandleError::Msg("No FFN prefill position_ids shape found in ModelConfig. Expected a 1-D vector shape (e.g., [128])".to_string()))?;
+            .ok_or_else(|| CandleError::Msg("No FFN prefill position_ids shape found".to_string()))?;
 
-        // Enforce 1-D vector
-        if expected_shape.len() != 1 {
-            return Err(CandleError::Msg(format!(
-                "Invalid ffn_prefill.position_ids shape {:?}: expected a 1-D vector length (e.g., [128])",
-                expected_shape
-            )));
-        }
-
-        let expected_len = expected_shape[0];
-        if expected_len == 0 {
-            return Err(CandleError::Msg(
-                "Invalid ffn_prefill.position_ids shape: length must be > 0".to_string(),
-            ));
-        }
-
-        // If manifest reports [1] but other shapes imply a fixed sequence > 1, fail loudly
+        // Heuristic: some manifests report position_ids length as [1] even for prefill.
+        // When that happens, derive the true sequence length from other known shapes.
+        let mut expected_len = expected_shape[0];
         if expected_len == 1 {
+            // Prefer prefill hidden_states seq_len if available and > 1
             if let Some(hs_shape) = self.get_tensor_shape("ffn_prefill", "hidden_states", true)
             {
                 if hs_shape.len() == 3 && hs_shape[1] > 1 {
-                    return Err(CandleError::Msg(format!(
-                        "ffn_prefill.position_ids shape reports [1] but hidden_states suggests fixed sequence length {}. Update ModelConfig to use [seq_len] (e.g., [{}]).",
-                        hs_shape[1], hs_shape[1]
-                    )));
+                    expected_len = hs_shape[1];
                 }
             }
-            if let Some(emb) = self.embeddings_input_shape() {
-                if emb.len() == 2 && emb[1] > 1 {
-                    return Err(CandleError::Msg(format!(
-                        "ffn_prefill.position_ids shape reports [1] but embeddings.input_ids suggests fixed sequence length {}. Update ModelConfig to use [seq_len] (e.g., [{}]).",
-                        emb[1], emb[1]
-                    )));
+            // Or embeddings input seq_len if available and > 1
+            if expected_len == 1 {
+                if let Some(emb) = self.embeddings_input_shape() {
+                    if emb.len() == 2 && emb[1] > 1 {
+                        expected_len = emb[1];
+                    }
                 }
+            }
+            // As a final fallback, keep 1 (some exotic models may actually expect [1])
+        }
+
+        // Create position sequence up to expected length
+    let mut position_ids = Vec::with_capacity(expected_len);
+        for i in 0..expected_len {
+            if i < positions.len() {
+                position_ids.push(positions[i]);
+            } else {
+                position_ids.push(0); // Pad with 0s
             }
         }
 
-        // Strict validation: positions length must exactly match expected_len
-        if positions.len() != expected_len {
-            return Err(CandleError::Msg(format!(
-                "Provided positions length {} does not match expected length {} for ffn_prefill.position_ids",
-                positions.len(), expected_len
-            )));
-        }
-
-        Tensor::from_vec(positions.to_vec(), (expected_len,), device)
+        Tensor::from_vec(position_ids, (expected_len,), device)
     }
 
     /// Create causal mask tensor for FFN with proper shape
@@ -469,10 +457,30 @@ impl ModelConfig {
         device: &Device,
     ) -> Result<Tensor, CandleError> {
         // Prefer explicit shape from config; otherwise synthesize a reasonable default
-        let expected_shape_vec = self
-            .get_tensor_shape("ffn_prefill", "causal_mask", true)
-            .ok_or_else(|| CandleError::Msg("No FFN prefill causal_mask shape found in ModelConfig. Expected a 4-D mask shape like [1,1,seq_len,seq_len]".to_string()))?
-            .clone();
+        let expected_shape_vec = if let Some(shape) =
+            self.get_tensor_shape("ffn_prefill", "causal_mask", true)
+        {
+            shape.clone()
+        } else {
+            // Derive a default square mask [1,1,seq_len,seq_len]
+            let mut seq_len = 0usize;
+            if let Some(hs) = self.get_tensor_shape("ffn_prefill", "hidden_states", true) {
+                if hs.len() == 3 && hs[1] > 0 {
+                    seq_len = hs[1];
+                }
+            }
+            if seq_len == 0 {
+                if let Some(emb) = self.embeddings_input_shape() {
+                    if emb.len() == 2 && emb[1] > 0 {
+                        seq_len = emb[1];
+                    }
+                }
+            }
+            if seq_len == 0 {
+                seq_len = self.shapes.context_length;
+            }
+            vec![1, 1, seq_len, seq_len]
+        };
 
         let mask_rows = expected_shape_vec[2];
         let mask_context_length = expected_shape_vec[3];
@@ -521,7 +529,7 @@ impl ModelConfig {
         device: &Device,
     ) -> Result<Tensor, CandleError> {
         // Check if we have a dedicated ffn_infer component with specific shape
-    if let Some(infer_shape) = self.get_tensor_shape("ffn_infer", "position_ids", true) {
+        if let Some(infer_shape) = self.get_tensor_shape("ffn_infer", "position_ids", true) {
             // Use the infer-specific shape
             if infer_shape.len() == 1 {
                 Tensor::from_vec(vec![position], (infer_shape[0],), device)
@@ -532,9 +540,8 @@ impl ModelConfig {
                 Tensor::from_vec(data, infer_shape.as_slice(), device)
             }
         } else {
-            return Err(CandleError::Msg(
-                "No ffn_infer.position_ids shape found in ModelConfig. Provide infer position_ids shape (commonly [1]).".to_string(),
-            ));
+            // No dedicated infer component - use single position for inference (original QwenConfig behavior)
+            Tensor::from_vec(vec![position], (1,), device)
         }
     }
 

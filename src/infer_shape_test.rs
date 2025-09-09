@@ -142,9 +142,9 @@ mod tests {
         let config = QwenConfig::from_model_config(create_infer_compatible_config());
 
         // Test prefill position IDs - should use batch size
-        let prefill_vec: Vec<i64> = (0..64).map(|x| x as i64).collect();
-        let prefill_positions =
-            config.create_ffn_position_ids_tensor(&prefill_vec).unwrap();
+        let prefill_positions = config
+            .create_ffn_position_ids_tensor(&[0, 1, 2, 3])
+            .unwrap();
 
         // Should be padded to batch size (64)
         assert_eq!(prefill_positions.dims(), vec![64]);
@@ -161,9 +161,8 @@ mod tests {
         let config = QwenConfig::from_model_config(create_infer_compatible_config());
 
         // Test prefill mode - should use batch-sized positions
-        let prefill_vec: Vec<i64> = (0..64).map(|x| x as i64).collect();
         let prefill_ids = config
-            .create_position_ids_with_mode_detection(&prefill_vec, true)
+            .create_position_ids_with_mode_detection(&[0, 1, 2], true)
             .unwrap();
         assert_eq!(prefill_ids.dims(), vec![64]); // Batch size
 

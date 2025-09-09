@@ -11,7 +11,7 @@ use tracing::debug;
 impl QwenModel {
     /// Create input tensor for embeddings with proper shape validation
     pub fn create_embeddings_input_tensor(&self, tokens: &[i64]) -> Result<Tensor, CandleError> {
-    let padded_tokens = self.pad_tokens(tokens)?;
+        let padded_tokens = self.pad_tokens(tokens);
 
         // Get expected shape from ModelConfig
         let shape = if let Some(input_shape) = self.config.embeddings_input_shape() {
@@ -22,9 +22,13 @@ impl QwenModel {
             );
             tensor_shape
         } else {
-            return Err(CandleError::Msg(
-                "Missing embeddings input shape in ModelConfig (embeddings.input_ids [batch, seq_len]). Unable to build embeddings input tensor. Ensure the generated ModelConfig includes embeddings.input_ids shape.".to_string(),
-            ));
+            // Fallback shape
+            let tensor_shape = (1, padded_tokens.len());
+            debug!(
+                "⚠️ SHAPE DEBUG: create_embeddings_input_tensor() - using fallback shape: {:?} (padded_tokens.len={})",
+                tensor_shape, padded_tokens.len()
+            );
+            tensor_shape
         };
 
         debug!(
@@ -113,9 +117,10 @@ impl QwenModel {
                 (final_positions, (expected_len,))
             }
         } else {
-            return Err(CandleError::Msg(
-                "Missing shape for ffn_prefill.position_ids in ModelConfig. Provide a concrete vector length (e.g., [128]) for prefill.".to_string(),
-            ));
+            // Fallback to original behavior if no model config available
+            debug!("No FFN prefill position_ids shape found in ModelConfig, using legacy behavior");
+            let len = positions.len();
+            (positions, (len,))
         };
 
         debug!(
