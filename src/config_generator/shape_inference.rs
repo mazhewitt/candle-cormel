@@ -72,23 +72,45 @@ impl ShapeInference {
         batch_sizes.into_iter().min().unwrap_or(1)
     }
 
-    /// Infer hidden size from the largest feature dimension
+    /// Infer hidden size from hidden_states tensors, ignoring logits. Falls back to heuristic if needed.
     fn infer_hidden_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
-        let mut feature_sizes = Vec::new();
-        
+        let mut from_hidden_states = Vec::new();
+        let mut heuristic = Vec::new();
+
         for component in components.values() {
-            for tensor in component.inputs.values().chain(component.outputs.values()) {
+            // Prefer tensors explicitly named "hidden_states"
+            for (name, tensor) in component
+                .inputs
+                .iter()
+                .chain(component.outputs.iter())
+            {
+                // Skip any logits-like tensors
+                let lname = name.to_lowercase();
+                let is_logits = lname.starts_with("logits");
+
                 if tensor.shape.len() >= 3 {
-                    // 3D tensors: [batch, seq, feature]
-                    feature_sizes.push(tensor.shape[2]);
-                } else if tensor.shape.len() == 2 && tensor.shape[1] > 100 {
-                    // Could be a flattened feature vector
-                    feature_sizes.push(tensor.shape[1]);
+                    let feat = tensor.shape[2];
+                    if name == &"hidden_states" {
+                        from_hidden_states.push(feat);
+                    } else if !is_logits {
+                        heuristic.push(feat);
+                    }
+                } else if tensor.shape.len() == 2 {
+                    // Some manifests might flatten features as [1, hidden]
+                    let feat = tensor.shape[1];
+                    if name == &"hidden_states" {
+                        from_hidden_states.push(feat);
+                    } else if !is_logits && feat > 100 {
+                        heuristic.push(feat);
+                    }
                 }
             }
         }
-        
-        feature_sizes.into_iter().max().unwrap_or(1024)
+
+        if let Some(max_hidden) = from_hidden_states.into_iter().max() {
+            return max_hidden;
+        }
+        heuristic.into_iter().max().unwrap_or(1024)
     }
 
     /// Infer context/sequence length from sequence dimensions

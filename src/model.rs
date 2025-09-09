@@ -464,10 +464,10 @@ impl CoreMLModel {
 
         #[cfg(target_os = "macos")]
         {
-            // Debug print input shapes and names
-            tracing::debug!("predict_with_state function={:?}", self.function_name);
+            // Verbose print of input shapes and names moved to trace level
+            tracing::trace!("predict_with_state function={:?}", self.function_name);
             for (i, t) in inputs.iter().enumerate() {
-                tracing::debug!(
+                tracing::trace!(
                     "predict_with_state input {} '{}' shape={:?}",
                     i,
                     self.config.input_names[i],

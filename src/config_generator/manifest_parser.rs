@@ -10,7 +10,7 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::debug;
+use tracing::{debug, trace};
 
 pub struct ManifestParser;
 
@@ -244,7 +244,7 @@ impl ManifestParser {
             debug!("⚠️ Failed to extract from model.mlmodel, falling back to manifest parsing");
             
             // Fall back to manifest-based extraction
-            if let Some(function_components) = self.extract_function_components_with_roles(manifest, schema_extractor)? {
+            if let Some(function_components) = self.extract_function_components_with_roles(package_path, manifest, schema_extractor)? {
                 components.extend(function_components);
             } else {
                 // Fall back to single component with role detection
@@ -281,7 +281,7 @@ impl ManifestParser {
         let mut components = Vec::new();
 
         // First try to extract function-based components
-        if let Some(function_components) = self.extract_function_components(manifest, component_name)? {
+        if let Some(function_components) = self.extract_function_components(package_path, manifest, component_name)? {
             components.extend(function_components);
         } else {
             // Fall back to single component
@@ -295,6 +295,7 @@ impl ManifestParser {
     /// Extract function-based components if the package has multiple functions
     fn extract_function_components(
         &self,
+        package_path: &Path,
         manifest: &Value,
         base_component_name: &str,
     ) -> Result<Option<Vec<(String, ComponentConfig)>>> {
@@ -306,9 +307,9 @@ impl ManifestParser {
 
         let mut function_components = Vec::new();
 
-        for function in funcs {
+    for function in funcs {
             if let Some(function_name) = function.get("name").and_then(|n| n.as_str()) {
-                let component_config = self.create_function_component(function)?;
+        let component_config = self.create_function_component(package_path, function)?;
                 
                 // Create component name: either "componentname_functionname" or just "functionname"
                 let component_key = if funcs.len() > 1 {
@@ -350,7 +351,7 @@ impl ManifestParser {
     }
 
     /// Create a function-specific component configuration
-    fn create_function_component(&self, function: &Value) -> Result<ComponentConfig> {
+    fn create_function_component(&self, package_path: &Path, function: &Value) -> Result<ComponentConfig> {
         let function_name = function.get("name")
             .and_then(|n| n.as_str())
             .unwrap_or("unknown");
@@ -363,7 +364,7 @@ impl ManifestParser {
         let outputs = self.parse_tensor_schema(out_arr)?;
 
         Ok(ComponentConfig {
-            file_path: None,
+            file_path: Some(package_path.to_string_lossy().to_string()),
             inputs,
             outputs,
             functions: vec![function_name.to_string()],
@@ -452,6 +453,7 @@ impl ManifestParser {
     /// Extract function-based components with metadata-driven role detection
     fn extract_function_components_with_roles(
         &self,
+        package_path: &Path,
         manifest: &Value,
         schema_extractor: &SchemaExtractor,
     ) -> Result<Option<Vec<(String, ComponentConfig)>>> {
@@ -463,9 +465,9 @@ impl ManifestParser {
 
         let mut function_components = Vec::new();
 
-        for function in funcs {
+    for function in funcs {
             if let Some(function_name) = function.get("name").and_then(|n| n.as_str()) {
-                let component_config = self.create_function_component(function)?;
+        let component_config = self.create_function_component(package_path, function)?;
 
                 // Detect component role from tensor signatures
                 let inputs = &component_config.inputs;
@@ -528,7 +530,7 @@ impl ManifestParser {
         let has_ffn_infer = components.iter().any(|(name, _)| name == "ffn_infer");
         
         if has_ffn_prefill && has_ffn_infer {
-            debug!("🔧 Found separate ffn_prefill and ffn_infer components - using split mode");
+            trace!("🔧 Found separate ffn_prefill and ffn_infer components - using split mode");
             return "split".to_string();
         }
         

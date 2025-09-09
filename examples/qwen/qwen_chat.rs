@@ -32,6 +32,7 @@ use std::time::Instant;
 
 const DEFAULT_TEMPERATURE: f32 = 0.7;
 const DEFAULT_MAX_TOKENS: usize = 50;
+const DEFAULT_TOP_K: usize = 50;
 
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
@@ -55,6 +56,10 @@ struct Args {
     #[arg(long, default_value_t = DEFAULT_MAX_TOKENS)]
     max_tokens: usize,
 
+    /// Top-k sampling size (set 0 to disable and use pure temperature)
+    #[arg(long, default_value_t = DEFAULT_TOP_K)]
+    top_k: usize,
+
     /// Enable verbose output
     #[arg(short, long)]
     verbose: bool,
@@ -70,6 +75,10 @@ struct Args {
     /// Enable single-token mode (like TDD test - predicts one token)
     #[arg(long)]
     single_token: bool,
+
+    /// Use a simple chat-style prompt format (User:/Assistant:). Off by default.
+    #[arg(long)]
+    chat_format: bool,
 }
 
 struct QwenChatWrapper {
@@ -77,15 +86,23 @@ struct QwenChatWrapper {
     temperature: f32,
     max_tokens: usize,
     single_token_mode: bool,
+    top_k: Option<usize>,
 }
 
 impl QwenChatWrapper {
-    fn new(model: QwenModel, temperature: f32, max_tokens: usize, single_token_mode: bool) -> Self {
+    fn new(
+        model: QwenModel,
+        temperature: f32,
+        max_tokens: usize,
+        single_token_mode: bool,
+        top_k: Option<usize>,
+    ) -> Self {
         Self {
             model,
             temperature,
             max_tokens,
             single_token_mode,
+            top_k,
         }
     }
 
@@ -114,16 +131,62 @@ impl QwenChatWrapper {
             println!("⚡ Generated '{response}' in {inference_time:?}");
             Ok(response)
         } else {
-            // Multi-token mode - using the working generate_tokens method
-            println!("🚀 Multi-token mode: Using validated generate_tokens() method");
-            println!("📝 Input: '{prompt}'");
+            // Multi-token mode - prefer full decode to avoid per-token BPE artifacts
+            println!("🚀 Multi-token mode: Using top-k + temperature sampling");
+            println!("📝 Input: '{prompt}' (top_k={:?}, temp={:.2})", self.top_k, self.temperature);
+
+            // Prefer top-k + temperature sampling to avoid repetitive greedy outputs
+            // Normalize prompt (ensure trailing space in plain mode to reduce leading artifact join)
+            let normalized_prompt = {
+                let trimmed = prompt.trim_end();
+                if !trimmed.ends_with(':')
+                    && !trimmed.ends_with('.')
+                    && !trimmed.ends_with('!')
+                    && !trimmed.ends_with('?')
+                    && !trimmed.ends_with(' ')
+                {
+                    format!("{trimmed} ")
+                } else {
+                    prompt.to_string()
+                }
+            };
 
             let generated_tokens = self
                 .model
-                .generate_tokens(prompt, self.max_tokens, self.temperature, None)
+                .generate_tokens_topk_temp(
+                    &normalized_prompt,
+                    self.max_tokens,
+                    self.temperature,
+                    self.top_k,
+                )
                 .map_err(|e| E::msg(format!("Multi-token generation failed: {e}")))?;
 
-            let response = self.detokenize(&generated_tokens)?;
+            // Decode full text and then take just the suffix after the prompt
+            let prompt_tokens = self
+                .model
+                .tokenizer()
+                .encode(normalized_prompt.as_str(), true)
+                .map_err(|e| E::msg(format!("Prompt tokenization failed: {e}")))?;
+            let mut full_ids: Vec<u32> = prompt_tokens.get_ids().to_vec();
+            full_ids.extend(generated_tokens.iter().map(|&t| t as u32));
+            let full_text = self
+                .model
+                .tokenizer()
+                .decode(&full_ids, false)
+                .map_err(|e| E::msg(format!("Full decode failed: {e}")))?;
+            let prompt_decoded = self
+                .model
+                .tokenizer()
+                .decode(prompt_tokens.get_ids(), false)
+                .unwrap_or_else(|_| normalized_prompt.clone());
+            let mut response = full_text
+                .strip_prefix(&prompt_decoded)
+                .unwrap_or(&full_text)
+                .to_string();
+            // Final cleanup
+            while response.starts_with([' ', '\n', '\t']) {
+                response.remove(0);
+            }
             let inference_time = start_time.elapsed();
 
             println!(
@@ -132,17 +195,8 @@ impl QwenChatWrapper {
                 inference_time
             );
 
-            // Stream-like output for better UX
-            print!("🤖 ");
-            for token in &generated_tokens {
-                if let Ok(token_text) = self.detokenize(&[*token]) {
-                    print!("{token_text}");
-                    io::stdout().flush().unwrap();
-                    std::thread::sleep(std::time::Duration::from_millis(50)); // Simulate streaming
-                }
-            }
-            println!(); // New line after generation
-
+            // Print the fully decoded text once
+            println!("🤖 {response}");
             Ok(response)
         }
     }
@@ -206,6 +260,7 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
         args.temperature,
         args.max_tokens,
         args.single_token,
+        if args.top_k == 0 { None } else { Some(args.top_k) },
     );
 
     // Interactive chat loop
@@ -215,7 +270,11 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
         println!("💡 Try: 'The quick brown fox jumps over the lazy' (should predict 'dog')");
     } else {
         println!("🚀 Multi-token mode: Generates full responses");
-        println!("💡 Try: 'What is the capital of France?' or 'Tell me about AI'");
+        if args.chat_format {
+            println!("💡 Chat format enabled: prompts use 'User: <text>\\nAssistant:'");
+        } else {
+            println!("💡 Plain format: prompts are used directly (recommended for base LMs)");
+        }
     }
     println!("⚡ Note: Uses new UnifiedModelLoader with automatic config generation");
     println!();
@@ -248,9 +307,12 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
         let prompt = if args.single_token {
             // Single token mode - use raw input for completion
             input.to_string()
-        } else {
-            // Multi-token mode - format as chat
+        } else if args.chat_format {
+            // Optional chat-style format
             format!("User: {input}\nAssistant:")
+        } else {
+            // Plain prompt (default)
+            input.to_string()
         };
 
         // Generate response

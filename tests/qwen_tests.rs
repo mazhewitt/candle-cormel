@@ -47,11 +47,15 @@ fn check_coreml_compatibility() -> bool {
     true // Default to true for local development
 }
 
-// Helper functions for test utilities
-async fn create_test_model() -> Option<QwenModel> {
-    // Use UnifiedModelLoader instead of deprecated builtin configs
-    let loader = UnifiedModelLoader::new().ok()?;
-    loader.load_model(MODEL_ID).ok()
+// Helper function: ensure the model is downloaded and return a loaded QwenModel
+async fn create_test_model() -> anyhow::Result<QwenModel> {
+    // Use UnifiedModelLoader which can also download the model if missing
+    let loader = UnifiedModelLoader::new()?;
+    // Proactively ensure the model is available (downloads if missing)
+    let _ = loader.ensure_model_available(MODEL_ID)?;
+    // Load the model using the generated or cached config
+    let model = loader.load_model(MODEL_ID)?;
+    Ok(model)
 }
 
 #[cfg(target_os = "macos")]
@@ -301,13 +305,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_state_management_edge_cases -- --ignored
     async fn test_state_management_edge_cases() -> Result<()> {
-        let mut model = match create_test_model().await {
-            Some(model) => model,
-            None => {
-                println!("⚠️ Skipping test: Qwen model not found");
-                return Ok(());
-            }
-        };
+    let mut model = create_test_model().await?;
 
         // Test multiple state initializations (should not cause conflicts)
         for i in 1..=3 {
@@ -328,13 +326,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_cache_optimization_paths -- --ignored
     async fn test_cache_optimization_paths() -> Result<()> {
-        let mut model = match create_test_model().await {
-            Some(model) => model,
-            None => {
-                println!("⚠️ Skipping test: Qwen model not found");
-                return Ok(());
-            }
-        };
+    let mut model = create_test_model().await?;
 
         let base_prompt = "The quick brown fox";
 
@@ -359,13 +351,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_generation_with_extreme_parameters -- --ignored
     async fn test_generation_with_extreme_parameters() -> Result<()> {
-        let mut model = match create_test_model().await {
-            Some(model) => model,
-            None => {
-                println!("⚠️ Skipping test: Qwen model not found");
-                return Ok(());
-            }
-        };
+    let mut model = create_test_model().await?;
 
         let prompt = "The weather today is";
 
@@ -408,6 +394,8 @@ mod extended_coverage_tests {
     async fn test_custom_configurations() -> Result<()> {
         // Test with UnifiedModelLoader - automatically handles configuration
         let loader = UnifiedModelLoader::new()?;
+    // Ensure the model is available first (downloads if missing)
+    let _ = loader.ensure_model_available(MODEL_ID)?;
         let mut model = loader.load_model(MODEL_ID)?;
 
         // Test that custom config model works
@@ -424,13 +412,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_conversation_continuity -- --ignored
     async fn test_conversation_continuity() -> Result<()> {
-        let mut model = match create_test_model().await {
-            Some(model) => model,
-            None => {
-                println!("⚠️ Skipping test: Qwen model not found");
-                return Ok(());
-            }
-        };
+    let mut model = create_test_model().await?;
 
         // Simulate a conversation flow
         let conversation = [

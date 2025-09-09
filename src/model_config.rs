@@ -9,7 +9,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
-use tracing::debug;
+use tracing::{debug, trace};
 use candle_core::{Device, Error as CandleError, Tensor};
 
 /// Complete model configuration including shapes, components, and naming patterns
@@ -367,7 +367,7 @@ impl ModelConfig {
                 // If the model expects a fixed sequence length > 1, it needs full-sequence prefill
                 let expects_full =
                     hs.shape.len() == 3 && hs.shape.get(1).is_some_and(|&seq_len| seq_len > 1);
-                debug!(
+        trace!(
                     "🔍 expects_full_sequence_prefill: shape={:?}, len={}, dim[1]={:?}, result={}",
                     hs.shape,
                     hs.shape.len(),
@@ -377,7 +377,7 @@ impl ModelConfig {
                 return expects_full;
             }
         }
-        debug!("🔍 expects_full_sequence_prefill: no ffn_prefill or hidden_states found, returning false");
+    trace!("🔍 expects_full_sequence_prefill: no ffn_prefill or hidden_states found, returning false");
         false
     }
 

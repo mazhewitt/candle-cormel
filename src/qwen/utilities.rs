@@ -19,7 +19,7 @@ impl QwenModel {
                 if hs_cfg.shape.len() == 3 && hs_cfg.shape[1] == 1 {
                     if let Ok(actual_seq) = hidden_states.dim(1) {
                         if actual_seq > 1 {
-                            debug!(
+                            trace!(
                                 "🔧 adapt_hidden_states_for_infer: slicing seq_len {} -> 1 (last token)",
                                 actual_seq
                             );
@@ -32,7 +32,7 @@ impl QwenModel {
                     }
                 } else if hs_cfg.shape.len() == 3 && hs_cfg.shape[1] > 1 {
                     // FFN infer expects full sequence (like typo-fixer models)
-                    debug!(
+                    trace!(
                         "🔧 adapt_hidden_states_for_infer: FFN infer expects full sequence (shape={:?}), not narrowing",
                         hs_cfg.shape
                     );
@@ -52,7 +52,7 @@ impl QwenModel {
                         // If we intentionally built a full-length vector (actual_len > 1) because other
                         // shapes indicated that, don't slice it back to [1]. Trust the runtime override.
                         if actual_len > 1 {
-                            debug!(
+                            trace!(
                                 "🔧 adapt_position_ids_for_infer: keeping full-length vector of {} (override)",
                                 actual_len
                             );
@@ -125,7 +125,7 @@ impl QwenModel {
                     if cm_cfg.shape.len() == 4 && cm_cfg.shape[2] == 1 {
                         if let Ok(actual) = causal_mask.dim(2) {
                             if actual > 1 {
-                                debug!(
+                                trace!(
                                 "🔧 adapt_causal_mask_for_infer: slicing causal_mask dim2 {} -> 1",
                                 actual
                             );
@@ -156,9 +156,9 @@ impl QwenModel {
         let state = self.unified_state.as_mut().unwrap();
         // Helper closure to debug-print the shapes about to be sent to CoreML
         let debug_log_inputs = |label: &str, ordered_names: &[String], tensors: &[&Tensor]| {
-            debug!("🧪 {label}: preparing {} inputs", tensors.len());
+            trace!("🧪 {label}: preparing {} inputs", tensors.len());
             for (idx, (name, t)) in ordered_names.iter().zip(tensors.iter()).enumerate() {
-                debug!("    [{}] {} shape={:?}", idx, name, t.dims());
+                trace!("    [{}] {} shape={:?}", idx, name, t.dims());
             }
         };
 
@@ -212,7 +212,7 @@ impl QwenModel {
                     .filter_map(|n| by_name.get(n.as_str()).copied())
                     .collect();
                 debug_log_inputs("FFN_INFER(update_mask)", &ordered_names, &ordered);
-                debug!("Infer: using separate ffn_infer with update_mask (reordered)");
+                trace!("Infer: using separate ffn_infer with update_mask (reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
                     Err(e) => {
@@ -247,7 +247,7 @@ impl QwenModel {
                     .filter_map(|n| by_name.get(n.as_str()).copied())
                     .collect();
                 debug_log_inputs("FFN_INFER", &ordered_names, &ordered);
-                debug!("Infer: using separate ffn_infer (no update_mask, reordered)");
+                trace!("Infer: using separate ffn_infer (no update_mask, reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
                     Err(e) => {
@@ -263,8 +263,8 @@ impl QwenModel {
                 &adapted_causal_mask,
                 current_pos,
             ];
-            debug!("Infer: using prefill component for infer phase");
-            debug!("Infer: using prefill component for infer phase");
+            trace!("Infer: using prefill component for infer phase");
+            trace!("Infer: using prefill component for infer phase");
             self.ffn_prefill.predict_with_state(&inputs, state)?
         };
 

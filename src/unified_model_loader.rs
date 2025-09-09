@@ -274,10 +274,20 @@ impl UnifiedModelLoader {
     /// Verify that all model files referenced in config still exist
     fn verify_model_files_exist(&self, config: &ModelConfig) -> bool {
         for (component_name, component) in &config.components {
-            if let Some(file_path) = &component.file_path {
-                let path = Path::new(file_path);
-                if !path.exists() {
-                    debug!("Component '{}' file missing: {}", component_name, file_path);
+            match &component.file_path {
+                Some(file_path) => {
+                    let path = Path::new(file_path);
+                    if !path.exists() {
+                        debug!("Component '{}' file missing: {}", component_name, file_path);
+                        return false;
+                    }
+                }
+                None => {
+                    // Missing file_path makes the config unusable for model loading
+                    debug!(
+                        "Component '{}' missing file_path in cached config; regeneration required",
+                        component_name
+                    );
                     return false;
                 }
             }
