@@ -86,11 +86,13 @@ mkdir -p "$TMPDIR"
 echo "🗂️  Using consistent cache directory: $TMPDIR"
 echo ""
 
-# Run the tests with proper flags
-# --test-threads=1: Required for Core ML thread safety (prevents SIGSEGV)
-# --nocapture: Show test output for progress monitoring
-# --ignored: Run the ignored tests that require model downloads
-RUST_LOG=info cargo test -- --ignored --nocapture --test-threads=1
+# Run integration tests with new structure
+echo "🧪 Running integration tests..."
+RUST_LOG=info cargo test integration -- --nocapture --test-threads=1
+
+echo ""
+echo "🎯 Running regression tests (performance validation)..."
+RUST_LOG=info cargo test regression -- --ignored --nocapture --test-threads=1
 
 echo ""
 echo "🎉 Integration test suite completed successfully!"
