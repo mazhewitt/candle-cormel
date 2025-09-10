@@ -78,10 +78,15 @@ impl QwenModel {
         QwenModel::plan_sequential_prefill_static(token_count, embeddings_len, already_prefilled)
     }
 
-    /// Generate a single token from text input - PRIMARY METHOD
+    /// Generate a single token from text input - ADVANCED/DEBUG USE ONLY
     /// ✅ Uses chat.py architecture for correct predictions (correctly answers "Paris" for capital of France)
     /// 🚀 OPTIMIZED: Enhanced with embeddings caching for maximum performance
     /// Replicates Python reference architecture with chunked prefill and cached masks
+    ///
+    /// ⚠️ **WARNING: This method is for advanced users and debugging only.**
+    /// Single tokens rarely provide meaningful completions. Use `complete_text()`
+    /// for normal text generation instead.
+    #[doc(hidden)]
     pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         let start_time = std::time::Instant::now();
 
@@ -104,7 +109,8 @@ impl QwenModel {
         let embeddings_time = embeddings_start.elapsed();
         trace!(
             "⚡ Cached embeddings took: {:?} for {} tokens",
-            embeddings_time, context_pos
+            embeddings_time,
+            context_pos
         );
 
         // If model is configured for single-token sequential prefill, use simplified path
@@ -235,13 +241,13 @@ impl QwenModel {
         let prefill_start = std::time::Instant::now();
         self.run_chatpy_prefill(&tokens, context_pos)?;
         let prefill_time = prefill_start.elapsed();
-    trace!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
+        trace!("⚡ Optimized chat.py prefill took: {:?}", prefill_time);
 
         // PHASE 2: SINGLE TOKEN INFER (chat.py architecture with embeddings optimization)
         let infer_start = std::time::Instant::now();
         let next_token = self.run_chatpy_infer(&tokens, context_pos)?;
         let infer_time = infer_start.elapsed();
-    trace!("⚡ Optimized chat.py infer took: {:?}", infer_time);
+        trace!("⚡ Optimized chat.py infer took: {:?}", infer_time);
 
         let total_time = start_time.elapsed();
         trace!(
@@ -267,7 +273,7 @@ impl QwenModel {
         let next_token = indexed_logits[0].0 as i64;
 
         // Show top predictions for debugging
-    trace!("Top 5 extract_next_token predictions:");
+        trace!("Top 5 extract_next_token predictions:");
         for (rank, (token_id, score)) in indexed_logits.iter().take(5).enumerate() {
             let decoded = self
                 .tokenizer
@@ -300,7 +306,7 @@ impl QwenModel {
             return self.prefill_full_sequence_chunk(&embeddings, context_pos - 1, &causal_mask);
         }
 
-    trace!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
+        trace!("🔄 CHATPY-PREFILL: Using CHUNKED mode for non-CoreML model");
         let batch_size = self.config.batch_size(); // 64
         let device = self.config.device.clone(); // Clone to avoid borrowing issues
         let causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
@@ -335,19 +341,9 @@ impl QwenModel {
             } else {
                 trace!("💾 CACHE MISS: Computing embeddings for batch at position {batch_pos}");
 
-                // Find meaningful tokens (before padding zeros)
-                let meaningful_end = padded_batch
-                    .iter()
-                    .position(|&x| x == 0)
-                    .unwrap_or(padded_batch.len());
-                let meaningful_tokens = &padded_batch[..meaningful_end];
-
-                trace!(
-                    "🔍 PREFILL: meaningful_end: {meaningful_end}, meaningful_tokens: {meaningful_tokens:?}"
-                );
-
-                // Fallback to direct embeddings computation
-                let batch_input = self.create_embeddings_input_tensor(meaningful_tokens)?;
+                // Run embeddings on the FULL padded batch (like chat.py does)
+                // This ensures shape consistency with position IDs and causal mask
+                let batch_input = self.create_embeddings_input_tensor(&padded_batch)?;
                 trace!(
                     "✅ PREFILL: Created batch_input with shape: {:?}",
                     batch_input.dims()
@@ -399,7 +395,15 @@ impl QwenModel {
         let _causal_mask = self.cached_causal_mask.as_ref().unwrap().clone(); // Clone mask
 
         // 🚀 OPTIMIZATION: Get appropriate hidden states based on model architecture
-        let hidden_states = self.get_infer_hidden_states(tokens, pos)?;
+        // For models that expect full-sequence prefill (like typo-fixer with split FFN),
+        // use full-sequence embeddings even during inference
+        let hidden_states = if self.config.model_config.expects_full_sequence_prefill() {
+            trace!("🚀 INFER: Using full-sequence embeddings for model expecting full-sequence prefill");
+            self.get_full_sequence_embeddings_for_infer(tokens, pos)?
+        } else {
+            trace!("🔄 INFER: Using single-token embeddings for standard model");
+            self.get_infer_hidden_states(tokens, pos)?
+        };
 
         // 🚀 OPTIMIZATION: Use mode-aware position IDs creation (infer mode)
         let position_ids = self
@@ -413,7 +417,9 @@ impl QwenModel {
                 "Position {mask_pos} exceeds causal mask context length {context_length}. Input may be too long for chunked processing."
             )));
         }
-        let current_pos = position_ids.clone();
+        // current_pos is a scalar-like [1] tensor with the current position index
+        let current_pos =
+            candle_core::Tensor::from_vec(vec![mask_pos as i64], (1,), &self.config.device)?;
 
         // Use mode-aware causal mask creation (infer mode)
         let infer_causal_mask =
@@ -434,7 +440,8 @@ impl QwenModel {
 
         trace!(
             "✅ Optimized chat.py infer: Generated token {} at position {}",
-            next_token, pos
+            next_token,
+            pos
         );
         Ok(next_token)
     }
@@ -508,7 +515,7 @@ impl QwenModel {
         max_tokens: usize,
         temperature: f32,
     ) -> Result<String, CandleError> {
-        let tokens = self.generate_tokens(text, max_tokens, temperature, None)?;
+        let tokens = self.generate_tokens_topk_temp(text, max_tokens, temperature, None)?;
 
         // Decode tokens back to text
         let token_ids: Vec<u32> = tokens.iter().map(|&id| id as u32).collect();
@@ -519,6 +526,13 @@ impl QwenModel {
 
     /// Generate multiple tokens using temperature sampling with optional top-k
     /// Generate multiple tokens with correct position tracking
+    ///
+    /// ⚠️ **WARNING: This method is deprecated due to a known bug.**
+    /// It ignores the temperature parameter and may produce repetitive output.
+    /// Use `complete_text()` or `generate_tokens_topk_temp()` instead.
+    #[deprecated(
+        note = "This method ignores temperature and may produce poor results. Use `complete_text()` or `generate_tokens_topk_temp()` instead."
+    )]
     pub fn generate_tokens(
         &mut self,
         text: &str,
@@ -674,5 +688,76 @@ impl QwenModel {
 
         // No cache hit found
         Ok(None)
+    }
+
+    // ========================================
+    // PRIMARY USER APIS (RECOMMENDED)
+    // ========================================
+
+    /// Generate a complete text response (RECOMMENDED)
+    ///
+    /// This is the primary API for text generation. It uses proven methods
+    /// with good defaults (temperature=0.7, top_k=50) to produce coherent,
+    /// multi-token completions.
+    ///
+    /// # Arguments
+    /// * `prompt` - Input text to complete
+    /// * `max_tokens` - Maximum number of tokens to generate
+    ///
+    /// # Returns
+    /// Decoded text string ready for use
+    ///
+    /// # Example
+    /// ```
+    /// let response = model.complete_text("What is the capital of France?", 50)?;
+    /// println!("Response: {}", response);
+    /// ```
+    pub fn complete_text(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+    ) -> Result<String, CandleError> {
+        let tokens = self.generate_tokens_topk_temp(prompt, max_tokens, 0.7, Some(50))?;
+        let tokens_u32: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
+        self.tokenizer
+            .decode(&tokens_u32, false)
+            .map_err(|e| CandleError::Msg(format!("Decoding failed: {e}")))
+    }
+
+    /// Generate text with full control over sampling parameters
+    ///
+    /// This is the power-user version of text generation with full control
+    /// over temperature and top-k sampling parameters.
+    ///
+    /// # Arguments
+    /// * `prompt` - Input text to complete
+    /// * `max_tokens` - Maximum number of tokens to generate
+    /// * `temperature` - Sampling temperature (0.0 = deterministic, 1.0 = very random)
+    /// * `top_k` - Top-k sampling size (None = use pure temperature)
+    ///
+    /// # Returns
+    /// Decoded text string ready for use
+    ///
+    /// # Example
+    /// ```
+    /// let response = model.generate_text_with_params(
+    ///     "What is the capital of France?",
+    ///     50,
+    ///     0.9,  // High creativity
+    ///     Some(20)  // Restrict to top 20 tokens
+    /// )?;
+    /// ```
+    pub fn generate_text_with_params(
+        &mut self,
+        prompt: &str,
+        max_tokens: usize,
+        temperature: f32,
+        top_k: Option<usize>,
+    ) -> Result<String, CandleError> {
+        let tokens = self.generate_tokens_topk_temp(prompt, max_tokens, temperature, top_k)?;
+        let tokens_u32: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
+        self.tokenizer
+            .decode(&tokens_u32, false)
+            .map_err(|e| CandleError::Msg(format!("Decoding failed: {e}")))
     }
 }

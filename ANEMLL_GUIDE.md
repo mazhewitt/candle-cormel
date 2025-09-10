@@ -48,6 +48,61 @@ anemll/anemll-Qwen-Qwen2.5-1.5B-ctx512_0.3.4
 # Browse all: https://huggingface.co/anemll
 ```
 
+## 🚀 Getting Started with ANEMLL Models
+
+### Modern API (Recommended)
+
+The easiest way to use ANEMLL models is through the UnifiedModelLoader:
+
+```rust
+use candle_coreml::UnifiedModelLoader;
+
+// Create loader with automatic caching and config generation
+let loader = UnifiedModelLoader::new()?;
+
+// Load any ANEMLL model - automatically downloads and sets up components
+let mut model = loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")?;
+
+// High-level text completion (recommended)  
+let response = model.complete_text(
+    "Explain quantum computing in simple terms:",
+    100,  // max tokens
+    0.8   // temperature
+)?;
+
+// Advanced generation with top-k sampling
+let tokens = model.generate_tokens_topk_temp(
+    "Hello, world!",
+    50,       // max tokens
+    0.7,      // temperature  
+    Some(40)  // top_k
+)?;
+
+// Single token prediction
+let next_token = model.forward_text("The weather is")?;
+```
+
+### Key Benefits of UnifiedModelLoader:
+
+- **🎯 Zero Configuration**: Automatic model downloading and config generation
+- **📦 Intelligent Caching**: Models and configs cached locally for fast subsequent loads  
+- **🔍 Automatic Validation**: Built-in model validation and error checking
+- **🧠 Multi-Component Support**: Handles complex ANEMLL architectures seamlessly
+- **⚡ Optimized Performance**: Efficient component orchestration and memory management
+
+### Running Examples
+
+```bash
+# Interactive chat with ANEMLL Qwen models
+cargo run --example qwen_chat
+
+# Recommended API demonstration
+cargo run --example recommended_api_demo
+
+# Model quality testing
+cargo run --example proper_quality_test
+```
+
 ## Architecture Deep Dive
 
 ### Component Pipeline

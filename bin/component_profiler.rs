@@ -30,7 +30,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         // Warm up
         println!("\n🔥 Warming up...");
         for _ in 0..3 {
-            let _ = model.generate_tokens(TEST_PROMPT, 1, 1.0, None);
+            let _ = model.generate_tokens_topk_temp(TEST_PROMPT, 1, 1.0, None);
         }
 
         println!("\n⏱️  Individual Component Profiling:");

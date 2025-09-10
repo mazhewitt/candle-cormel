@@ -6,7 +6,7 @@
 use crate::qwen::model::QwenModel;
 use crate::utils::mask;
 use candle_core::{Error as CandleError, Tensor};
-use tracing::debug;
+use tracing::trace;
 
 impl QwenModel {
     /// Create input tensor for embeddings with proper shape validation
@@ -16,7 +16,7 @@ impl QwenModel {
         // Get expected shape from ModelConfig
         let shape = if let Some(input_shape) = self.config.embeddings_input_shape() {
             let tensor_shape = (input_shape[0], input_shape[1]); // [batch_size, seq_len]
-            debug!(
+            trace!(
                 "🔍 SHAPE DEBUG: create_embeddings_input_tensor() - using ModelConfig shape: {:?} -> tensor shape: {:?}",
                 input_shape, tensor_shape
             );
@@ -24,14 +24,14 @@ impl QwenModel {
         } else {
             // Fallback shape
             let tensor_shape = (1, padded_tokens.len());
-            debug!(
+            trace!(
                 "⚠️ SHAPE DEBUG: create_embeddings_input_tensor() - using fallback shape: {:?} (padded_tokens.len={})",
                 tensor_shape, padded_tokens.len()
             );
             tensor_shape
         };
 
-        debug!(
+        trace!(
             "🎯 SHAPE DEBUG: Creating embeddings input tensor with shape {:?} for {} padded tokens (original: {} tokens)",
             shape, padded_tokens.len(), tokens.len()
         );
@@ -51,7 +51,7 @@ impl QwenModel {
     /// Create single-token embeddings input tensor for infer mode
     /// This produces [1, 1] shape regardless of the model's batch configuration
     pub fn create_single_token_embeddings_input(&self, token: i64) -> Result<Tensor, CandleError> {
-        debug!(
+        trace!(
             "🔍 SINGLE TOKEN: Creating [1, 1] shape input tensor for token {}",
             token
         );
@@ -91,7 +91,7 @@ impl QwenModel {
                     }
                 }
 
-                debug!(
+                trace!(
                     "Single token inference: creating position tensor with shape [{}] for current position {} (expected shape: {:?})",
                     expected_len, current_pos, expected_shape
                 );
@@ -100,14 +100,14 @@ impl QwenModel {
                 // Multi-token case: use as provided but validate length
                 let mut final_positions = positions;
                 if final_positions.len() > expected_len {
-                    debug!(
+                    trace!(
                         "Truncating position tensor from {} to {} positions",
                         final_positions.len(),
                         expected_len
                     );
                     final_positions.truncate(expected_len);
                 } else if final_positions.len() < expected_len {
-                    debug!(
+                    trace!(
                         "Padding position tensor from {} to {} positions",
                         final_positions.len(),
                         expected_len
@@ -118,12 +118,12 @@ impl QwenModel {
             }
         } else {
             // Fallback to original behavior if no model config available
-            debug!("No FFN prefill position_ids shape found in ModelConfig, using legacy behavior");
+            trace!("No FFN prefill position_ids shape found in ModelConfig, using legacy behavior");
             let len = positions.len();
             (positions, (len,))
         };
 
-        debug!(
+        trace!(
             "Creating position tensor with shape {:?} for positions (len={}): {:?}",
             shape,
             final_positions.len(),
@@ -156,7 +156,7 @@ impl QwenModel {
         }
 
         let shape = (1, 1, seq_len, context_len);
-        debug!("Creating causal mask tensor with shape {:?}", shape);
+        trace!("Creating causal mask tensor with shape {:?}", shape);
         Tensor::from_vec(mask_data, shape, &self.config.device)
     }
     /// Create update mask tensor for FFN infer
@@ -168,9 +168,10 @@ impl QwenModel {
         }
 
         let shape = (1, 1, context_length, 1);
-        debug!(
+        trace!(
             "Creating update mask tensor with shape {:?} for position {}",
-            shape, position
+            shape,
+            position
         );
         Tensor::from_vec(mask_data, shape, &self.config.device)
     }

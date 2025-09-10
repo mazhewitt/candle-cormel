@@ -7,17 +7,19 @@ use crate::qwen::model::QwenModel;
 use crate::utils::multi_component;
 use candle_core::{Error as CandleError, Tensor};
 use std::collections::HashMap;
-use tracing::{debug, trace};
+use tracing::trace;
 
 impl QwenModel {
     /// Adapt hidden_states for infer phase (slice to last token if config expects seq_len=1).
     fn adapt_hidden_states_for_infer(&self, hidden_states: &Tensor) -> Result<Tensor, CandleError> {
         if let Some(infer_component) = self.config.model_config.components.get("ffn_infer") {
             if let Some(hs_cfg) = infer_component.inputs.get("hidden_states") {
+                // Only narrow if FFN infer expects seq_len=1 (single token)
+                // For typo-fixer models, FFN infer might expect full sequences (seq_len > 1)
                 if hs_cfg.shape.len() == 3 && hs_cfg.shape[1] == 1 {
                     if let Ok(actual_seq) = hidden_states.dim(1) {
                         if actual_seq > 1 {
-                            debug!(
+                            trace!(
                                 "🔧 adapt_hidden_states_for_infer: slicing seq_len {} -> 1 (last token)",
                                 actual_seq
                             );
@@ -28,6 +30,13 @@ impl QwenModel {
                             });
                         }
                     }
+                } else if hs_cfg.shape.len() == 3 && hs_cfg.shape[1] > 1 {
+                    // FFN infer expects full sequence (like typo-fixer models)
+                    trace!(
+                        "🔧 adapt_hidden_states_for_infer: FFN infer expects full sequence (shape={:?}), not narrowing",
+                        hs_cfg.shape
+                    );
+                    // Don't narrow, keep full sequence
                 }
             }
         }
@@ -40,16 +49,14 @@ impl QwenModel {
             if let Some(pos_cfg) = infer_component.inputs.get("position_ids") {
                 if pos_cfg.shape.len() == 1 && pos_cfg.shape[0] == 1 {
                     if let Ok(actual_len) = position_ids.dim(0) {
+                        // If we intentionally built a full-length vector (actual_len > 1) because other
+                        // shapes indicated that, don't slice it back to [1]. Trust the runtime override.
                         if actual_len > 1 {
-                            debug!(
-                                "🔧 adapt_position_ids_for_infer: slicing length {} -> 1 (last index)",
+                            trace!(
+                                "🔧 adapt_position_ids_for_infer: keeping full-length vector of {} (override)",
                                 actual_len
                             );
-                            return position_ids.narrow(0, actual_len - 1, 1).map_err(|e| {
-                                CandleError::Msg(format!(
-                                    "Failed to narrow position_ids for infer: {e}"
-                                ))
-                            });
+                            return Ok(position_ids.clone());
                         }
                     }
                 }
@@ -118,7 +125,7 @@ impl QwenModel {
                     if cm_cfg.shape.len() == 4 && cm_cfg.shape[2] == 1 {
                         if let Ok(actual) = causal_mask.dim(2) {
                             if actual > 1 {
-                                debug!(
+                                trace!(
                                 "🔧 adapt_causal_mask_for_infer: slicing causal_mask dim2 {} -> 1",
                                 actual
                             );
@@ -149,9 +156,9 @@ impl QwenModel {
         let state = self.unified_state.as_mut().unwrap();
         // Helper closure to debug-print the shapes about to be sent to CoreML
         let debug_log_inputs = |label: &str, ordered_names: &[String], tensors: &[&Tensor]| {
-            debug!("🧪 {label}: preparing {} inputs", tensors.len());
+            trace!("🧪 {label}: preparing {} inputs", tensors.len());
             for (idx, (name, t)) in ordered_names.iter().zip(tensors.iter()).enumerate() {
-                debug!("    [{}] {} shape={:?}", idx, name, t.dims());
+                trace!("    [{}] {} shape={:?}", idx, name, t.dims());
             }
         };
 
@@ -205,7 +212,7 @@ impl QwenModel {
                     .filter_map(|n| by_name.get(n.as_str()).copied())
                     .collect();
                 debug_log_inputs("FFN_INFER(update_mask)", &ordered_names, &ordered);
-                debug!("Infer: using separate ffn_infer with update_mask (reordered)");
+                trace!("Infer: using separate ffn_infer with update_mask (reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
                     Err(e) => {
@@ -240,7 +247,7 @@ impl QwenModel {
                     .filter_map(|n| by_name.get(n.as_str()).copied())
                     .collect();
                 debug_log_inputs("FFN_INFER", &ordered_names, &ordered);
-                debug!("Infer: using separate ffn_infer (no update_mask, reordered)");
+                trace!("Infer: using separate ffn_infer (no update_mask, reordered)");
                 match self.ffn_infer.predict_with_state(&ordered, state) {
                     Ok(o) => o,
                     Err(e) => {
@@ -256,8 +263,8 @@ impl QwenModel {
                 &adapted_causal_mask,
                 current_pos,
             ];
-            debug!("Infer: using prefill component for infer phase");
-            debug!("Infer: using prefill component for infer phase");
+            trace!("Infer: using prefill component for infer phase");
+            trace!("Infer: using prefill component for infer phase");
             self.ffn_prefill.predict_with_state(&inputs, state)?
         };
 

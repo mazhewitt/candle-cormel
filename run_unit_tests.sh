@@ -26,15 +26,7 @@ echo ""
 echo "🚀 Running unit tests..."
 
 # Run the fast, reliable unit tests
-echo "🔧 Running utility function tests..."
-cargo test --test utils_tests
-
-echo ""
-echo "🏗️  Running builder pattern tests..."
-cargo test --test builder_tests
-
-echo ""
-echo "⚙️  Running library unit tests..."
+echo "🔧 Running library unit tests (embedded tests)..."
 cargo test --lib
 
 echo ""

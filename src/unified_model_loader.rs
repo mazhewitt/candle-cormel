@@ -3,8 +3,8 @@
 //! This module provides a simplified API that replaces hardcoded paths with
 //! automatic HuggingFace downloading and config generation.
 
-use crate::model_config::ModelConfig;
-use crate::model_downloader::{download_model, ensure_model_downloaded};
+use crate::config::model::ModelConfig;
+use crate::download::unified::ensure_model_downloaded;
 use crate::{CacheManager, ConfigGenerator, QwenConfig, QwenModel};
 use anyhow::Result;
 use serde_json::Value;
@@ -54,6 +54,26 @@ impl UnifiedModelLoader {
                 let valid_basic = cached_config.validate();
                 let valid_wiring = cached_config.validate_internal_wiring();
                 if valid_basic.is_ok() && valid_wiring.is_ok() {
+                    // If the cached config points to a Hugging Face snapshot path, upgrade it to our clean cache
+                    if let Some(model_path_str) = &cached_config.model_info.path {
+                        let looks_like_hf_snapshot = model_path_str.contains("/huggingface/hub/")
+                            || model_path_str.contains("/snapshots/");
+                        if looks_like_hf_snapshot {
+                            info!(
+                                "♻️  Cached config points to HF snapshot; regenerating config from clean download"
+                            );
+                            let clean_path = self.ensure_model_available(model_id)?;
+                            let config = self
+                                .config_generator
+                                .generate_config_from_directory_enhanced(
+                                    &clean_path,
+                                    model_id,
+                                    "qwen",
+                                )?;
+                            return self.load_model_from_config(&config);
+                        }
+                    }
+
                     // Extra: if FFN package exposes both prefill & infer functions but config lacks ffn_infer, regenerate
                     if self.config_requires_ffn_split_upgrade(&cached_config) {
                         info!(
@@ -62,11 +82,13 @@ impl UnifiedModelLoader {
                         if let Some(model_path_str) = &cached_config.model_info.path {
                             let model_path = std::path::PathBuf::from(model_path_str);
                             if model_path.exists() {
-                                let config = self.config_generator.generate_config_from_directory(
-                                    &model_path,
-                                    model_id,
-                                    "qwen",
-                                )?;
+                                let config = self
+                                    .config_generator
+                                    .generate_config_from_directory_enhanced(
+                                        &model_path,
+                                        model_id,
+                                        "qwen",
+                                    )?;
                                 return self.load_model_from_config(&config);
                             }
                         }
@@ -87,12 +109,17 @@ impl UnifiedModelLoader {
                     if let Some(model_path_str) = &cached_config.model_info.path {
                         let model_path = std::path::PathBuf::from(model_path_str);
                         if model_path.exists() {
-                            info!("🔍 Regenerating config from existing model at {}", model_path.display());
-                            let config = self.config_generator.generate_config_from_directory(
-                                &model_path,
-                                model_id,
-                                "qwen",
-                            )?;
+                            info!(
+                                "🔍 Regenerating config from existing model at {}",
+                                model_path.display()
+                            );
+                            let config = self
+                                .config_generator
+                                .generate_config_from_directory_enhanced(
+                                    &model_path,
+                                    model_id,
+                                    "qwen",
+                                )?;
                             return self.load_model_from_config(&config);
                         } else {
                             info!("⚠️  Cached model path missing, will re-download");
@@ -106,17 +133,22 @@ impl UnifiedModelLoader {
             }
         }
 
-        // Step 2: Download the model from HuggingFace
-        info!("⬇️  Downloading model from HuggingFace: {}", model_id);
-        let model_path = download_model(model_id, false)?;
+        // Step 2: Ensure the model is available in our clean cache (handles download if missing)
+        info!(
+            "⬇️  Ensuring model is available in clean cache: {}",
+            model_id
+        );
+        let model_path = self.ensure_model_available(model_id)?;
 
         // Step 3: Generate config from downloaded files
         info!("🔍 Generating config from downloaded model");
-        let config = self.config_generator.generate_config_from_directory(
-            &model_path,
-            model_id,
-            "qwen", // Auto-detect this in the future
-        )?;
+        let config = self
+            .config_generator
+            .generate_config_from_directory_enhanced(
+                &model_path,
+                model_id,
+                "qwen", // Auto-detect this in the future
+            )?;
 
         // Step 4: Load the model using the generated config
         self.load_model_from_config(&config)
@@ -137,7 +169,9 @@ impl UnifiedModelLoader {
             .find(|(name, _)| name.to_lowercase().contains("ffn"))
             .and_then(|(_, comp)| comp.file_path.as_ref());
 
-        let Some(ffn_path_str) = ffn_component else { return false };
+        let Some(ffn_path_str) = ffn_component else {
+            return false;
+        };
         let ffn_path = std::path::Path::new(ffn_path_str);
 
         // Determine manifest path (.mlpackage -> Manifest.json, .mlmodelc -> metadata.json)
@@ -150,8 +184,12 @@ impl UnifiedModelLoader {
         };
 
         // Read and parse manifest
-        let Ok(content) = std::fs::read_to_string(&manifest_path) else { return false };
-        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else { return false };
+        let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+            return false;
+        };
+        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else {
+            return false;
+        };
 
         // Extract functions array
         let funcs = json
@@ -210,7 +248,7 @@ impl UnifiedModelLoader {
         let model_path = self.ensure_model_available(model_id)?;
 
         self.config_generator
-            .generate_config_from_directory(&model_path, model_id, "qwen")
+            .generate_config_from_directory_enhanced(&model_path, model_id, "qwen")
     }
 
     /// List all cached models and their status
@@ -254,10 +292,20 @@ impl UnifiedModelLoader {
     /// Verify that all model files referenced in config still exist
     fn verify_model_files_exist(&self, config: &ModelConfig) -> bool {
         for (component_name, component) in &config.components {
-            if let Some(file_path) = &component.file_path {
-                let path = Path::new(file_path);
-                if !path.exists() {
-                    debug!("Component '{}' file missing: {}", component_name, file_path);
+            match &component.file_path {
+                Some(file_path) => {
+                    let path = Path::new(file_path);
+                    if !path.exists() {
+                        debug!("Component '{}' file missing: {}", component_name, file_path);
+                        return false;
+                    }
+                }
+                None => {
+                    // Missing file_path makes the config unusable for model loading
+                    debug!(
+                        "Component '{}' missing file_path in cached config; regeneration required",
+                        component_name
+                    );
                     return false;
                 }
             }

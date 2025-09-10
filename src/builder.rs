@@ -1,6 +1,6 @@
 //! `CoreML` model builder for convenient model loading
 
-use crate::config::Config;
+use crate::config::basic::Config;
 use crate::CoreMLModel;
 use candle_core::Error as CandleError;
 use std::path::{Path, PathBuf};

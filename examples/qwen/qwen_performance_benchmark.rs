@@ -1,26 +1,23 @@
 //! Qwen Performance Benchmark
 //!
-//! This example benchmarks the old vs optimized forward_text implementations
-//! to demonstrate the performance improvements from architectural fixes.
+//! This example benchmarks forward_text implementations using the new
+//! UnifiedModelLoader with automatic config generation.
 
 use anyhow::Result;
-use candle_coreml::{
-    ensure_model_downloaded,
-    qwen::{QwenConfig, QwenModel},
-};
+use candle_coreml::UnifiedModelLoader;
 
 #[tokio::main]
 async fn main() -> Result<()> {
     println!("🦙 Qwen Performance Benchmark");
     println!("============================");
 
-    // Load the model
+    // Load the model with UnifiedModelLoader
     let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
-    println!("📥 Loading model: {model_id}");
-    let model_dir = ensure_model_downloaded(model_id, true)?;
+    println!("📥 Loading model with UnifiedModelLoader: {model_id}");
+    println!("🤖 Automatic config generation and shape detection");
 
-    let config = QwenConfig::default();
-    let mut qwen_model = QwenModel::load_from_directory(&model_dir, Some(config))?;
+    let loader = UnifiedModelLoader::new()?;
+    let mut qwen_model = loader.load_model(model_id)?;
     println!("✅ Model loaded successfully");
 
     // Benchmark prompt

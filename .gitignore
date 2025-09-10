@@ -1,5 +1,13 @@
 # Ignore Python virtual environment
 .shape-env/
+
+# Common python virtualenv names (some were accidentally committed)
+test_venv/
+venv/
+.venv/
+env/
+.env/
+shape-env
 # Rust
 /target/
 **/*.rs.bk
@@ -21,6 +29,23 @@ Thumbs.db
 *.mlpackage/
 test_models/
 
+# Model artifact files - don't commit large model binaries
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+*.tch
+
+# CoreML models - prevent large model files from being committed
+coreml-*
+*OpenELM*
+*-Instruct*
+
+# Model directories
+models/
+
 # Logs
 *.log
 
@@ -29,7 +54,6 @@ coverage*
 
 # Debug files
 debug_*.rs
-test_*.rs
 profile_*.rs
 time_*.rs
 *_debug.py

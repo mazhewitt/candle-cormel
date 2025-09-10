@@ -5,7 +5,7 @@
 
 use crate::qwen::model::QwenModel;
 use candle_core::{Error as CandleError, Tensor};
-use tracing::debug;
+use tracing::{debug, trace};
 
 impl QwenModel {
     /// Compute embeddings with caching and reuse optimization
@@ -20,11 +20,49 @@ impl QwenModel {
         }
 
         // Compute new embeddings
-        debug!(
+        trace!(
             "💾 CACHE MISS: Computing embeddings for sequence {:?}",
             tokens
         );
-        let input_tensor = self.create_embeddings_input_tensor(tokens)?;
+
+        // For models expecting full-sequence prefill (like typo-fixer),
+        // create embeddings with the full sequence length expected by FFN
+        let input_tensor = if self.config.model_config.expects_full_sequence_prefill() {
+            // Get the expected sequence length from FFN prefill or FFN infer
+            let expected_seq_len = if let Some(ffn_prefill) =
+                self.config.model_config.components.get("ffn_prefill")
+            {
+                ffn_prefill
+                    .inputs
+                    .get("hidden_states")
+                    .map(|hs| hs.shape[1])
+                    .unwrap_or(1)
+            } else if let Some(ffn_infer) = self.config.model_config.components.get("ffn_infer") {
+                ffn_infer
+                    .inputs
+                    .get("hidden_states")
+                    .map(|hs| hs.shape[1])
+                    .unwrap_or(1)
+            } else {
+                1
+            };
+
+            if expected_seq_len > 1 {
+                trace!(
+                    "🚀 Creating full-sequence embeddings input with seq_len={}",
+                    expected_seq_len
+                );
+                // Pad tokens to expected sequence length
+                let mut padded_tokens = tokens.to_vec();
+                padded_tokens.resize(expected_seq_len, 0); // Pad with 0s
+                Tensor::from_vec(padded_tokens, (1, expected_seq_len), &self.config.device)?
+            } else {
+                self.create_embeddings_input_tensor(tokens)?
+            }
+        } else {
+            self.create_embeddings_input_tensor(tokens)?
+        };
+
         let embeddings = self.embeddings.forward(&[&input_tensor])?;
         // Cache the result
         self.last_sequence_embeddings = Some((tokens.to_vec(), embeddings.clone()));
@@ -43,15 +81,16 @@ impl QwenModel {
                 // Validate bounds against actual cached embeddings dimensions
                 let cached_seq_len = cached_embeddings.dims()[1];
                 if token_index >= cached_seq_len {
-                    debug!(
+                    trace!(
                         "❌ BOUNDS: token_index {} >= cached_seq_len {}, falling back",
-                        token_index, cached_seq_len
+                        token_index,
+                        cached_seq_len
                     );
                     return Ok(None);
                 }
 
                 // Extract the specific token embedding from the cached sequence
-                debug!(
+                trace!(
                     "⚡ EXTRACTING: Token {} from cached sequence embeddings (dims: {:?})",
                     token_index,
                     cached_embeddings.dims()
@@ -79,7 +118,7 @@ impl QwenModel {
         }
 
         // Fallback: compute single token embedding
-        debug!("💾 COMPUTING: Single last token embedding");
+        trace!("💾 COMPUTING: Single last token embedding");
         let last_token = tokens[last_index];
 
         // Use single-token method for models with separate ffn_infer component
@@ -89,15 +128,15 @@ impl QwenModel {
             .components
             .contains_key("ffn_infer")
         {
-            debug!("🔍 Using single-token embeddings input for separate ffn_infer component");
+            trace!("🔍 Using single-token embeddings input for separate ffn_infer component");
             self.create_single_token_embeddings_input(last_token)?
         } else {
-            debug!("🔍 Using standard embeddings input for unified ffn component");
+            trace!("🔍 Using standard embeddings input for unified ffn component");
             self.create_embeddings_input_tensor(&[last_token])?
         };
 
         let result = self.embeddings.forward(&[&input_tensor])?;
-        debug!(
+        trace!(
             "✅ Single token embedding result shape: {:?}",
             result.dims()
         );
@@ -113,7 +152,7 @@ impl QwenModel {
         // For the infer phase, we need fresh embeddings for the current token
         // This matches the Python workflow: infer uses current_token embeddings, not prefill output
         // The prefill step updates the KV cache, then infer processes current token with fresh embeddings
-        debug!("🔍 get_infer_hidden_states: Computing fresh embeddings for current token (position {})", pos - 1);
+        trace!("🔍 get_infer_hidden_states: Computing fresh embeddings for current token (position {})", pos - 1);
 
         // Get the current token (last token in the sequence)
         if pos == 0 || pos > tokens.len() {
@@ -125,7 +164,7 @@ impl QwenModel {
         }
 
         let current_token = tokens[pos - 1];
-        debug!(
+        trace!(
             "🔍 Current token for infer: {} at position {}",
             current_token,
             pos - 1
@@ -133,12 +172,12 @@ impl QwenModel {
 
         // Create single token input tensor and run through embeddings to get 3D output
         let input_tensor = self.create_single_token_embeddings_input(current_token)?;
-        debug!(
+        trace!(
             "🔍 Running current token {} through embeddings model",
             current_token
         );
         let embeddings_output = self.embeddings.forward(&[&input_tensor])?;
-        debug!(
+        trace!(
             "🔍 Fresh embeddings output shape: {:?}",
             embeddings_output.dims()
         );
@@ -152,17 +191,23 @@ impl QwenModel {
         tokens: &[i64],
         _pos: usize,
     ) -> Result<Tensor, CandleError> {
-        // Get the expected FFN input shape
-        let expected_shape = if let Some(ffn_prefill_config) =
-            self.config.model_config.components.get("ffn_prefill")
-        {
-            ffn_prefill_config
-                .inputs
-                .get("hidden_states")
-                .map(|hidden_states_config| hidden_states_config.shape.clone())
-        } else {
-            None
-        };
+        // Get the expected FFN input shape - check ffn_infer first, then fall back to ffn_prefill
+        let expected_shape =
+            if let Some(ffn_infer_config) = self.config.model_config.components.get("ffn_infer") {
+                ffn_infer_config
+                    .inputs
+                    .get("hidden_states")
+                    .map(|hidden_states_config| hidden_states_config.shape.clone())
+            } else if let Some(ffn_prefill_config) =
+                self.config.model_config.components.get("ffn_prefill")
+            {
+                ffn_prefill_config
+                    .inputs
+                    .get("hidden_states")
+                    .map(|hidden_states_config| hidden_states_config.shape.clone())
+            } else {
+                None
+            };
 
         if let Some(expected_shape) = expected_shape {
             let expected_seq_len = expected_shape[1]; // [1, 64, 1024] -> 64
@@ -204,7 +249,7 @@ impl QwenModel {
         }
 
         // Fallback: recompute embeddings for current sequence
-        debug!("💾 COMPUTING: Full sequence embeddings for inference");
+        trace!("💾 COMPUTING: Full sequence embeddings for inference");
         let input_tensor = self.create_embeddings_input_tensor(tokens)?;
         self.embeddings.forward(&[&input_tensor])
     }

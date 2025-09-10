@@ -127,7 +127,7 @@ impl QwenModel {
         // Python uses batch_pos=0 for prefill, not the last position
         let current_pos = Tensor::from_vec(vec![0i64], (1,), device)?;
 
-    trace!(
+        trace!(
             "🚀 FULL-SEQUENCE PREFILL: Processing full sequence with shape {:?}, max_pos: {}",
             embeddings_chunk.dims(),
             max_global_pos
@@ -158,8 +158,8 @@ impl QwenModel {
         )?;
 
         // Cache the prefill output for use in get_infer_hidden_states
-    self.cached_prefill_output = Some(prefill_output);
-    trace!("✅ FULL-SEQUENCE PREFILL: Successfully processed full sequence");
+        self.cached_prefill_output = Some(prefill_output);
+        trace!("✅ FULL-SEQUENCE PREFILL: Successfully processed full sequence");
         Ok(())
     }
 
@@ -270,11 +270,24 @@ impl QwenModel {
 
         // FFN Prefill function (for initial sequence processing)
         debug!("Loading FFN prefill component from {}", ffn_path.display());
-        let ffn_prefill = CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?;
+        let ffn_prefill_has_function = !ffn_component.functions.is_empty()
+            || ffn_component
+                .input_order
+                .as_ref()
+                .map(|_| false)
+                .unwrap_or(false);
+        let ffn_prefill = if ffn_prefill_has_function {
+            CoreMLModel::load_with_function(&ffn_path, &ffn_config_base, "prefill")?
+        } else {
+            // Split package with a dedicated prefill model (no functions)
+            CoreMLModel::load_from_file(&ffn_path, &ffn_config_base)?
+        };
 
         // FFN Infer function (for token-by-token generation)
         // Check if there's a separate ffn_infer component, otherwise use the same file as prefill
-        let (ffn_infer_path, ffn_infer_config) = if let Some(ffn_infer_component) =
+        let (ffn_infer_path, ffn_infer_config, ffn_infer_has_function) = if let Some(
+            ffn_infer_component,
+        ) =
             config.model_config.components.get("ffn_infer")
         {
             let infer_path = if let Some(file_path) = &ffn_infer_component.file_path {
@@ -309,18 +322,24 @@ impl QwenModel {
                 vocab_size: config.hidden_size(),
                 model_type: "qwen-ffn-infer".to_string(),
             };
-            (infer_path, infer_config)
+            let has_func = !ffn_infer_component.functions.is_empty();
+            (infer_path, infer_config, has_func)
         } else {
             // Use same file as prefill with infer function
-            (ffn_path.clone(), ffn_config_base.clone())
+            // Determine if the shared package exposes functions.
+            let has_func = ffn_prefill_has_function;
+            (ffn_path.clone(), ffn_config_base.clone(), has_func)
         };
 
         debug!(
             "Loading FFN infer component from {}",
             ffn_infer_path.display()
         );
-        let ffn_infer =
-            CoreMLModel::load_with_function(&ffn_infer_path, &ffn_infer_config, "infer")?;
+        let ffn_infer = if ffn_infer_has_function {
+            CoreMLModel::load_with_function(&ffn_infer_path, &ffn_infer_config, "infer")?
+        } else {
+            CoreMLModel::load_from_file(&ffn_infer_path, &ffn_infer_config)?
+        };
 
         // Configure and load LM head
         let lm_output = config
@@ -469,7 +488,7 @@ impl QwenModel {
 
     /// Pad tokens to appropriate batch size for embeddings using dynamic configuration
     pub fn pad_tokens(&self, tokens: &[i64]) -> Vec<i64> {
-    trace!(
+        trace!(
             "🔍 PAD_TOKENS: Called with {} tokens: {:?}",
             tokens.len(),
             tokens
@@ -547,9 +566,10 @@ impl QwenModel {
         let context_length = self.config.context_length();
         let device = &self.config.device;
 
-    trace!(
+        trace!(
             "Running prefill for {} tokens (padded to {} batch) to populate KV cache",
-            sequence_length, batch_size
+            sequence_length,
+            batch_size
         );
 
         // Branch: unified multi-token prefill vs single-token sequential prefill
@@ -623,7 +643,7 @@ impl QwenModel {
     ) -> Result<Tensor, CandleError> {
         let context_length = self.config.context_length();
 
-    trace!(
+        trace!(
             "Running infer for position {} using SHARED state from prefill (FIXED: last token pos)",
             current_position
         );
@@ -635,7 +655,7 @@ impl QwenModel {
                 "No unified state available - prefill must be run first".to_string(),
             ));
         }
-    trace!("Using SHARED state populated by prefill (like working tests)");
+        trace!("Using SHARED state populated by prefill (like working tests)");
 
         // Create infer inputs (config-driven to support variant shapes)
         let position_ids = self
@@ -646,23 +666,25 @@ impl QwenModel {
             context_length,
             false,
         )?;
-        let current_pos = position_ids.clone();
+        // Ensure current_pos is always a scalar-like [1] tensor with the current position
+        let current_pos =
+            Tensor::from_vec(vec![current_position as i64], (1,), &self.config.device)?;
 
         // Run infer with the shared state to get next-step hidden states
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: token_embedding shape={:?}",
             token_embedding.dims()
         );
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: position_ids shape={:?} vals={:?}",
             position_ids.dims(),
             position_ids.to_vec1::<i64>().unwrap_or_default()
         );
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: causal_mask shape={:?}",
             causal_mask.dims()
         );
-    trace!(
+        trace!(
             "🔍 GENERATE_INFER: current_pos shape={:?} vals={:?}",
             current_pos.dims(),
             current_pos.to_vec1::<i64>().unwrap_or_default()
@@ -674,7 +696,7 @@ impl QwenModel {
             &current_pos,
         )?;
 
-    trace!("Infer complete - processing through LM head");
+        trace!("Infer complete - processing through LM head");
 
         // Run through LM head to get logits (using granular method)
         let combined_logits = self.run_lm_head_with_inputs(&hidden_states)?;

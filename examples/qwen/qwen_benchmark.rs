@@ -23,7 +23,7 @@
 //! ```
 
 use anyhow::{Error as E, Result};
-use candle_coreml::{model_downloader, QwenConfig, QwenModel};
+use candle_coreml::{QwenModel, UnifiedModelLoader};
 use clap::Parser;
 use std::time::{Duration, Instant};
 
@@ -53,7 +53,7 @@ struct Args {
     #[arg(long)]
     ane_only: bool,
 
-    /// Use local model instead of downloading
+    /// Use local model instead of downloading (deprecated with UnifiedModelLoader)
     #[arg(long)]
     local: bool,
 }
@@ -243,15 +243,22 @@ fn run_benchmark(args: &Args) -> Result<()> {
     println!("Sequence lengths: {sequence_lengths:?}");
     println!();
 
-    // Load Qwen model
-    println!("🔄 Loading Qwen model...");
-    println!("📥 Downloading model components from HuggingFace...");
+    // Load Qwen model with UnifiedModelLoader
+    println!("🔄 Loading Qwen model with UnifiedModelLoader...");
+    println!("🤖 Automatic config generation and shape detection");
 
-    let model_path = model_downloader::ensure_model_downloaded(&args.model_id, args.verbose)
-        .map_err(|e| E::msg(format!("Failed to download model: {e}")))?;
+    if args.local {
+        return Err(E::msg(
+            "Local model loading not supported with UnifiedModelLoader.\n\
+            Use HuggingFace model IDs instead.",
+        ));
+    }
 
-    let config = QwenConfig::default();
-    let model = QwenModel::load_from_directory(&model_path, Some(config))
+    let loader = UnifiedModelLoader::new()
+        .map_err(|e| E::msg(format!("Failed to create UnifiedModelLoader: {e}")))?;
+
+    let model = loader
+        .load_model(&args.model_id)
         .map_err(|e| E::msg(format!("Failed to load model: {e}")))?;
 
     let mut benchmark = QwenBenchmark::new(model);
