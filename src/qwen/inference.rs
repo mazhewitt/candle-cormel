@@ -78,10 +78,15 @@ impl QwenModel {
         QwenModel::plan_sequential_prefill_static(token_count, embeddings_len, already_prefilled)
     }
 
-    /// Generate a single token from text input - PRIMARY METHOD
+    /// Generate a single token from text input - ADVANCED/DEBUG USE ONLY
     /// ✅ Uses chat.py architecture for correct predictions (correctly answers "Paris" for capital of France)
     /// 🚀 OPTIMIZED: Enhanced with embeddings caching for maximum performance
     /// Replicates Python reference architecture with chunked prefill and cached masks
+    /// 
+    /// ⚠️ **WARNING: This method is for advanced users and debugging only.**
+    /// Single tokens rarely provide meaningful completions. Use `complete_text()` 
+    /// for normal text generation instead.
+    #[doc(hidden)]
     pub fn forward_text(&mut self, text: &str) -> Result<i64, CandleError> {
         let start_time = std::time::Instant::now();
 
@@ -518,6 +523,11 @@ impl QwenModel {
 
     /// Generate multiple tokens using temperature sampling with optional top-k
     /// Generate multiple tokens with correct position tracking
+    ///
+    /// ⚠️ **WARNING: This method is deprecated due to a known bug.**
+    /// It ignores the temperature parameter and may produce repetitive output.
+    /// Use `complete_text()` or `generate_tokens_topk_temp()` instead.
+    #[deprecated(note = "This method ignores temperature and may produce poor results. Use `complete_text()` or `generate_tokens_topk_temp()` instead.")]
     pub fn generate_tokens(
         &mut self,
         text: &str,
@@ -673,5 +683,70 @@ impl QwenModel {
 
         // No cache hit found
         Ok(None)
+    }
+
+    // ========================================
+    // PRIMARY USER APIS (RECOMMENDED)
+    // ========================================
+
+    /// Generate a complete text response (RECOMMENDED)
+    /// 
+    /// This is the primary API for text generation. It uses proven methods
+    /// with good defaults (temperature=0.7, top_k=50) to produce coherent,
+    /// multi-token completions.
+    /// 
+    /// # Arguments
+    /// * `prompt` - Input text to complete
+    /// * `max_tokens` - Maximum number of tokens to generate
+    /// 
+    /// # Returns
+    /// Decoded text string ready for use
+    /// 
+    /// # Example
+    /// ```
+    /// let response = model.complete_text("What is the capital of France?", 50)?;
+    /// println!("Response: {}", response);
+    /// ```
+    pub fn complete_text(&mut self, prompt: &str, max_tokens: usize) -> Result<String, CandleError> {
+        let tokens = self.generate_tokens_topk_temp(prompt, max_tokens, 0.7, Some(50))?;
+        let tokens_u32: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
+        self.tokenizer.decode(&tokens_u32, false)
+            .map_err(|e| CandleError::Msg(format!("Decoding failed: {}", e)))
+    }
+
+    /// Generate text with full control over sampling parameters
+    /// 
+    /// This is the power-user version of text generation with full control
+    /// over temperature and top-k sampling parameters.
+    /// 
+    /// # Arguments
+    /// * `prompt` - Input text to complete
+    /// * `max_tokens` - Maximum number of tokens to generate
+    /// * `temperature` - Sampling temperature (0.0 = deterministic, 1.0 = very random)
+    /// * `top_k` - Top-k sampling size (None = use pure temperature)
+    /// 
+    /// # Returns
+    /// Decoded text string ready for use
+    /// 
+    /// # Example
+    /// ```
+    /// let response = model.generate_text_with_params(
+    ///     "What is the capital of France?", 
+    ///     50, 
+    ///     0.9,  // High creativity
+    ///     Some(20)  // Restrict to top 20 tokens
+    /// )?;
+    /// ```
+    pub fn generate_text_with_params(
+        &mut self, 
+        prompt: &str, 
+        max_tokens: usize,
+        temperature: f32,
+        top_k: Option<usize>
+    ) -> Result<String, CandleError> {
+        let tokens = self.generate_tokens_topk_temp(prompt, max_tokens, temperature, top_k)?;
+        let tokens_u32: Vec<u32> = tokens.iter().map(|&t| t as u32).collect();
+        self.tokenizer.decode(&tokens_u32, false)
+            .map_err(|e| CandleError::Msg(format!("Decoding failed: {}", e)))
     }
 }
