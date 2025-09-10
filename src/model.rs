@@ -173,18 +173,32 @@ impl CoreMLModel {
                         // Only try to compile for non-compiled artifacts
                         if looks_like_package || ext == "mlmodel" || !is_dir {
                             debug!("Direct load failed, attempting compilation: {load_err}");
+                            
+                            // Try to use cached compiled model first
+                            if let Ok(cached_model) = Self::try_load_cached_compiled_model(path, &load_start, config, function_name) {
+                                return Ok(cached_model);
+                            }
+                            
                             #[allow(deprecated)]
                             // Choose compile target: for 'typo-fixer style' packages, compile the inner model.mlmodel
-                            match unsafe {
+                            let compile_result = unsafe {
                                 if looks_like_package && !manifest_json_exists && has_inner_mlmodel {
                                     let inner_url = NSURL::fileURLWithPath(&NSString::from_str(&inner_mlmodel_path.to_string_lossy()));
                                     MLModel::compileModelAtURL_error(&inner_url)
                                 } else {
                                     MLModel::compileModelAtURL_error(&url)
                                 }
-                            } {
+                            };
+                            
+                            match compile_result {
                                 Ok(compiled_url) => {
-                                    debug!("Compilation completed, loading compiled model");
+                                    debug!("Compilation completed, caching and loading compiled model");
+                                    
+                                    // Cache the compiled model for future use
+                                    if let Err(e) = Self::cache_compiled_model(path, &compiled_url) {
+                                        debug!("Failed to cache compiled model: {e}");
+                                    }
+                                    
                                     match unsafe { load_with_config(&compiled_url, function_name) } {
                                         Ok(model) => {
                                             info!(
@@ -582,6 +596,150 @@ impl CoreMLModel {
                 .predictionFromFeatures_usingState_error(protocol_provider, state.inner())
                 .map_err(|e| CandleError::Msg(format!("CoreML stateful prediction error: {e:?}")))
         })
+    }
+
+    /// Try to load a cached compiled model if it exists
+    #[cfg(target_os = "macos")]
+    fn try_load_cached_compiled_model(
+        source_path: &Path,
+        load_start: &std::time::Instant,
+        config: &Config,
+        function_name: Option<&str>,
+    ) -> Result<CoreMLModel, CandleError> {
+        let cache_path = Self::get_compiled_cache_path(source_path)?;
+        
+        if cache_path.exists() {
+            debug!("Found cached compiled model at: {}", cache_path.display());
+            
+            // Check if cached version is newer than source
+            if let (Ok(cache_meta), Ok(source_meta)) = (
+                cache_path.metadata(),
+                source_path.metadata(),
+            ) {
+                if let (Ok(cache_modified), Ok(source_modified)) = (
+                    cache_meta.modified(),
+                    source_meta.modified(),
+                ) {
+                    if cache_modified >= source_modified {
+                        let url = unsafe { 
+                            NSURL::fileURLWithPath(&NSString::from_str(&cache_path.to_string_lossy())) 
+                        };
+                        
+                        match unsafe {
+                            if let Some(func) = function_name {
+                                let ml_cfg = MLModelConfiguration::new();
+                                let ns_name = NSString::from_str(func);
+                                ml_cfg.setFunctionName(Some(&ns_name));
+                                MLModel::modelWithContentsOfURL_configuration_error(&url, &ml_cfg)
+                            } else {
+                                MLModel::modelWithContentsOfURL_error(&url)
+                            }
+                        } {
+                            Ok(model) => {
+                                info!("Cached compiled model loaded in {:.1}s", load_start.elapsed().as_secs_f32());
+                                return Ok(CoreMLModel {
+                                    inner: model,
+                                    config: config.clone(),
+                                    function_name: function_name.map(|s| s.to_string()),
+                                });
+                            }
+                            Err(e) => {
+                                debug!("Failed to load cached compiled model: {e}");
+                                // Continue to recompilation
+                            }
+                        }
+                    } else {
+                        debug!("Cached compiled model is older than source, will recompile");
+                    }
+                }
+            }
+        }
+        
+        Err(CandleError::Msg("No valid cached compiled model found".to_string()))
+    }
+
+    /// Cache a compiled model for future use
+    #[cfg(target_os = "macos")]
+    fn cache_compiled_model(source_path: &Path, compiled_url: &NSURL) -> Result<(), CandleError> {
+        let cache_path = Self::get_compiled_cache_path(source_path)?;
+        
+        // Create cache directory if it doesn't exist
+        if let Some(parent) = cache_path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| {
+                CandleError::Msg(format!("Failed to create cache directory: {e}"))
+            })?;
+        }
+
+        // Get the path from the compiled URL
+        let compiled_path_str = unsafe { compiled_url.path() };
+        if compiled_path_str.is_none() {
+            return Err(CandleError::Msg("Invalid compiled model URL".to_string()));
+        }
+        
+        let compiled_path = std::path::PathBuf::from(
+            compiled_path_str.unwrap().to_string()
+        );
+
+        // Copy the compiled model to the cache location
+        if compiled_path.exists() {
+            if cache_path.exists() {
+                std::fs::remove_dir_all(&cache_path).map_err(|e| {
+                    CandleError::Msg(format!("Failed to remove old cached model: {e}"))
+                })?;
+            }
+            
+            Self::copy_recursive(&compiled_path, &cache_path).map_err(|e| {
+                CandleError::Msg(format!("Failed to cache compiled model: {e}"))
+            })?;
+            
+            debug!("Cached compiled model at: {}", cache_path.display());
+        } else {
+            return Err(CandleError::Msg("Compiled model path does not exist".to_string()));
+        }
+
+        Ok(())
+    }
+
+    /// Get the cache path for a compiled model
+    fn get_compiled_cache_path(source_path: &Path) -> Result<std::path::PathBuf, CandleError> {
+        // Use the CacheManager to get a consistent cache directory
+        use crate::CacheManager;
+        let cache_manager = CacheManager::new().map_err(|e| {
+            CandleError::Msg(format!("Failed to initialize cache manager: {e}"))
+        })?;
+        
+        let cache_dir = cache_manager.models_dir().parent().unwrap().to_path_buf();
+        
+        // Create a unique cache key based on the source path
+        let source_hash = {
+            use std::collections::hash_map::DefaultHasher;
+            use std::hash::{Hash, Hasher};
+            let mut hasher = DefaultHasher::new();
+            source_path.hash(&mut hasher);
+            hasher.finish()
+        };
+        
+        let cache_name = format!("compiled_{:x}.mlmodelc", source_hash);
+        Ok(cache_dir.join("compiled_models").join(cache_name))
+    }
+
+    /// Recursively copy a directory
+    fn copy_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+        if from.is_dir() {
+            std::fs::create_dir_all(to)?;
+            for entry in std::fs::read_dir(from)? {
+                let entry = entry?;
+                let from_path = entry.path();
+                let to_path = to.join(entry.file_name());
+                Self::copy_recursive(&from_path, &to_path)?;
+            }
+        } else {
+            if let Some(parent) = to.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::copy(from, to)?;
+        }
+        Ok(())
     }
 }
 
