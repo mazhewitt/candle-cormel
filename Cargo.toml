@@ -1,6 +1,6 @@
 [package]
 name = "candle-coreml"
-version = "0.2.4"
+version = "0.3.1"
 edition = "2021"
 description = "CoreML inference engine for Candle tensors - provides Apple CoreML/ANE integration with real tokenization, safety fixes, and model calibration awareness"
 repository = "https://github.com/mazhewitt/candle-cormel"
@@ -15,7 +15,7 @@ readme = "README.md"
 
 [dependencies]
 
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["env-filter"] }
 
 # Published Candle crates from crates.io (latest major versions)
 candle-core = "0.9.1"
