@@ -38,6 +38,11 @@ test_models/
 *.onnx
 *.tch
 
+# CoreML models - prevent large model files from being committed
+coreml-*
+*OpenELM*
+*-Instruct*
+
 # Model directories
 models/
 
