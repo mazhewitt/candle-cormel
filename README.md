@@ -30,33 +30,41 @@ candle-coreml = "0.2.4"
 candle-core = "0.9.1"
 ```
 
-Basic usage:
+Basic usage with UnifiedModelLoader (Recommended):
 
 ```rust
-use candle_core::{Device, Tensor};
-use candle_coreml::{Config, CoreMLModel};
+use candle_coreml::UnifiedModelLoader;
 
-// Create config for your model
-let config = Config {
-    input_names: vec!["input_ids".to_string()],
-    output_name: "logits".to_string(),
-    max_sequence_length: 128,
-    vocab_size: 32000,
-    model_type: "YourModel".to_string(),
-};
+// Load model directly from HuggingFace with automatic setup
+let loader = UnifiedModelLoader::new()?;
+let mut model = loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")?;
 
-// Load CoreML model (no device parameter needed)
-let model = CoreMLModel::load_from_file("model.mlmodelc", &config)?;
+// Generate text using the new API
+let response = model.complete_text(
+    "Hello, how are you?",
+    50,   // max tokens  
+    0.8,  // temperature
+)?;
 
-// Create input tensor on CPU or Metal
-let device = Device::Cpu;
-let input = Tensor::ones((1, 128), candle_core::DType::F32, &device)?;
+println!("Response: {}", response);
+```
 
-// Run inference (device validation happens automatically)
-let output = model.forward(&input)?;
+Manual CoreML model loading:
 
-// Output tensor uses same device as input
-assert_eq!(output.device(), input.device());
+```rust
+use candle_coreml::{CoreMLModel, ModelConfig};
+
+// Load model config (typically auto-generated)
+let config = ModelConfig::load_from_file("model_config.json")?;
+
+// Load CoreML model components
+let model = CoreMLModel::load_from_file("model.mlpackage", &config)?;
+
+// Create input tensor
+let input = candle_core::Tensor::zeros((1, 128), candle_core::DType::I64, &candle_core::Device::Cpu)?;
+
+// Run inference
+let output = model.forward(&[input])?;
 ```
 
 ## 🔥 ANEMLL Models: Multi-Component ANE Architecture
@@ -108,18 +116,25 @@ Input Tokens → [Embeddings] → [FFN Transformer] → [LM Head] → Output Log
 ### Quick Start with ANEMLL Models
 
 ```rust
-use candle_coreml::QwenModel;
+use candle_coreml::UnifiedModelLoader;
 
-// Load complete multi-component model
-let model = QwenModel::load_from_hub(
-    "anemll/anemll-Qwen-Qwen3-0.6B-ctx512_0.3.4"
+// Load complete multi-component model with automatic setup
+let loader = UnifiedModelLoader::new()?;
+let mut model = loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")?;
+
+// Generate text using the new API methods
+let response = model.complete_text(
+    "Hello, how are you?",
+    50,   // max tokens
+    0.8,  // temperature  
 )?;
 
-// Generate text using all components
-let response = model.generate(
+// Or use the more advanced generation method
+let tokens = model.generate_tokens_topk_temp(
     "Hello, how are you?",
-    50,  // max tokens
-    0.8  // temperature
+    50,   // max tokens
+    0.8,  // temperature
+    Some(50), // top_k
 )?;
 ```
 
@@ -128,27 +143,38 @@ let response = model.generate(
 For advanced use cases, load components individually:
 
 ```rust
-use candle_coreml::{CoreMLModel, Config};
+use candle_coreml::{CoreMLModel, ModelConfig, QwenModel, QwenConfig};
 
-// Load each component with specific configs
-let embeddings = CoreMLModel::load_from_file("qwen_embeddings.mlmodelc", &embed_config)?;
-let ffn = CoreMLModel::load_from_file("qwen_FFN_PF_lut8_chunk_01of01.mlmodelc", &ffn_config)?;
-let lm_head = CoreMLModel::load_from_file("qwen_lm_head_lut8.mlmodelc", &head_config)?;
+// Option 1: Load from directory with auto-generated config  
+let model_dir = "/path/to/downloaded/model";
+let mut model = QwenModel::load_from_directory(&model_dir, None)?;
 
-// Orchestrate pipeline manually
-let hidden = embeddings.forward(&[&input_ids])?;
-let processed = ffn.forward(&[&hidden, &causal_mask])?;
-let logits = lm_head.forward(&[&processed.i((.., -1.., ..))?])?;
+// Option 2: Manual component loading with ModelConfig
+let config = ModelConfig::load_from_file("model_config.json")?;
+let embeddings = CoreMLModel::load_from_file("embeddings.mlpackage", &config)?;
+let ffn_prefill = CoreMLModel::load_from_file("ffn_prefill.mlpackage", &config)?;
+let ffn_infer = CoreMLModel::load_from_file("ffn_infer.mlpackage", &config)?;
+let lm_head = CoreMLModel::load_from_file("lm_head.mlpackage", &config)?;
+
+// Use the high-level API for text generation
+let response = model.complete_text("Hello!", 20, 0.7)?;
 ```
 
 ### Examples and Demos
 
 ```bash
-# Full multi-component chat (downloads ~2GB models)
-cargo run --example qwen_multi_component
+# Recommended API demonstration
+cargo run --example recommended_api_demo
 
-# Performance benchmarks
-cargo run --example qwen_benchmark
+# Multi-component chat with Qwen models (downloads ~2GB models)  
+cargo run --example qwen_chat
+
+# Test thinking behavior and quality
+cargo run --example test_thinking_behavior
+cargo run --example proper_quality_test
+
+# Performance comparisons
+cargo run --example compare_loading_approaches
 ```
 
 ### Model Download and Setup
@@ -256,7 +282,67 @@ ANE (fastest, most efficient) > GPU/Metal (fast) > CPU (most compatible)
 
 Apple automatically chooses the best available backend, but your model must be ANE-compatible to benefit from the fastest option.
 
-## Model Configuration System (Generic Qwen / ANEMLL Models)
+## 🚀 Modern API: UnifiedModelLoader
+
+The recommended approach for loading and using models is through the `UnifiedModelLoader`, which handles:
+
+- **Automatic HuggingFace Downloads**: Models are downloaded and cached automatically  
+- **Config Generation**: Model configurations are generated from the downloaded files
+- **Validation**: Comprehensive model validation and error checking
+- **Caching**: Intelligent caching of both models and configurations
+
+### UnifiedModelLoader Examples
+
+```rust
+use candle_coreml::UnifiedModelLoader;
+
+// Create loader (initializes cache and config generation)
+let loader = UnifiedModelLoader::new()?;
+
+// Load any ANEMLL model from HuggingFace
+let mut model = loader.load_model("anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4")?;
+
+// Available generation methods:
+// 1. High-level text completion (recommended)
+let response = model.complete_text("Hello, world!", 50, 0.8)?;
+
+// 2. Advanced token generation with top-k sampling  
+let tokens = model.generate_tokens_topk_temp("Hello!", 20, 0.7, Some(40))?;
+
+// 3. Single token prediction
+let next_token = model.forward_text("Hello")?;
+
+// 4. Text generation with parameters
+let result = model.generate_text_with_params("Hello!", 30, 0.9)?;
+```
+
+### QwenModel API Reference
+
+The `QwenModel` provides several methods for text generation:
+
+| Method | Description | Use Case |
+|--------|-------------|-----------|
+| `complete_text(prompt, max_tokens, temperature)` | **Recommended** - High-level text completion | General text generation |
+| `generate_tokens_topk_temp(prompt, max_tokens, temp, top_k)` | Advanced generation with top-k sampling | Fine-tuned control over generation |
+| `forward_text(text)` | Single token prediction | Next token prediction, embeddings |  
+| `generate_text_with_params(prompt, max_tokens, temperature)` | Text generation with custom parameters | Custom generation logic |
+| ~~`generate_tokens()`~~ | **Deprecated** - Use `generate_tokens_topk_temp()` instead | Legacy compatibility only |
+
+### Cache Management
+
+Models and configs are cached automatically:
+
+```rust
+// Models cached in: ~/.cache/candle-coreml/models/  
+// Configs cached in: ~/.cache/candle-coreml/configs/
+
+// Clear caches if needed
+use candle_coreml::CacheManager;
+let cache = CacheManager::new()?;
+// cache.clear_model_cache()?; // if needed
+```
+
+## Model Configuration System (Advanced Usage)
 
 Complex multi-component language models (e.g. ANEMLL Qwen variants, custom fine-tunes) are described declaratively using a `ModelConfig` JSON file. This removes hardcoded shapes and enables:
 
@@ -325,41 +411,48 @@ For detailed examples see `configs/` directory (e.g. `anemll-qwen3-0.6b.json`).
 
 ## Examples
 
-See the `examples/` directory for:
-- **[WORKED_EXAMPLE.md](examples/WORKED_EXAMPLE.md)** - Complete BERT inference tutorial
-- **Basic inference** - Simple model loading and inference  
-- **Benchmarks** - Performance comparisons vs Metal/CPU
-- **Advanced usage** - Complex model configurations
-- **🦙 Qwen Chat** - Real-world ANE-accelerated chat with Qwen 0.6B
+The `examples/` directory demonstrates various usage patterns:
 
-### 🚀 New: Qwen 0.6B Multi-Component ANE Implementation
+### 🌟 Recommended Starting Points
 
-Complete implementation of Anemll's multi-component architecture:
+- **[recommended_api_demo.rs](examples/recommended_api_demo.rs)** - **START HERE** - Shows the modern UnifiedModelLoader API
+- **[qwen_chat.rs](examples/qwen_chat.rs)** - Interactive chat using ANEMLL Qwen models  
+- **[proper_quality_test.rs](examples/proper_quality_test.rs)** - Model quality assessment
+
+### 🔧 Advanced Examples
+
+- **[compare_loading_approaches.rs](examples/compare_loading_approaches.rs)** - Compare old vs new loading methods
+- **[test_thinking_behavior.rs](examples/test_thinking_behavior.rs)** - Test model reasoning capabilities  
+- **[debug_token_mismatch.rs](examples/debug_token_mismatch.rs)** - Debugging token generation issues
+
+### 📚 Documentation Examples
+
+- **[WORKED_EXAMPLE.md](examples/WORKED_EXAMPLE.md)** - Complete BERT inference tutorial (legacy)
+- **[qwen/README.md](examples/qwen/README.md)** - Qwen model documentation
+
+### Running Examples
 
 ```bash
-# Multi-component Qwen chat with real models 
-cargo run --example qwen_multi_component
+# Start with the recommended API
+cargo run --example recommended_api_demo
 
-# Performance benchmarks and single-model examples
-cargo run --example qwen_benchmark
+# Interactive Qwen chat (downloads ~2GB on first run)
 cargo run --example qwen_chat
+
+# Test model quality  
+cargo run --example proper_quality_test
+
+# Compare loading approaches
+cargo run --example compare_loading_approaches
 ```
 
-Features:
-- **✅ Multi-Component Architecture**: Separate embeddings, FFN, and LM head models
-- **✅ Pipeline Orchestration**: Proper data flow between model components  
-- **✅ True ANE acceleration** using Anemll's optimized model components
-- **✅ Causal Masking**: Correct transformer-style attention patterns
-- **✅ HuggingFace integration** with automatic component download
-- **✅ Comprehensive testing** of full pipeline
+### ✨ Key Features Demonstrated
 
-This demonstrates how to integrate complex, multi-file CoreML models with Candle, providing a foundation for advanced ANE-optimized architectures.
-
-See [examples/qwen/README.md](examples/qwen/README.md) for detailed documentation.
-
-#### Important: Explicit model file paths only
-
-Filename discovery and globbing have been removed. Models must be configured with explicit file_path values for each component (embeddings, FFN prefill/infer, LM head). See CUSTOM_MODEL_GUIDE.md for details and examples.
+- **🚀 UnifiedModelLoader**: Automatic downloading, config generation, and caching
+- **🧠 Multi-Component Architecture**: ANEMLL's specialized model components  
+- **⚡ ANE Acceleration**: True Apple Neural Engine optimization
+- **🔧 Advanced Generation**: Top-k sampling, temperature control, quality assessment
+- **📦 HuggingFace Integration**: Seamless model access from HuggingFace Hub
 
 ## Platform Support
 

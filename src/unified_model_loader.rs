@@ -3,8 +3,8 @@
 //! This module provides a simplified API that replaces hardcoded paths with
 //! automatic HuggingFace downloading and config generation.
 
-use crate::model_config::ModelConfig;
-use crate::model_downloader::ensure_model_downloaded;
+use crate::config::model::ModelConfig;
+use crate::download::unified::ensure_model_downloaded;
 use crate::{CacheManager, ConfigGenerator, QwenConfig, QwenModel};
 use anyhow::Result;
 use serde_json::Value;
@@ -82,11 +82,13 @@ impl UnifiedModelLoader {
                         if let Some(model_path_str) = &cached_config.model_info.path {
                             let model_path = std::path::PathBuf::from(model_path_str);
                             if model_path.exists() {
-                                let config = self.config_generator.generate_config_from_directory_enhanced(
-                                    &model_path,
-                                    model_id,
-                                    "qwen",
-                                )?;
+                                let config = self
+                                    .config_generator
+                                    .generate_config_from_directory_enhanced(
+                                        &model_path,
+                                        model_id,
+                                        "qwen",
+                                    )?;
                                 return self.load_model_from_config(&config);
                             }
                         }
@@ -107,12 +109,17 @@ impl UnifiedModelLoader {
                     if let Some(model_path_str) = &cached_config.model_info.path {
                         let model_path = std::path::PathBuf::from(model_path_str);
                         if model_path.exists() {
-                            info!("🔍 Regenerating config from existing model at {}", model_path.display());
-                            let config = self.config_generator.generate_config_from_directory_enhanced(
-                                &model_path,
-                                model_id,
-                                "qwen",
-                            )?;
+                            info!(
+                                "🔍 Regenerating config from existing model at {}",
+                                model_path.display()
+                            );
+                            let config = self
+                                .config_generator
+                                .generate_config_from_directory_enhanced(
+                                    &model_path,
+                                    model_id,
+                                    "qwen",
+                                )?;
                             return self.load_model_from_config(&config);
                         } else {
                             info!("⚠️  Cached model path missing, will re-download");
@@ -126,17 +133,22 @@ impl UnifiedModelLoader {
             }
         }
 
-    // Step 2: Ensure the model is available in our clean cache (handles download if missing)
-    info!("⬇️  Ensuring model is available in clean cache: {}", model_id);
-    let model_path = self.ensure_model_available(model_id)?;
+        // Step 2: Ensure the model is available in our clean cache (handles download if missing)
+        info!(
+            "⬇️  Ensuring model is available in clean cache: {}",
+            model_id
+        );
+        let model_path = self.ensure_model_available(model_id)?;
 
         // Step 3: Generate config from downloaded files
         info!("🔍 Generating config from downloaded model");
-        let config = self.config_generator.generate_config_from_directory_enhanced(
-            &model_path,
-            model_id,
-            "qwen", // Auto-detect this in the future
-        )?;
+        let config = self
+            .config_generator
+            .generate_config_from_directory_enhanced(
+                &model_path,
+                model_id,
+                "qwen", // Auto-detect this in the future
+            )?;
 
         // Step 4: Load the model using the generated config
         self.load_model_from_config(&config)
@@ -157,7 +169,9 @@ impl UnifiedModelLoader {
             .find(|(name, _)| name.to_lowercase().contains("ffn"))
             .and_then(|(_, comp)| comp.file_path.as_ref());
 
-        let Some(ffn_path_str) = ffn_component else { return false };
+        let Some(ffn_path_str) = ffn_component else {
+            return false;
+        };
         let ffn_path = std::path::Path::new(ffn_path_str);
 
         // Determine manifest path (.mlpackage -> Manifest.json, .mlmodelc -> metadata.json)
@@ -170,8 +184,12 @@ impl UnifiedModelLoader {
         };
 
         // Read and parse manifest
-        let Ok(content) = std::fs::read_to_string(&manifest_path) else { return false };
-        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else { return false };
+        let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+            return false;
+        };
+        let Ok(json): Result<Value, _> = serde_json::from_str(&content) else {
+            return false;
+        };
 
         // Extract functions array
         let funcs = json

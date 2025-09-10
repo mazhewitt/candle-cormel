@@ -2,8 +2,8 @@
 //!
 //! Handles saving and loading generated model configurations
 
-use crate::cache_manager::CacheManager;
-use crate::model_config::ModelConfig;
+use crate::cache::manager::CacheManager;
+use crate::config::model::ModelConfig;
 use anyhow::Result;
 use tracing::{debug, info};
 
@@ -54,7 +54,7 @@ impl ConfigCaching {
         let configs_dir = self.cache_manager.configs_dir();
         let config_filename = self.normalize_model_id_for_filename(model_id);
         let config_path = configs_dir.join(config_filename);
-        
+
         config_path.exists()
     }
 
@@ -85,7 +85,7 @@ impl ConfigCaching {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "json") {
                 if let Some(filename) = path.file_stem().and_then(|s| s.to_str()) {
                     // Convert filename back to model ID
                     let model_id = filename.replace("--", "/");
@@ -101,7 +101,7 @@ impl ConfigCaching {
     /// Get cache statistics
     pub fn get_cache_stats(&self) -> Result<CacheStats> {
         let configs_dir = self.cache_manager.configs_dir();
-        
+
         if !configs_dir.exists() {
             return Ok(CacheStats::default());
         }
@@ -113,9 +113,9 @@ impl ConfigCaching {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "json") {
                 stats.cached_configs += 1;
-                
+
                 if let Ok(metadata) = std::fs::metadata(&path) {
                     total_size += metadata.len();
                 }
@@ -139,7 +139,7 @@ impl ConfigCaching {
             let entry = entry?;
             let path = entry.path();
 
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "json") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "json") {
                 std::fs::remove_file(&path)?;
                 cleared_count += 1;
             }

@@ -24,47 +24,61 @@ Our candle-coreml crate provides comprehensive support for Anemll's architecture
 - ✅ **Temperature Sampling**: Configurable generation parameters
 - ✅ **Comprehensive Testing**: Full pipeline validation
 
-### Example Structure
+### Current Examples
+
+All examples have been updated to use the modern UnifiedModelLoader API:
+
 ```
-examples/qwen/
-├── qwen_chat.rs                    # ✅ Interactive chat with UnifiedModelLoader
-├── qwen_multi_component.rs         # 🌟 Full multi-component implementation 
-├── qwen_benchmark.rs               # ✅ Performance benchmarks with UnifiedModelLoader
-├── qwen_performance_benchmark.rs   # ✅ Forward text benchmarking
-├── qwen_demo_patterns.rs           # 📚 Educational patterns demo
-└── README.md                       # This documentation
+examples/
+├── qwen_chat.rs                    # ✅ Interactive chat (recommended)
+├── test_thinking_behavior.rs       # 🧠 Model reasoning evaluation  
+├── proper_quality_test.rs          # 📊 Comprehensive quality testing
+├── compare_loading_approaches.rs   # 📈 API comparison
+├── debug_token_mismatch.rs         # 🔧 Debugging utilities
+├── recommended_api_demo.rs         # ⭐ **START HERE** - Modern API demo
+└── qwen/README.md                  # This documentation
 ```
 
-**Updated with UnifiedModelLoader System:**
-- ✅ **qwen_chat.rs**: Now uses automatic config generation 
-- ✅ **qwen_benchmark.rs**: Updated to use UnifiedModelLoader
-- ✅ **qwen_performance_benchmark.rs**: Updated to use UnifiedModelLoader
-- 📚 **qwen_demo_patterns.rs**: Educational (no changes needed)
-- 🔧 **qwen_multi_component.rs**: Low-level implementation (preserved for learning)
+**Modern API Features:**
+- ✅ **UnifiedModelLoader**: Automatic downloading, config generation, and caching
+- ✅ **`complete_text()`**: Recommended high-level text generation API
+- ✅ **`generate_tokens_topk_temp()`**: Advanced generation with top-k sampling
+- ✅ **Automatic Configuration**: No manual config files needed
+- ✅ **Intelligent Caching**: Models and configs cached automatically
 
 ## 🔧 Usage Examples
 
-### Multi-Component Qwen Chat (With Real Models)
+### Interactive Qwen Chat (Recommended)
 ```bash
-# 🔧 Full Anemll multi-component implementation (requires model download)
-cargo run --example qwen_multi_component
+# Start with the recommended API demo
+cargo run --example recommended_api_demo
 
-# With verbose logging to see component interactions
-cargo run --example qwen_multi_component -- --verbose --temperature 0.8
+# Interactive chat with Qwen models (downloads ~2GB on first run)
+cargo run --example qwen_chat
 
-# Help and options
-cargo run --example qwen_multi_component -- --help
+# With debug logging to see model interactions
+RUST_LOG=debug cargo run --example qwen_chat
 ```
 
-*Note: The multi-component chat requires downloading large model files. If you encounter download issues, ensure your ModelConfig uses explicit file_path values for each component and see CUSTOM_MODEL_GUIDE.md for setup details.*
-
-### Single-Model Interface (Reference)
+### Model Quality and Testing
 ```bash
-# Shows integration patterns for single models
-cargo run --example qwen_chat --help
+# Comprehensive model quality assessment
+cargo run --example proper_quality_test
 
-# Performance benchmarking framework
-cargo run --example qwen_benchmark --help
+# Test model reasoning capabilities
+cargo run --example test_thinking_behavior
+
+# Debug token generation issues
+cargo run --example debug_token_mismatch
+```
+
+### Advanced Usage
+```bash
+# Compare old vs new API approaches
+cargo run --example compare_loading_approaches
+
+# All examples use automatic model downloading and config generation
+# First run downloads models (~2GB), subsequent runs are fast
 ```
 
 ## 🎯 Multi-Component Architecture Details

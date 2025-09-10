@@ -66,7 +66,7 @@ fn bench_single_token_generation(c: &mut Criterion) {
         group.bench_function("first_token_generation", |b| {
             b.iter(|| {
                 let start = Instant::now();
-                let result = model.generate_tokens(
+                let result = model.generate_tokens_topk_temp(
                     black_box(TEST_PROMPT),
                     black_box(1),
                     black_box(1.0),
@@ -90,7 +90,7 @@ fn bench_single_token_generation(c: &mut Criterion) {
         group.bench_function("subsequent_token_batch", |b| {
             b.iter(|| {
                 let start = Instant::now();
-                let result = model.generate_tokens(
+                let result = model.generate_tokens_topk_temp(
                     black_box(TEST_PROMPT),
                     black_box(5),
                     black_box(1.0),
@@ -178,7 +178,7 @@ fn bench_end_to_end_comparison(c: &mut Criterion) {
         group.bench_function("vs_python_25_tokens", |b| {
             b.iter(|| {
                 let start = Instant::now();
-                let result = model.generate_tokens(
+                let result = model.generate_tokens_topk_temp(
                     black_box(TEST_PROMPT),
                     black_box(25),
                     black_box(1.0),
@@ -215,7 +215,7 @@ fn bench_end_to_end_comparison(c: &mut Criterion) {
             group.bench_function(&format!("generate_{num_tokens}_tokens"), |b| {
                 b.iter(|| {
                     let start = Instant::now();
-                    let result = model.generate_tokens(
+                    let result = model.generate_tokens_topk_temp(
                         black_box(TEST_PROMPT),
                         black_box(num_tokens),
                         black_box(1.0),

@@ -201,15 +201,19 @@ mod position_fix_tests {
                 println!("   Different prediction - position fix may have changed something");
             }
 
-            println!("⚠️  INVESTIGATION: Position fix test shows different behavior after refactoring");
-            println!("   Expected: {} ('dog'), Got: {} ('{}')", 
-                     EXPECTED_DOG_TOKEN, 
-                     next_token,
-                     qwen_model.tokenizer()
+            println!(
+                "⚠️  INVESTIGATION: Position fix test shows different behavior after refactoring"
+            );
+            println!(
+                "   Expected: {} ('dog'), Got: {} ('{}')",
+                EXPECTED_DOG_TOKEN,
+                next_token,
+                qwen_model
+                    .tokenizer()
                     .decode(&[next_token as u32], false)
                     .unwrap_or("???".to_string())
             );
-            
+
             // Allow test to pass for now while we investigate
             Ok(())
         }
@@ -257,7 +261,9 @@ mod prediction_tests {
                 let dog_token_ids: Vec<u32> = dog_tokens.get_ids().to_vec();
                 println!("🔍 ' dog' tokenizes to: {dog_token_ids:?}");
             }
-            println!("⚠️  INVESTIGATION: Prediction test shows different behavior after refactoring");
+            println!(
+                "⚠️  INVESTIGATION: Prediction test shows different behavior after refactoring"
+            );
             // Allow test to pass while we investigate the underlying tensor handling issue
         }
 
@@ -289,10 +295,10 @@ mod integration_tests {
 
         // ISSUE: Model is producing " quick quick" instead of "dog"/"lazy"
         // This suggests tensor handling issues after refactoring - investigate!
-        
+
         println!("⚠️  INVESTIGATION: Expected 'dog' or 'lazy', got: '{completion}'");
         println!("This indicates potential tensor/position handling issues after refactoring");
-        
+
         // Temporary assertion to allow test to pass while we investigate the root cause
         assert!(
             !completion.trim().is_empty(),
@@ -314,7 +320,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_state_management_edge_cases -- --ignored
     async fn test_state_management_edge_cases() -> Result<()> {
-    let mut model = create_test_model().await?;
+        let mut model = create_test_model().await?;
 
         // Test multiple state initializations (should not cause conflicts)
         for i in 1..=3 {
@@ -335,7 +341,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_cache_optimization_paths -- --ignored
     async fn test_cache_optimization_paths() -> Result<()> {
-    let mut model = create_test_model().await?;
+        let mut model = create_test_model().await?;
 
         let base_prompt = "The quick brown fox";
 
@@ -360,26 +366,26 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_generation_with_extreme_parameters -- --ignored
     async fn test_generation_with_extreme_parameters() -> Result<()> {
-    let mut model = create_test_model().await?;
+        let mut model = create_test_model().await?;
 
         let prompt = "The weather today is";
 
         // Test with temperature 0.0 (deterministic)
-        let tokens_temp_0 = model.generate_tokens(prompt, 5, 0.0, None)?;
+        let tokens_temp_0 = model.generate_tokens_topk_temp(prompt, 5, 0.0, None)?;
         assert!(
             !tokens_temp_0.is_empty(),
             "No tokens generated with temp 0.0"
         );
 
         // Test with high temperature
-        let tokens_temp_high = model.generate_tokens(prompt, 5, 2.0, None)?;
+        let tokens_temp_high = model.generate_tokens_topk_temp(prompt, 5, 2.0, None)?;
         assert!(
             !tokens_temp_high.is_empty(),
             "No tokens generated with high temp"
         );
 
         // Test with 1 token generation
-        let single_token = model.generate_tokens(prompt, 1, 0.5, None)?;
+        let single_token = model.generate_tokens_topk_temp(prompt, 1, 0.5, None)?;
         assert_eq!(
             single_token.len(),
             1,
@@ -388,7 +394,7 @@ mod extended_coverage_tests {
         );
 
         // Test with many tokens (within reason)
-        let many_tokens = model.generate_tokens(prompt, 30, 0.5, None)?;
+        let many_tokens = model.generate_tokens_topk_temp(prompt, 30, 0.5, None)?;
         assert!(
             !many_tokens.is_empty(),
             "No tokens generated with many token request"
@@ -403,15 +409,15 @@ mod extended_coverage_tests {
     async fn test_custom_configurations() -> Result<()> {
         // Test with UnifiedModelLoader - automatically handles configuration
         let loader = UnifiedModelLoader::new()?;
-    // Ensure the model is available first (downloads if missing)
-    let _ = loader.ensure_model_available(MODEL_ID)?;
+        // Ensure the model is available first (downloads if missing)
+        let _ = loader.ensure_model_available(MODEL_ID)?;
         let mut model = loader.load_model(MODEL_ID)?;
 
         // Test that custom config model works
         let result = model.forward_text("Configuration test");
         match result {
-            Ok(token) => println!("✅ Generated token: {}", token),
-            Err(e) => panic!("Custom config model failed to generate: {}", e),
+            Ok(token) => println!("✅ Generated token: {token}"),
+            Err(e) => panic!("Custom config model failed to generate: {e}"),
         }
 
         println!("✅ Custom configuration tested successfully");
@@ -421,7 +427,7 @@ mod extended_coverage_tests {
     #[tokio::test]
     #[ignore] // Run with: cargo test test_conversation_continuity -- --ignored
     async fn test_conversation_continuity() -> Result<()> {
-    let mut model = create_test_model().await?;
+        let mut model = create_test_model().await?;
 
         // Simulate a conversation flow
         let conversation = [
@@ -482,7 +488,7 @@ async fn test_model_config_system() {
     // Test QwenConfig creation from ModelConfig
     let qwen_config = QwenConfig::from_model_config(default_config);
     assert_eq!(qwen_config.model_config.shapes.batch_size, 1);
-    
+
     // Note: for dynamic model loading, use UnifiedModelLoader instead of builtin configs
 
     println!("✅ Model config system validated");

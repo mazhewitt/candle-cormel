@@ -4,7 +4,7 @@
 //! component role detection. We avoid heuristics and prefer exact values from
 //! the model specification (MLProgram when available).
 
-use crate::model_config::TensorConfig;
+use crate::config::model::TensorConfig;
 use anyhow::{Error as E, Result};
 use std::collections::HashMap;
 use std::path::Path;
@@ -13,6 +13,12 @@ use tracing::debug;
 
 pub struct CoreMLMetadataExtractor;
 
+impl Default for CoreMLMetadataExtractor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CoreMLMetadataExtractor {
     pub fn new() -> Self {
         Self
@@ -20,16 +26,15 @@ impl CoreMLMetadataExtractor {
 
     // Returns: (model_inputs, model_outputs, functions)
     // functions: name -> (inputs, outputs)
+    #[allow(clippy::type_complexity)]
     pub fn extract_full_metadata(
         &self,
         model_path: &Path,
-    ) -> Result<
-        (
-            HashMap<String, TensorConfig>,
-            HashMap<String, TensorConfig>,
-            HashMap<String, (HashMap<String, TensorConfig>, HashMap<String, TensorConfig>)>,
-        ),
-    > {
+    ) -> Result<(
+        HashMap<String, TensorConfig>,
+        HashMap<String, TensorConfig>,
+        HashMap<String, (HashMap<String, TensorConfig>, HashMap<String, TensorConfig>)>,
+    )> {
         self.extract_full_with_coremltools(model_path)
     }
 
@@ -41,16 +46,15 @@ impl CoreMLMetadataExtractor {
         Ok((inputs, outputs))
     }
 
+    #[allow(clippy::type_complexity)]
     fn extract_full_with_coremltools(
         &self,
         model_path: &Path,
-    ) -> Result<
-        (
-            HashMap<String, TensorConfig>,
-            HashMap<String, TensorConfig>,
-            HashMap<String, (HashMap<String, TensorConfig>, HashMap<String, TensorConfig>)>,
-        ),
-    > {
+    ) -> Result<(
+        HashMap<String, TensorConfig>,
+        HashMap<String, TensorConfig>,
+        HashMap<String, (HashMap<String, TensorConfig>, HashMap<String, TensorConfig>)>,
+    )> {
         debug!(
             "Extracting CoreML metadata with coremltools from: {}",
             model_path.display()
@@ -131,20 +135,20 @@ except Exception as e:
 
         let output = Command::new("python3")
             .arg("-c")
-            .arg(&python_script)
+            .arg(python_script)
             .arg(model_path.to_string_lossy().to_string())
             .output()
-            .map_err(|e| E::msg(format!("Failed to run Python script: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to run Python script: {e}")))?;
 
         if !output.status.success() {
             let stderr = String::from_utf8_lossy(&output.stderr);
             debug!("Python coremltools script failed: {}", stderr);
-            return Err(E::msg(format!("Python script failed: {}", stderr)));
+            return Err(E::msg(format!("Python script failed: {stderr}")));
         }
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         let result: serde_json::Value = serde_json::from_str(&stdout)
-            .map_err(|e| E::msg(format!("Failed to parse Python output: {}", e)))?;
+            .map_err(|e| E::msg(format!("Failed to parse Python output: {e}")))?;
 
         if result.get("error").is_some() {
             return Err(E::msg("Python script reported an error"));
@@ -153,12 +157,10 @@ except Exception as e:
         let inputs = self.parse_tensor_configs(result.get("inputs"))?;
         let outputs = self.parse_tensor_configs(result.get("outputs"))?;
 
+        #[allow(clippy::type_complexity)]
         let mut functions_map: HashMap<
             String,
-            (
-                HashMap<String, TensorConfig>,
-                HashMap<String, TensorConfig>,
-            ),
+            (HashMap<String, TensorConfig>, HashMap<String, TensorConfig>),
         > = HashMap::new();
         if let Some(funcs) = result.get("functions").and_then(|v| v.as_object()) {
             for (fname, fval) in funcs {

@@ -133,7 +133,10 @@ impl QwenChatWrapper {
         } else {
             // Multi-token mode - prefer full decode to avoid per-token BPE artifacts
             println!("🚀 Multi-token mode: Using top-k + temperature sampling");
-            println!("📝 Input: '{prompt}' (top_k={:?}, temp={:.2})", self.top_k, self.temperature);
+            println!(
+                "📝 Input: '{prompt}' (top_k={:?}, temp={:.2})",
+                self.top_k, self.temperature
+            );
 
             // Prefer top-k + temperature sampling to avoid repetitive greedy outputs
             // Normalize prompt (ensure trailing space in plain mode to reduce leading artifact join)
@@ -206,14 +209,14 @@ fn load_model_with_unified_loader(args: &Args) -> Result<QwenModel> {
     if let Some(_path) = &args.model_path {
         return Err(E::msg(
             "Local model paths not supported with UnifiedModelLoader.\n\
-            Use the --model-id option with HuggingFace model IDs instead."
+            Use the --model-id option with HuggingFace model IDs instead.",
         ));
     }
 
     if args.local {
         return Err(E::msg(
             "Local model loading not supported with UnifiedModelLoader.\n\
-            Use the --model-id option with HuggingFace model IDs instead."
+            Use the --model-id option with HuggingFace model IDs instead.",
         ));
     }
 
@@ -225,8 +228,9 @@ fn load_model_with_unified_loader(args: &Args) -> Result<QwenModel> {
     // Use the new UnifiedModelLoader
     let loader = UnifiedModelLoader::new()
         .map_err(|e| E::msg(format!("Failed to create UnifiedModelLoader: {e}")))?;
-    
-    let model = loader.load_model(&args.model_id)
+
+    let model = loader
+        .load_model(&args.model_id)
         .map_err(|e| E::msg(format!("Failed to load model: {e}")))?;
 
     println!("✅ Model loaded successfully");
@@ -260,7 +264,11 @@ fn run_qwen_chat(args: &Args) -> Result<()> {
         args.temperature,
         args.max_tokens,
         args.single_token,
-        if args.top_k == 0 { None } else { Some(args.top_k) },
+        if args.top_k == 0 {
+            None
+        } else {
+            Some(args.top_k)
+        },
     );
 
     // Interactive chat loop

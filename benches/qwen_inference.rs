@@ -193,7 +193,7 @@ fn bench_end_to_end_generation(c: &mut Criterion) {
                 &num_tokens,
                 |b, &num_tokens| {
                     b.iter(|| {
-                        let result = model.generate_tokens(
+                        let result = model.generate_tokens_topk_temp(
                             black_box(TEST_PROMPT),
                             black_box(num_tokens as usize),
                             black_box(1.0),  // temperature
@@ -209,7 +209,7 @@ fn bench_end_to_end_generation(c: &mut Criterion) {
         group.bench_function("vs_python_baseline", |b| {
             b.iter(|| {
                 let start = std::time::Instant::now();
-                let result = model.generate_tokens(
+                let result = model.generate_tokens_topk_temp(
                     black_box(TEST_PROMPT),
                     black_box(25),
                     black_box(1.0),

@@ -6,8 +6,8 @@
 use crate::qwen::naming::ModelNamingConfig;
 use crate::ModelConfig;
 use candle_core::{Device, Error as CandleError};
-use tracing::debug;
 use std::collections::HashMap;
+use tracing::debug;
 
 // NOTE: These constants are deprecated and will be removed.
 // Use ModelConfig system instead for dynamic shape configuration.
@@ -38,7 +38,6 @@ pub struct QwenConfig {
     pub context_length: usize,
 }
 
-
 impl QwenConfig {
     /// Create a QwenConfig from a ModelConfig (recommended approach)
     pub fn from_model_config(model_config: ModelConfig) -> Self {
@@ -64,7 +63,8 @@ impl QwenConfig {
         &self,
         tokens: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_embeddings_input_tensor(tokens, &self.device)
+        self.model_config
+            .create_embeddings_input_tensor(tokens, &self.device)
     }
 
     /// Create position IDs tensor for FFN prefill with proper shape
@@ -72,7 +72,8 @@ impl QwenConfig {
         &self,
         positions: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_ffn_position_ids_tensor(positions, &self.device)
+        self.model_config
+            .create_ffn_position_ids_tensor(positions, &self.device)
     }
 
     /// Create causal mask tensor for FFN with proper shape
@@ -81,7 +82,8 @@ impl QwenConfig {
         batch_size: usize,
         context_length: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_ffn_causal_mask_tensor(batch_size, context_length, &self.device)
+        self.model_config
+            .create_ffn_causal_mask_tensor(batch_size, context_length, &self.device)
     }
 
     /// Create single token hidden states tensor for LM head
@@ -89,7 +91,8 @@ impl QwenConfig {
         &self,
         tokens: &[i64],
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_single_token_hidden_states(tokens, &self.device)
+        self.model_config
+            .create_single_token_hidden_states(tokens, &self.device)
     }
 
     /// Create position IDs tensor for inference (single position)
@@ -97,7 +100,8 @@ impl QwenConfig {
         &self,
         position: usize,
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_infer_position_ids_tensor(position as i64, &self.device)
+        self.model_config
+            .create_infer_position_ids_tensor(position as i64, &self.device)
     }
 
     /// Create causal mask tensor for inference
@@ -277,31 +281,29 @@ impl QwenConfig {
             self.create_infer_causal_mask_tensor(position, context_length)
         }
     }
-    
+
     /// Create current position tensor for FFN (delegates to ModelConfig)
     pub fn create_current_pos_tensor(
         &self,
         position: i64,
     ) -> Result<candle_core::Tensor, CandleError> {
-        self.model_config.create_current_pos_tensor(position, &self.device)
+        self.model_config
+            .create_current_pos_tensor(position, &self.device)
     }
 
     /// Create a QwenConfig for a known model ID (deprecated - use UnifiedModelLoader instead)
-    #[deprecated(note = "Use UnifiedModelLoader to load models dynamically instead of hardcoded configs")]
+    #[deprecated(
+        note = "Use UnifiedModelLoader to load models dynamically instead of hardcoded configs"
+    )]
     pub fn for_model_id(model_id: &str) -> Result<Self, CandleError> {
         // This method is deprecated. Users should use UnifiedModelLoader which automatically
         // downloads models and generates configs dynamically.
         Err(CandleError::Msg(format!(
-            "for_model_id is deprecated. Use UnifiedModelLoader to load model '{}' dynamically",
-            model_id
+            "for_model_id is deprecated. Use UnifiedModelLoader to load model '{model_id}' dynamically"
         )))
     }
 
     /// Create a QwenConfig for standard qwen models (legacy method)
-    
-
-    
-
     /// Set custom naming configuration
     pub fn with_naming(mut self, naming: ModelNamingConfig) -> Self {
         self.naming = naming;
@@ -356,21 +358,21 @@ impl Default for QwenConfig {
         // Minimal default ModelConfig with standard Qwen shapes and no components.
         // Loading a model without an explicit config will still fail later if component
         // file paths are required, but providing Default maintains API compatibility.
-        let model_config = crate::model_config::ModelConfig {
-            model_info: crate::model_config::ModelInfo {
+        let model_config = crate::config::model::ModelConfig {
+            model_info: crate::config::model::ModelInfo {
                 model_id: Some("default/qwen".to_string()),
                 path: None,
                 model_type: "qwen".to_string(),
                 discovered_at: None,
             },
-            shapes: crate::model_config::ShapeConfig {
+            shapes: crate::config::model::ShapeConfig {
                 batch_size: 1,
-                context_length: QWEN_CONTEXT_LENGTH,
-                hidden_size: QWEN_HIDDEN_SIZE,
-                vocab_size: QWEN_VOCAB_SIZE,
+                context_length: 512, // Default context length for standard models
+                hidden_size: 1024,   // Default hidden size for standard models
+                vocab_size: 151936,  // Default vocab size for standard models
             },
             components: HashMap::new(),
-            naming: crate::model_config::NamingConfig {
+            naming: crate::config::model::NamingConfig {
                 embeddings_pattern: None,
                 ffn_prefill_pattern: None,
                 ffn_infer_pattern: None,
@@ -397,8 +399,10 @@ impl Default for QwenConfig {
 }
 #[cfg(test)]
 mod tests {
+    use crate::config::model::{
+        ComponentConfig, ModelConfig, ModelInfo, NamingConfig, ShapeConfig, TensorConfig,
+    };
     use crate::qwen::config::QwenConfig;
-    use crate::model_config::{ComponentConfig, ModelConfig, ModelInfo, NamingConfig, ShapeConfig, TensorConfig};
     use std::collections::HashMap;
 
     fn create_test_model_config_standard() -> ModelConfig {

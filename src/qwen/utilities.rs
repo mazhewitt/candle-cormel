@@ -7,7 +7,7 @@ use crate::qwen::model::QwenModel;
 use crate::utils::multi_component;
 use candle_core::{Error as CandleError, Tensor};
 use std::collections::HashMap;
-use tracing::{debug, trace};
+use tracing::trace;
 
 impl QwenModel {
     /// Adapt hidden_states for infer phase (slice to last token if config expects seq_len=1).

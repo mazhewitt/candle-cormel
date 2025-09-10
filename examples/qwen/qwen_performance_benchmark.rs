@@ -15,7 +15,7 @@ async fn main() -> Result<()> {
     let model_id = "anemll/anemll-Qwen-Qwen3-0.6B-LUT888-ctx512_0.3.4";
     println!("📥 Loading model with UnifiedModelLoader: {model_id}");
     println!("🤖 Automatic config generation and shape detection");
-    
+
     let loader = UnifiedModelLoader::new()?;
     let mut qwen_model = loader.load_model(model_id)?;
     println!("✅ Model loaded successfully");

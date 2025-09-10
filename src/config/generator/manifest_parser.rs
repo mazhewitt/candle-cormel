@@ -2,10 +2,10 @@
 //!
 //! Handles different CoreML package formats and function-based components
 
-use crate::model_config::{ComponentConfig, TensorConfig};
-use super::schema_extractor::{ComponentRole, SchemaExtractor};
 use super::coreml_metadata::CoreMLMetadataExtractor;
 use super::file_discovery::ManifestSource;
+use super::schema_extractor::{ComponentRole, SchemaExtractor};
+use crate::config::model::{ComponentConfig, TensorConfig};
 use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -13,6 +13,12 @@ use std::path::Path;
 use tracing::{debug, trace};
 
 pub struct ManifestParser;
+
+impl Default for ManifestParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ManifestParser {
     pub fn new() -> Self {
@@ -50,7 +56,10 @@ impl ManifestParser {
         model_path: &Path,
         schema_extractor: &SchemaExtractor,
     ) -> Result<Vec<(String, ComponentConfig)>> {
-        debug!("📦 Parsing from model.mlmodel file: {}", model_path.display());
+        debug!(
+            "📦 Parsing from model.mlmodel file: {}",
+            model_path.display()
+        );
 
         // Use CoreML metadata extractor to get per-function tensor signatures when available
         let metadata_extractor = CoreMLMetadataExtractor::new();
@@ -74,8 +83,7 @@ impl ManifestParser {
                         }
 
                         let component_name = self.role_to_component_name(&role);
-                        let mut functions_vec = Vec::new();
-                        functions_vec.push(fname);
+                        let functions_vec = vec![fname];
                         let config = ComponentConfig {
                             file_path: Some(package_path.to_string_lossy().to_string()),
                             inputs,
@@ -97,7 +105,7 @@ impl ManifestParser {
                         let count = seen.entry(name.clone()).or_insert(0);
                         if *count > 0 {
                             // append index
-                            name.push_str(&format!("_{}", count));
+                            name.push_str(&format!("_{count}"));
                         }
                         *count += 1;
                     }
@@ -119,9 +127,7 @@ impl ManifestParser {
                 if matches!(role, ComponentRole::Unknown)
                     || (model_inputs.is_empty() && model_outputs.is_empty())
                 {
-                    debug!(
-                        "⚠️ Model-level detection unknown/empty, using filename fallback"
-                    );
+                    debug!("⚠️ Model-level detection unknown/empty, using filename fallback");
                     return self.parse_package_filename_only(package_path, schema_extractor);
                 }
 
@@ -198,10 +204,13 @@ impl ManifestParser {
             functions: Vec::new(),
             input_order: None,
         };
-        
+
         let component_name = self.role_to_component_name(&role);
-        debug!("🏷️ Filename-only detection: {} -> {}", filename, component_name);
-        
+        debug!(
+            "🏷️ Filename-only detection: {} -> {}",
+            filename, component_name
+        );
+
         Ok(vec![(component_name, component_config)])
     }
 
@@ -242,27 +251,32 @@ impl ManifestParser {
             components.push((component_name, component_config));
         } else {
             debug!("⚠️ Failed to extract from model.mlmodel, falling back to manifest parsing");
-            
+
             // Fall back to manifest-based extraction
-            if let Some(function_components) = self.extract_function_components_with_roles(package_path, manifest, schema_extractor)? {
+            if let Some(function_components) = self.extract_function_components_with_roles(
+                package_path,
+                manifest,
+                schema_extractor,
+            )? {
                 components.extend(function_components);
             } else {
                 // Fall back to single component with role detection
                 let component_config = self.create_base_component(package_path, manifest)?;
                 let inputs = &component_config.inputs;
                 let outputs = &component_config.outputs;
-                
+
                 // Try tensor-based detection first
                 let mut role = schema_extractor.detect_component_role(inputs, outputs);
-                
+
                 // If tensor detection fails, try filename-based detection
                 if role == ComponentRole::Unknown {
-                    let filename = package_path.file_name()
+                    let filename = package_path
+                        .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("unknown");
                     role = schema_extractor.detect_component_role_from_filename(filename);
                 }
-                
+
                 let component_name = self.role_to_component_name(&role);
                 components.push((component_name, component_config));
             }
@@ -281,7 +295,9 @@ impl ManifestParser {
         let mut components = Vec::new();
 
         // First try to extract function-based components
-        if let Some(function_components) = self.extract_function_components(package_path, manifest, component_name)? {
+        if let Some(function_components) =
+            self.extract_function_components(package_path, manifest, component_name)?
+        {
             components.extend(function_components);
         } else {
             // Fall back to single component
@@ -299,21 +315,23 @@ impl ManifestParser {
         manifest: &Value,
         base_component_name: &str,
     ) -> Result<Option<Vec<(String, ComponentConfig)>>> {
-        let functions = manifest.get(0).and_then(|m| m.get("functions").and_then(|f| f.as_array()));
-        
+        let functions = manifest
+            .get(0)
+            .and_then(|m| m.get("functions").and_then(|f| f.as_array()));
+
         let Some(funcs) = functions else {
             return Ok(None);
         };
 
         let mut function_components = Vec::new();
 
-    for function in funcs {
+        for function in funcs {
             if let Some(function_name) = function.get("name").and_then(|n| n.as_str()) {
-        let component_config = self.create_function_component(package_path, function)?;
-                
+                let component_config = self.create_function_component(package_path, function)?;
+
                 // Create component name: either "componentname_functionname" or just "functionname"
                 let component_key = if funcs.len() > 1 {
-                    format!("{}_{}", base_component_name, function_name)
+                    format!("{base_component_name}_{function_name}")
                 } else {
                     function_name.to_string()
                 };
@@ -324,7 +342,7 @@ impl ManifestParser {
                     component_config.inputs.keys().collect::<Vec<_>>(),
                     component_config.outputs.keys().collect::<Vec<_>>()
                 );
-                
+
                 function_components.push((component_key, component_config));
             }
         }
@@ -337,7 +355,11 @@ impl ManifestParser {
     }
 
     /// Create a base component configuration from manifest
-    fn create_base_component(&self, package_path: &Path, manifest: &Value) -> Result<ComponentConfig> {
+    fn create_base_component(
+        &self,
+        package_path: &Path,
+        manifest: &Value,
+    ) -> Result<ComponentConfig> {
         let inputs = self.extract_inputs_from_manifest(manifest)?;
         let outputs = self.extract_outputs_from_manifest(manifest)?;
 
@@ -351,15 +373,26 @@ impl ManifestParser {
     }
 
     /// Create a function-specific component configuration
-    fn create_function_component(&self, package_path: &Path, function: &Value) -> Result<ComponentConfig> {
-        let function_name = function.get("name")
+    fn create_function_component(
+        &self,
+        package_path: &Path,
+        function: &Value,
+    ) -> Result<ComponentConfig> {
+        let function_name = function
+            .get("name")
             .and_then(|n| n.as_str())
             .unwrap_or("unknown");
 
         let empty_vec: Vec<Value> = Vec::new();
-        let in_arr = function.get("inputSchema").and_then(|s| s.as_array()).unwrap_or(&empty_vec);
-        let out_arr = function.get("outputSchema").and_then(|s| s.as_array()).unwrap_or(&empty_vec);
-        
+        let in_arr = function
+            .get("inputSchema")
+            .and_then(|s| s.as_array())
+            .unwrap_or(&empty_vec);
+        let out_arr = function
+            .get("outputSchema")
+            .and_then(|s| s.as_array())
+            .unwrap_or(&empty_vec);
+
         let inputs = self.parse_tensor_schema(in_arr)?;
         let outputs = self.parse_tensor_schema(out_arr)?;
 
@@ -373,11 +406,17 @@ impl ManifestParser {
     }
 
     /// Extract inputs using schema extractor pattern
-    fn extract_inputs_from_manifest(&self, manifest: &Value) -> Result<HashMap<String, TensorConfig>> {
+    fn extract_inputs_from_manifest(
+        &self,
+        manifest: &Value,
+    ) -> Result<HashMap<String, TensorConfig>> {
         // This is a simplified version - in practice you'd use SchemaExtractor
         let mut inputs = HashMap::new();
 
-        if let Some(input_schema) = manifest.get(0).and_then(|m| m.get("inputSchema").and_then(|s| s.as_array())) {
+        if let Some(input_schema) = manifest
+            .get(0)
+            .and_then(|m| m.get("inputSchema").and_then(|s| s.as_array()))
+        {
             inputs = self.parse_tensor_schema(input_schema)?;
         }
 
@@ -385,11 +424,17 @@ impl ManifestParser {
     }
 
     /// Extract outputs using schema extractor pattern  
-    fn extract_outputs_from_manifest(&self, manifest: &Value) -> Result<HashMap<String, TensorConfig>> {
+    fn extract_outputs_from_manifest(
+        &self,
+        manifest: &Value,
+    ) -> Result<HashMap<String, TensorConfig>> {
         // This is a simplified version - in practice you'd use SchemaExtractor
         let mut outputs = HashMap::new();
 
-        if let Some(output_schema) = manifest.get(0).and_then(|m| m.get("outputSchema").and_then(|s| s.as_array())) {
+        if let Some(output_schema) = manifest
+            .get(0)
+            .and_then(|m| m.get("outputSchema").and_then(|s| s.as_array()))
+        {
             outputs = self.parse_tensor_schema(output_schema)?;
         }
 
@@ -399,13 +444,13 @@ impl ManifestParser {
     /// Parse tensor schema array into tensor configs
     fn parse_tensor_schema(&self, schema: &[Value]) -> Result<HashMap<String, TensorConfig>> {
         let mut configs = HashMap::new();
-        
+
         for tensor_def in schema {
             if let Some(tensor_config) = self.parse_single_tensor(tensor_def)? {
                 configs.insert(tensor_config.name.clone(), tensor_config);
             }
         }
-        
+
         Ok(configs)
     }
 
@@ -446,7 +491,7 @@ impl ManifestParser {
                 Err(_) => return Err(anyhow::Error::msg("Failed to parse tensor dimension")),
             }
         }
-        
+
         Ok(dims)
     }
 
@@ -457,17 +502,19 @@ impl ManifestParser {
         manifest: &Value,
         schema_extractor: &SchemaExtractor,
     ) -> Result<Option<Vec<(String, ComponentConfig)>>> {
-        let functions = manifest.get(0).and_then(|m| m.get("functions").and_then(|f| f.as_array()));
-        
+        let functions = manifest
+            .get(0)
+            .and_then(|m| m.get("functions").and_then(|f| f.as_array()));
+
         let Some(funcs) = functions else {
             return Ok(None);
         };
 
         let mut function_components = Vec::new();
 
-    for function in funcs {
+        for function in funcs {
             if let Some(function_name) = function.get("name").and_then(|n| n.as_str()) {
-        let component_config = self.create_function_component(package_path, function)?;
+                let component_config = self.create_function_component(package_path, function)?;
 
                 // Detect component role from tensor signatures
                 let inputs = &component_config.inputs;
@@ -485,9 +532,9 @@ impl ManifestParser {
 
                 // Use metadata-driven component name instead of function name
                 let component_name = match role {
-                    ComponentRole::FfnPrefill => format!("ffn_{}", function_name),  // e.g., "ffn_prefill"
-                    ComponentRole::FfnInfer => format!("ffn_{}", function_name),    // e.g., "ffn_infer"
-                    ComponentRole::FfnUnified => "ffn_prefill".to_string(),        // Unified functions go to prefill
+                    ComponentRole::FfnPrefill => format!("ffn_{function_name}"), // e.g., "ffn_prefill"
+                    ComponentRole::FfnInfer => format!("ffn_{function_name}"), // e.g., "ffn_infer"
+                    ComponentRole::FfnUnified => "ffn_prefill".to_string(), // Unified functions go to prefill
                     _ => self.role_to_component_name(&role),
                 };
 
@@ -498,7 +545,7 @@ impl ManifestParser {
                     component_config.inputs.keys().collect::<Vec<_>>(),
                     component_config.outputs.keys().collect::<Vec<_>>()
                 );
-                
+
                 function_components.push((component_name, component_config));
             }
         }
@@ -516,7 +563,7 @@ impl ManifestParser {
             ComponentRole::Embeddings => "embeddings".to_string(),
             ComponentRole::FfnPrefill => "ffn_prefill".to_string(),
             ComponentRole::FfnInfer => "ffn_infer".to_string(),
-            ComponentRole::FfnUnified => "ffn_prefill".to_string(),  // Unified functions go to prefill
+            ComponentRole::FfnUnified => "ffn_prefill".to_string(), // Unified functions go to prefill
             ComponentRole::LmHead => "lm_head".to_string(),
             ComponentRole::Unknown => "unknown".to_string(),
         }
@@ -528,12 +575,12 @@ impl ManifestParser {
         // Check for split FFN architecture (separate ffn_prefill and ffn_infer components)
         let has_ffn_prefill = components.iter().any(|(name, _)| name == "ffn_prefill");
         let has_ffn_infer = components.iter().any(|(name, _)| name == "ffn_infer");
-        
+
         if has_ffn_prefill && has_ffn_infer {
             trace!("🔧 Found separate ffn_prefill and ffn_infer components - using split mode");
             return "split".to_string();
         }
-        
+
         // Check for ANEMLL unified FFN pattern (FFN_PF in filename)
         // This indicates a single model that handles both prefill and infer modes
         let has_ffn_pf_pattern = components.iter().any(|(_, config)| {
@@ -548,12 +595,12 @@ impl ManifestParser {
                 false
             }
         });
-        
+
         if has_ffn_pf_pattern {
             debug!("🔧 Found ANEMLL FFN_PF pattern in filename - using unified mode");
             return "unified".to_string();
         }
-        
+
         // Check for unified FFN (single component with multiple functions)
         let multi_function_components = components
             .iter()
@@ -561,12 +608,15 @@ impl ManifestParser {
             .count();
 
         if multi_function_components > 0 {
-            debug!("🔧 Found {} multi-function components - using unified mode", multi_function_components);
+            debug!(
+                "🔧 Found {} multi-function components - using unified mode",
+                multi_function_components
+            );
             "unified".to_string()
         } else {
             // Check if we have any FFN-like component
             let has_ffn_like = components.iter().any(|(name, _)| name.starts_with("ffn"));
-            
+
             if has_ffn_like {
                 debug!("🔧 Found FFN component(s) but no clear split pattern - defaulting to unified mode");
                 "unified".to_string()
@@ -578,13 +628,14 @@ impl ManifestParser {
     }
 
     /// Extract tensor signatures directly from model.mlmodel file using CoreML metadata
+    #[allow(clippy::type_complexity)]
     fn extract_tensor_signatures_from_model(
         &self,
         package_path: &Path,
     ) -> Result<Option<(HashMap<String, TensorConfig>, HashMap<String, TensorConfig>)>> {
         // Look for the model.mlmodel file within the package
         let model_file_path = package_path.join("Data/com.apple.CoreML/model.mlmodel");
-        
+
         if !model_file_path.exists() {
             // Try alternative path structure
             let alt_model_path = package_path.join("model.mlmodel");
@@ -594,13 +645,20 @@ impl ManifestParser {
             }
         }
 
-        debug!("🔍 Attempting to extract metadata from: {}", model_file_path.display());
+        debug!(
+            "🔍 Attempting to extract metadata from: {}",
+            model_file_path.display()
+        );
 
         // Use CoreML metadata extractor
         let extractor = CoreMLMetadataExtractor::new();
         match extractor.extract_tensor_signatures(&model_file_path) {
             Ok((inputs, outputs)) => {
-                debug!("✅ Successfully extracted {} inputs and {} outputs", inputs.len(), outputs.len());
+                debug!(
+                    "✅ Successfully extracted {} inputs and {} outputs",
+                    inputs.len(),
+                    outputs.len()
+                );
                 Ok(Some((inputs, outputs)))
             }
             Err(e) => {

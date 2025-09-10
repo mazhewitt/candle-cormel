@@ -1,6 +1,6 @@
 //! Core CoreML model implementation
 
-use crate::config::Config;
+use crate::config::basic::Config;
 use crate::state::CoreMLState;
 
 #[cfg(target_os = "macos")]
@@ -84,9 +84,8 @@ impl CoreMLModel {
             }
 
             autoreleasepool(|_| {
-                let url = unsafe {
-                    NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()))
-                };
+                let url =
+                    unsafe { NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy())) };
 
                 // Helper: load from URL with or without configuration (preserve function_name)
                 unsafe fn load_with_config(
@@ -97,17 +96,16 @@ impl CoreMLModel {
                         let ml_cfg = MLModelConfiguration::new();
                         let ns_name = NSString::from_str(func);
                         ml_cfg.setFunctionName(Some(&ns_name));
-                        MLModel::modelWithContentsOfURL_configuration_error(url, &ml_cfg)
-                            .map_err(|e| {
+                        MLModel::modelWithContentsOfURL_configuration_error(url, &ml_cfg).map_err(
+                            |e| {
                                 CandleError::Msg(format!(
                                     "Failed to load CoreML model with configuration: {e:?}"
                                 ))
-                            })
+                            },
+                        )
                     } else {
                         MLModel::modelWithContentsOfURL_error(url).map_err(|e| {
-                            CandleError::Msg(format!(
-                                "Failed to load CoreML model: {e:?}"
-                            ))
+                            CandleError::Msg(format!("Failed to load CoreML model: {e:?}"))
                         })
                     }
                 }
@@ -119,8 +117,8 @@ impl CoreMLModel {
                     .and_then(|s| s.to_str())
                     .unwrap_or_default()
                     .to_ascii_lowercase();
-                let looks_like_modelc = ext == "mlmodelc"
-                    || (is_dir && path.to_string_lossy().ends_with(".mlmodelc"));
+                let looks_like_modelc =
+                    ext == "mlmodelc" || (is_dir && path.to_string_lossy().ends_with(".mlmodelc"));
                 let looks_like_package = ext == "mlpackage"
                     || (is_dir && path.to_string_lossy().ends_with(".mlpackage"));
                 // Special-case: some packages are folders with Data/com.apple.CoreML/model.mlmodel
@@ -137,10 +135,7 @@ impl CoreMLModel {
                 if looks_like_modelc {
                     match unsafe { load_with_config(&url, function_name) } {
                         Ok(model) => {
-                            info!(
-                                "Model loaded in {:.1}s",
-                                load_start.elapsed().as_secs_f32()
-                            );
+                            info!("Model loaded in {:.1}s", load_start.elapsed().as_secs_f32());
                             return Ok(CoreMLModel {
                                 inner: model,
                                 config: config.clone(),
@@ -167,10 +162,7 @@ impl CoreMLModel {
                 // source (.mlmodel/.mlpackage), try compiling then load the compiled URL.
                 match unsafe { load_with_config(&url, function_name) } {
                     Ok(model) => {
-                        info!(
-                            "Model loaded in {:.1}s",
-                            load_start.elapsed().as_secs_f32()
-                        );
+                        info!("Model loaded in {:.1}s", load_start.elapsed().as_secs_f32());
                         Ok(CoreMLModel {
                             inner: model,
                             config: config.clone(),

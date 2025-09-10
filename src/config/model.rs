@@ -6,11 +6,11 @@
 //! for known models.
 
 use anyhow::{Context, Result};
+use candle_core::{Device, Error as CandleError, Tensor};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::Path;
 use tracing::{debug, trace};
-use candle_core::{Device, Error as CandleError, Tensor};
 
 /// Complete model configuration including shapes, components, and naming patterns
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -126,9 +126,6 @@ impl ModelConfig {
 
         Ok(())
     }
-
-
-    
 
     /// Get the shape configuration for a specific component and tensor
     pub fn get_tensor_shape(
@@ -367,7 +364,7 @@ impl ModelConfig {
                 // If the model expects a fixed sequence length > 1, it needs full-sequence prefill
                 let expects_full =
                     hs.shape.len() == 3 && hs.shape.get(1).is_some_and(|&seq_len| seq_len > 1);
-        trace!(
+                trace!(
                     "🔍 expects_full_sequence_prefill: shape={:?}, len={}, dim[1]={:?}, result={}",
                     hs.shape,
                     hs.shape.len(),
@@ -377,19 +374,20 @@ impl ModelConfig {
                 return expects_full;
             }
         }
-    trace!("🔍 expects_full_sequence_prefill: no ffn_prefill or hidden_states found, returning false");
+        trace!("🔍 expects_full_sequence_prefill: no ffn_prefill or hidden_states found, returning false");
         false
     }
 
     // Tensor Creation Methods (moved from QwenConfig for consolidation)
-    
+
     /// Create embeddings input tensor with proper shape from configuration
     pub fn create_embeddings_input_tensor(
         &self,
         tokens: &[i64],
         device: &Device,
     ) -> Result<Tensor, CandleError> {
-        let expected_shape = self.embeddings_input_shape()
+        let expected_shape = self
+            .embeddings_input_shape()
             .ok_or_else(|| CandleError::Msg("No embeddings input shape found".to_string()))?;
         let expected_len = expected_shape[1]; // [batch, seq_len] -> seq_len
 
@@ -412,15 +410,16 @@ impl ModelConfig {
     ) -> Result<Tensor, CandleError> {
         let expected_shape = self
             .get_tensor_shape("ffn_prefill", "position_ids", true)
-            .ok_or_else(|| CandleError::Msg("No FFN prefill position_ids shape found".to_string()))?;
+            .ok_or_else(|| {
+                CandleError::Msg("No FFN prefill position_ids shape found".to_string())
+            })?;
 
         // Heuristic: some manifests report position_ids length as [1] even for prefill.
         // When that happens, derive the true sequence length from other known shapes.
         let mut expected_len = expected_shape[0];
         if expected_len == 1 {
             // Prefer prefill hidden_states seq_len if available and > 1
-            if let Some(hs_shape) = self.get_tensor_shape("ffn_prefill", "hidden_states", true)
-            {
+            if let Some(hs_shape) = self.get_tensor_shape("ffn_prefill", "hidden_states", true) {
                 if hs_shape.len() == 3 && hs_shape[1] > 1 {
                     expected_len = hs_shape[1];
                 }
@@ -437,7 +436,7 @@ impl ModelConfig {
         }
 
         // Create position sequence up to expected length
-    let mut position_ids = Vec::with_capacity(expected_len);
+        let mut position_ids = Vec::with_capacity(expected_len);
         for i in 0..expected_len {
             if i < positions.len() {
                 position_ids.push(positions[i]);
@@ -457,30 +456,29 @@ impl ModelConfig {
         device: &Device,
     ) -> Result<Tensor, CandleError> {
         // Prefer explicit shape from config; otherwise synthesize a reasonable default
-        let expected_shape_vec = if let Some(shape) =
-            self.get_tensor_shape("ffn_prefill", "causal_mask", true)
-        {
-            shape.clone()
-        } else {
-            // Derive a default square mask [1,1,seq_len,seq_len]
-            let mut seq_len = 0usize;
-            if let Some(hs) = self.get_tensor_shape("ffn_prefill", "hidden_states", true) {
-                if hs.len() == 3 && hs[1] > 0 {
-                    seq_len = hs[1];
-                }
-            }
-            if seq_len == 0 {
-                if let Some(emb) = self.embeddings_input_shape() {
-                    if emb.len() == 2 && emb[1] > 0 {
-                        seq_len = emb[1];
+        let expected_shape_vec =
+            if let Some(shape) = self.get_tensor_shape("ffn_prefill", "causal_mask", true) {
+                shape.clone()
+            } else {
+                // Derive a default square mask [1,1,seq_len,seq_len]
+                let mut seq_len = 0usize;
+                if let Some(hs) = self.get_tensor_shape("ffn_prefill", "hidden_states", true) {
+                    if hs.len() == 3 && hs[1] > 0 {
+                        seq_len = hs[1];
                     }
                 }
-            }
-            if seq_len == 0 {
-                seq_len = self.shapes.context_length;
-            }
-            vec![1, 1, seq_len, seq_len]
-        };
+                if seq_len == 0 {
+                    if let Some(emb) = self.embeddings_input_shape() {
+                        if emb.len() == 2 && emb[1] > 0 {
+                            seq_len = emb[1];
+                        }
+                    }
+                }
+                if seq_len == 0 {
+                    seq_len = self.shapes.context_length;
+                }
+                vec![1, 1, seq_len, seq_len]
+            };
 
         let mask_rows = expected_shape_vec[2];
         let mask_context_length = expected_shape_vec[3];
@@ -492,7 +490,7 @@ impl ModelConfig {
                 mask_data[i * mask_context_length + j] = 0.0;
             }
         }
-        
+
         Tensor::from_vec(
             mask_data,
             (
@@ -555,7 +553,6 @@ impl ModelConfig {
         Tensor::from_vec(vec![position], (1,), device)
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -747,6 +744,4 @@ mod tests {
         invalid_shapes.shapes.batch_size = 0;
         assert!(invalid_shapes.validate().is_err());
     }
-
-   
 }

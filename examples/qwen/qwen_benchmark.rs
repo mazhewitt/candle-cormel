@@ -246,18 +246,19 @@ fn run_benchmark(args: &Args) -> Result<()> {
     // Load Qwen model with UnifiedModelLoader
     println!("🔄 Loading Qwen model with UnifiedModelLoader...");
     println!("🤖 Automatic config generation and shape detection");
-    
+
     if args.local {
         return Err(E::msg(
             "Local model loading not supported with UnifiedModelLoader.\n\
-            Use HuggingFace model IDs instead."
+            Use HuggingFace model IDs instead.",
         ));
     }
 
     let loader = UnifiedModelLoader::new()
         .map_err(|e| E::msg(format!("Failed to create UnifiedModelLoader: {e}")))?;
-    
-    let model = loader.load_model(&args.model_id)
+
+    let model = loader
+        .load_model(&args.model_id)
         .map_err(|e| E::msg(format!("Failed to load model: {e}")))?;
 
     let mut benchmark = QwenBenchmark::new(model);

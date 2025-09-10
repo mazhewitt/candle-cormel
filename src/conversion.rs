@@ -5,7 +5,7 @@ use candle_core::{Device, Error as CandleError, Tensor};
 #[cfg(target_os = "macos")]
 use half::f16;
 #[cfg(target_os = "macos")]
-use tracing::{debug, trace};
+use tracing::trace;
 
 #[cfg(target_os = "macos")]
 use objc2_core_ml::{MLMultiArray, MLMultiArrayDataType};
@@ -92,7 +92,8 @@ pub fn convert_mlmultiarray_to_tensor(
                     // For other unknown types, try floatValue as fallback
                     trace!(
                         "Unknown MLMultiArray data type: {:?} (raw: {}), using floatValue fallback",
-                        data_type, data_type_raw
+                        data_type,
+                        data_type_raw
                     );
 
                     for i in 0..count {

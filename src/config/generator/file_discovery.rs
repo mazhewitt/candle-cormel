@@ -22,6 +22,12 @@ pub enum ManifestSource {
 
 pub struct FileDiscovery;
 
+impl Default for FileDiscovery {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl FileDiscovery {
     pub fn new() -> Self {
         Self
@@ -54,7 +60,7 @@ impl FileDiscovery {
     pub fn read_manifest(&self, package_path: &Path) -> Result<Value> {
         debug!("🔎 Reading manifest from: {}", package_path.display());
 
-        // Look for the manifest file inside the package  
+        // Look for the manifest file inside the package
         let manifest_source = self.find_manifest_source(package_path)?;
 
         match manifest_source {
@@ -66,7 +72,7 @@ impl FileDiscovery {
             }
             ManifestSource::ModelFile(path) => {
                 debug!("📖 Reading CoreML model file: {}", path.display());
-                // For model.mlmodel files, we return an empty JSON array since 
+                // For model.mlmodel files, we return an empty JSON array since
                 // the actual parsing will be handled by the CoreMLMetadataExtractor
                 Ok(Value::Array(vec![]))
             }
@@ -92,16 +98,20 @@ impl FileDiscovery {
             .to_string();
 
         debug!("🔍 Using filename as component name: {}", filename);
-        
+
         // Clean up filename for use as component key
         filename.replace(['-', '.'], "_").to_lowercase()
     }
 
     /// Detect if a package appears to be a typo-fixer style .mlpackage
     pub fn is_typo_fixer_style(&self, package_path: &Path) -> bool {
-        package_path.extension().map_or(false, |ext| ext == "mlpackage") &&
-        !package_path.join("Manifest.json").exists() &&
-        package_path.join("Data/com.apple.CoreML/model.mlmodel").exists()
+        package_path
+            .extension()
+            .is_some_and(|ext| ext == "mlpackage")
+            && !package_path.join("Manifest.json").exists()
+            && package_path
+                .join("Data/com.apple.CoreML/model.mlmodel")
+                .exists()
     }
 
     /// Validate that a directory contains CoreML packages
@@ -134,13 +144,14 @@ impl FileDiscovery {
     /// Get summary information about discovered packages
     pub fn analyze_packages(&self, packages: &[PathBuf]) -> PackageAnalysis {
         let mut analysis = PackageAnalysis::default();
-        
+
         for package in packages {
-            let filename = package.file_name()
+            let filename = package
+                .file_name()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .to_lowercase();
-                
+
             if filename.contains("embedding") {
                 analysis.embeddings_packages.push(package.clone());
             } else if filename.contains("ffn") || filename.contains("transformer") {
@@ -151,7 +162,7 @@ impl FileDiscovery {
                 analysis.other_packages.push(package.clone());
             }
         }
-        
+
         analysis.total_packages = packages.len();
         analysis
     }
@@ -160,16 +171,25 @@ impl FileDiscovery {
 
     fn find_manifest_file(&self, package_path: &Path) -> Result<ManifestSource> {
         // Priority order: metadata.json (mlmodelc) > Manifest.json (mlpackage) > model.mlmodel (direct) > filename only
-        
+
         if package_path.join("metadata.json").exists() {
             debug!("🔍 Found metadata.json (.mlmodelc format)");
-            Ok(ManifestSource::MetadataJson(package_path.join("metadata.json")))
+            Ok(ManifestSource::MetadataJson(
+                package_path.join("metadata.json"),
+            ))
         } else if package_path.join("Manifest.json").exists() {
             debug!("🔍 Found Manifest.json (.mlpackage format)");
-            Ok(ManifestSource::ManifestJson(package_path.join("Manifest.json")))
-        } else if package_path.join("Data/com.apple.CoreML/model.mlmodel").exists() {
+            Ok(ManifestSource::ManifestJson(
+                package_path.join("Manifest.json"),
+            ))
+        } else if package_path
+            .join("Data/com.apple.CoreML/model.mlmodel")
+            .exists()
+        {
             debug!("🔍 Found direct model.mlmodel (typo-fixer style .mlpackage)");
-            Ok(ManifestSource::ModelFile(package_path.join("Data/com.apple.CoreML/model.mlmodel")))
+            Ok(ManifestSource::ModelFile(
+                package_path.join("Data/com.apple.CoreML/model.mlmodel"),
+            ))
         } else {
             debug!("🔍 No manifest files found, using filename-only detection");
             Ok(ManifestSource::FilenameOnly)
@@ -189,9 +209,9 @@ pub struct PackageAnalysis {
 impl PackageAnalysis {
     /// Check if this looks like a standard transformer architecture
     pub fn is_transformer_like(&self) -> bool {
-        !self.embeddings_packages.is_empty() && 
-        !self.transformer_packages.is_empty() && 
-        !self.head_packages.is_empty()
+        !self.embeddings_packages.is_empty()
+            && !self.transformer_packages.is_empty()
+            && !self.head_packages.is_empty()
     }
 
     /// Get a summary string of the package distribution

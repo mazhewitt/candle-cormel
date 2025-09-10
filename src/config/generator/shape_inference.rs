@@ -2,13 +2,19 @@
 //!
 //! Infers model dimensions (batch size, hidden size, etc.) from actual tensor configurations
 
-use crate::model_config::{ComponentConfig, ShapeConfig};
 use super::schema_extractor::SchemaExtractor;
+use crate::config::model::{ComponentConfig, ShapeConfig};
+use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use tracing::debug;
-use anyhow::{anyhow, Result};
 
 pub struct ShapeInference;
+
+impl Default for ShapeInference {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl ShapeInference {
     pub fn new() -> Self {
@@ -18,12 +24,12 @@ impl ShapeInference {
     /// Compute overall shape configuration from components (enhanced with metadata-driven detection)
     /// Returns an error if components have insufficient tensor metadata
     pub fn infer_shapes_with_schema_extractor(
-        &self, 
+        &self,
         components: &HashMap<String, ComponentConfig>,
-        schema_extractor: &SchemaExtractor
+        schema_extractor: &SchemaExtractor,
     ) -> Result<ShapeConfig, anyhow::Error> {
-    // Strict validation: require sufficient tensor metadata
-    self.validate_tensor_metadata(components)?;
+        // Strict validation: require sufficient tensor metadata
+        self.validate_tensor_metadata(components)?;
 
         let batch_size = self.infer_batch_size(components);
         let hidden_size = self.infer_hidden_size(components);
@@ -35,12 +41,20 @@ impl ShapeInference {
             batch_size, context_length, hidden_size, vocab_size
         );
 
-    Ok(ShapeConfig { batch_size, context_length, hidden_size, vocab_size })
+        Ok(ShapeConfig {
+            batch_size,
+            context_length,
+            hidden_size,
+            vocab_size,
+        })
     }
 
     /// Compute overall shape configuration from components (legacy approach)
     /// Returns an error if components have insufficient tensor metadata
-    pub fn infer_shapes(&self, components: &HashMap<String, ComponentConfig>) -> Result<ShapeConfig, anyhow::Error> {
+    pub fn infer_shapes(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> Result<ShapeConfig, anyhow::Error> {
         // Strict validation on legacy path as well
         self.validate_tensor_metadata(components)?;
 
@@ -54,13 +68,18 @@ impl ShapeInference {
             batch_size, context_length, hidden_size, vocab_size
         );
 
-        Ok(ShapeConfig { batch_size, context_length, hidden_size, vocab_size })
+        Ok(ShapeConfig {
+            batch_size,
+            context_length,
+            hidden_size,
+            vocab_size,
+        })
     }
 
     /// Infer batch size from the smallest batch dimension across all components
     fn infer_batch_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut batch_sizes = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.inputs.values().chain(component.outputs.values()) {
                 if !tensor.shape.is_empty() {
@@ -68,7 +87,7 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         batch_sizes.into_iter().min().unwrap_or(1)
     }
 
@@ -79,18 +98,14 @@ impl ShapeInference {
 
         for component in components.values() {
             // Prefer tensors explicitly named "hidden_states"
-            for (name, tensor) in component
-                .inputs
-                .iter()
-                .chain(component.outputs.iter())
-            {
+            for (name, tensor) in component.inputs.iter().chain(component.outputs.iter()) {
                 // Skip any logits-like tensors
                 let lname = name.to_lowercase();
                 let is_logits = lname.starts_with("logits");
 
                 if tensor.shape.len() >= 3 {
                     let feat = tensor.shape[2];
-                    if name == &"hidden_states" {
+                    if name == "hidden_states" {
                         from_hidden_states.push(feat);
                     } else if !is_logits {
                         heuristic.push(feat);
@@ -98,7 +113,7 @@ impl ShapeInference {
                 } else if tensor.shape.len() == 2 {
                     // Some manifests might flatten features as [1, hidden]
                     let feat = tensor.shape[1];
-                    if name == &"hidden_states" {
+                    if name == "hidden_states" {
                         from_hidden_states.push(feat);
                     } else if !is_logits && feat > 100 {
                         heuristic.push(feat);
@@ -116,7 +131,7 @@ impl ShapeInference {
     /// Infer context/sequence length from sequence dimensions
     fn infer_context_length(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut seq_lengths = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.inputs.values().chain(component.outputs.values()) {
                 if tensor.shape.len() >= 2 && tensor.shape[1] > 1 {
@@ -129,7 +144,7 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         seq_lengths.into_iter().max().unwrap_or(256)
     }
 
@@ -142,13 +157,18 @@ impl ShapeInference {
         // First, try to find the lm_head component and use schema extractor's logic
         for (name, component) in components {
             if name == "lm_head" || name.contains("lm_head") {
-                if let Some(vocab_size) = schema_extractor.calculate_vocab_size_from_logits(&component.outputs) {
-                    debug!("📊 Using chunked logits vocab size calculation: {}", vocab_size);
+                if let Some(vocab_size) =
+                    schema_extractor.calculate_vocab_size_from_logits(&component.outputs)
+                {
+                    debug!(
+                        "📊 Using chunked logits vocab size calculation: {}",
+                        vocab_size
+                    );
                     return vocab_size;
                 }
             }
         }
-        
+
         // Fallback to legacy logic
         debug!("📊 Using legacy vocab size detection");
         self.infer_vocab_size(components)
@@ -157,7 +177,7 @@ impl ShapeInference {
     /// Infer vocabulary size from the largest output dimension (legacy)
     fn infer_vocab_size(&self, components: &HashMap<String, ComponentConfig>) -> usize {
         let mut output_sizes = Vec::new();
-        
+
         for component in components.values() {
             for tensor in component.outputs.values() {
                 if let Some(&last_dim) = tensor.shape.last() {
@@ -168,48 +188,50 @@ impl ShapeInference {
                 }
             }
         }
-        
+
         output_sizes.into_iter().max().unwrap_or(30000)
     }
 
     /// Analyze component characteristics for debugging
-    pub fn analyze_components(&self, components: &HashMap<String, ComponentConfig>) -> ComponentAnalysis {
+    pub fn analyze_components(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> ComponentAnalysis {
         let mut analysis = ComponentAnalysis::default();
-        
+
         for (name, component) in components {
             let comp_analysis = self.analyze_single_component(name, component);
             analysis.components.insert(name.clone(), comp_analysis);
         }
-        
+
         analysis.total_components = components.len();
-        analysis.function_based_components = components.values()
+        analysis.function_based_components = components
+            .values()
             .filter(|c| !c.functions.is_empty())
             .count();
-        analysis.multi_function_components = components.values()
+        analysis.multi_function_components = components
+            .values()
             .filter(|c| c.functions.len() > 1)
             .count();
-            
+
         analysis
     }
 
-    fn analyze_single_component(&self, name: &str, component: &ComponentConfig) -> SingleComponentAnalysis {
-        let input_shapes: Vec<Vec<usize>> = component.inputs.values()
+    fn analyze_single_component(
+        &self,
+        name: &str,
+        component: &ComponentConfig,
+    ) -> SingleComponentAnalysis {
+        let input_shapes: Vec<Vec<usize>> =
+            component.inputs.values().map(|t| t.shape.clone()).collect();
+        let output_shapes: Vec<Vec<usize>> = component
+            .outputs
+            .values()
             .map(|t| t.shape.clone())
             .collect();
-        let output_shapes: Vec<Vec<usize>> = component.outputs.values()
-            .map(|t| t.shape.clone())
-            .collect();
-            
-        let max_input_dim = input_shapes.iter()
-            .flatten()
-            .max()
-            .copied()
-            .unwrap_or(0);
-        let max_output_dim = output_shapes.iter()
-            .flatten()
-            .max()
-            .copied()
-            .unwrap_or(0);
+
+        let max_input_dim = input_shapes.iter().flatten().max().copied().unwrap_or(0);
+        let max_output_dim = output_shapes.iter().flatten().max().copied().unwrap_or(0);
 
         SingleComponentAnalysis {
             name: name.to_string(),
@@ -225,7 +247,10 @@ impl ShapeInference {
 
     /// Validate that components have sufficient tensor metadata for shape inference
     /// Returns an error with actionable guidance if metadata is insufficient
-    fn validate_tensor_metadata(&self, components: &HashMap<String, ComponentConfig>) -> Result<()> {
+    fn validate_tensor_metadata(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> Result<()> {
         let mut empty_components = Vec::new();
         let mut components_with_issues = Vec::new();
 
@@ -237,7 +262,9 @@ impl ShapeInference {
             }
 
             // Check for components with tensors but no shape information
-            let has_valid_shapes = component.inputs.values()
+            let has_valid_shapes = component
+                .inputs
+                .values()
                 .chain(component.outputs.values())
                 .any(|tensor| !tensor.shape.is_empty() && tensor.shape.iter().all(|&dim| dim > 0));
 
@@ -288,26 +315,36 @@ impl ShapeInference {
         // Additional validation for specific model patterns
         self.validate_model_specific_requirements(components)?;
 
-        debug!("✅ Tensor metadata validation passed for {} components", components.len());
+        debug!(
+            "✅ Tensor metadata validation passed for {} components",
+            components.len()
+        );
         Ok(())
     }
 
     /// Validate model-specific requirements (e.g., typo-fixer needs proper vocab size)
-    fn validate_model_specific_requirements(&self, components: &HashMap<String, ComponentConfig>) -> Result<()> {
+    fn validate_model_specific_requirements(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> Result<()> {
         // Detect if this looks like a typo-fixer model based on filenames
-        let looks_like_typo_fixer = components.keys()
-            .any(|name| name.contains("typo") || name.contains("fixer")) ||
-            components.values()
-            .any(|comp| comp.file_path.as_ref()
-                .map(|path| path.contains("typo-fixer"))
-                .unwrap_or(false));
+        let looks_like_typo_fixer = components
+            .keys()
+            .any(|name| name.contains("typo") || name.contains("fixer"))
+            || components.values().any(|comp| {
+                comp.file_path
+                    .as_ref()
+                    .map(|path| path.contains("typo-fixer"))
+                    .unwrap_or(false)
+            });
 
         if looks_like_typo_fixer {
             // For typo-fixer models, validate we can extract proper vocab size from LM head
             let lm_head = components.get("lm_head");
             if let Some(lm_head) = lm_head {
                 let has_logits = lm_head.outputs.keys().any(|k| k.contains("logits"));
-                let logits_total_size: usize = lm_head.outputs
+                let logits_total_size: usize = lm_head
+                    .outputs
                     .iter()
                     .filter(|(name, _)| name.contains("logits"))
                     .map(|(_, tensor)| tensor.shape.last().copied().unwrap_or(0))

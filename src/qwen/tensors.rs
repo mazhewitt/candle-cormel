@@ -6,7 +6,7 @@
 use crate::qwen::model::QwenModel;
 use crate::utils::mask;
 use candle_core::{Error as CandleError, Tensor};
-use tracing::{debug, trace};
+use tracing::trace;
 
 impl QwenModel {
     /// Create input tensor for embeddings with proper shape validation
@@ -31,7 +31,7 @@ impl QwenModel {
             tensor_shape
         };
 
-    trace!(
+        trace!(
             "🎯 SHAPE DEBUG: Creating embeddings input tensor with shape {:?} for {} padded tokens (original: {} tokens)",
             shape, padded_tokens.len(), tokens.len()
         );
@@ -51,7 +51,7 @@ impl QwenModel {
     /// Create single-token embeddings input tensor for infer mode
     /// This produces [1, 1] shape regardless of the model's batch configuration
     pub fn create_single_token_embeddings_input(&self, token: i64) -> Result<Tensor, CandleError> {
-    trace!(
+        trace!(
             "🔍 SINGLE TOKEN: Creating [1, 1] shape input tensor for token {}",
             token
         );
@@ -123,7 +123,7 @@ impl QwenModel {
             (positions, (len,))
         };
 
-    trace!(
+        trace!(
             "Creating position tensor with shape {:?} for positions (len={}): {:?}",
             shape,
             final_positions.len(),
@@ -156,7 +156,7 @@ impl QwenModel {
         }
 
         let shape = (1, 1, seq_len, context_len);
-    trace!("Creating causal mask tensor with shape {:?}", shape);
+        trace!("Creating causal mask tensor with shape {:?}", shape);
         Tensor::from_vec(mask_data, shape, &self.config.device)
     }
     /// Create update mask tensor for FFN infer
@@ -168,9 +168,10 @@ impl QwenModel {
         }
 
         let shape = (1, 1, context_length, 1);
-    trace!(
+        trace!(
             "Creating update mask tensor with shape {:?} for position {}",
-            shape, position
+            shape,
+            position
         );
         Tensor::from_vec(mask_data, shape, &self.config.device)
     }

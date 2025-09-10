@@ -154,7 +154,7 @@ fn test_batch_generation_performance() {
         println!("Testing prompt {}: {}", i + 1, prompt);
 
         let start = Instant::now();
-        let result = model.generate_tokens(prompt, num_tokens, temperature, None);
+        let result = model.generate_tokens_topk_temp(prompt, num_tokens, temperature, None);
         let elapsed = start.elapsed();
 
         match result {
@@ -223,28 +223,24 @@ fn test_output_consistency() {
 
     // Test deterministic behavior (should generate same token multiple times with temp=0)
     println!("Testing deterministic behavior with multiple prompts...");
-    
-    let test_prompts = [
-        QUICK_BROWN_FOX_PROMPT,
-        "Hello, world",
-        "The capital of"
-    ];
-    
+
+    let test_prompts = [QUICK_BROWN_FOX_PROMPT, "Hello, world", "The capital of"];
+
     for prompt in &test_prompts {
         println!("Testing consistency for: '{prompt}'");
-        
+
         let tokens: Vec<_> = (0..3)
             .map(|_| model.forward_text(prompt).unwrap())
             .collect();
 
         let first_token = tokens[0];
         let all_same = tokens.iter().all(|&t| t == first_token);
-        
+
         assert!(
             all_same,
             "Non-deterministic behavior detected for '{prompt}': tokens={tokens:?}"
         );
-        
+
         // Validate that the consistent token is decodeable
         if let Ok(decoded) = model.tokenizer().decode(&[first_token as u32], false) {
             println!("  ✅ Consistent token {first_token} -> '{decoded}'");
@@ -279,7 +275,7 @@ fn test_memory_efficiency() {
         println!("Memory test iteration {i}/{num_iterations}");
 
         let start = Instant::now();
-        let result = model.generate_tokens(prompt, tokens_per_iter, 0.7, None);
+        let result = model.generate_tokens_topk_temp(prompt, tokens_per_iter, 0.7, None);
         let elapsed = start.elapsed();
 
         match result {

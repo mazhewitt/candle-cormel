@@ -3,8 +3,8 @@
 //! This module provides automatic configuration generation from CoreML .mlpackage files
 //! with a clean, modular architecture that's truly model-agnostic.
 
-use crate::cache_manager::CacheManager;
-use crate::model_config::{ComponentConfig, ModelConfig, NamingConfig};
+use crate::cache::manager::CacheManager;
+use crate::config::model::{ComponentConfig, ModelConfig, NamingConfig};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -35,6 +35,7 @@ pub struct ConfigGenerator {
     schema_extractor: SchemaExtractor,
     shape_inference: ShapeInference,
     caching: ConfigCaching,
+    #[allow(dead_code)]
     metadata_extractor: CoreMLMetadataExtractor,
 }
 
@@ -56,7 +57,7 @@ impl ConfigGenerator {
 
     /// Generate a config from a downloaded model directory using enhanced metadata-driven detection
     ///
-    /// This function inspects .mlpackage files in a directory and generates a complete 
+    /// This function inspects .mlpackage files in a directory and generates a complete
     /// ModelConfig with proper shapes and component configurations, using metadata-driven
     /// component role detection to support both unified and split FFN architectures.
     pub fn generate_config_from_directory_enhanced(
@@ -91,13 +92,8 @@ impl ConfigGenerator {
         self.validate_required_components(&components)?;
 
         // Generate final configuration with enhanced shape inference
-        let config = self.build_model_config_enhanced(
-            model_id,
-            model_type,
-            model_dir,
-            components,
-            &packages,
-        )?;
+        let config = self
+            .build_model_config_enhanced(model_id, model_type, model_dir, components, &packages)?;
 
         info!(
             "✅ Generated enhanced config for {} with {} components",
@@ -144,13 +140,8 @@ impl ConfigGenerator {
         }
 
         // Generate final configuration
-        let config = self.build_model_config(
-            model_id,
-            model_type,
-            model_dir,
-            components,
-            &packages,
-        )?;
+        let config =
+            self.build_model_config(model_id, model_type, model_dir, components, &packages)?;
 
         info!(
             "✅ Generated config for {} with {} components",
@@ -190,11 +181,9 @@ impl ConfigGenerator {
         let base_component_name = self.file_discovery.infer_component_name(package_path);
 
         // Parse package into component configurations
-        let parsed_components = self.manifest_parser.parse_package(
-            package_path,
-            &manifest,
-            &base_component_name,
-        )?;
+        let parsed_components =
+            self.manifest_parser
+                .parse_package(package_path, &manifest, &base_component_name)?;
 
         // Add all components to the collection
         for (name, config) in parsed_components {
@@ -243,7 +232,10 @@ impl ConfigGenerator {
         Ok(())
     }
 
-    fn validate_required_components(&self, components: &HashMap<String, ComponentConfig>) -> Result<()> {
+    fn validate_required_components(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> Result<()> {
         // During incremental parsing (tests creating one package at a time),
         // allow partial configurations. Full-pipeline validation is enforced
         // later when all components are present in the directory.
@@ -265,11 +257,13 @@ impl ConfigGenerator {
         components: HashMap<String, ComponentConfig>,
         packages: &[PathBuf],
     ) -> Result<ModelConfig> {
-    // If multiple packages are present (pipeline), ensure we end up with the core components
-    let is_pipeline = packages.len() >= 3; // embeddings, ffn*, lm_head
+        // If multiple packages are present (pipeline), ensure we end up with the core components
+        let is_pipeline = packages.len() >= 3; // embeddings, ffn*, lm_head
 
-    // Compute shape configuration using enhanced inference (fails fast on empty tensor metadata)
-    let shape_config = self.shape_inference.infer_shapes_with_schema_extractor(&components, &self.schema_extractor)?;
+        // Compute shape configuration using enhanced inference (fails fast on empty tensor metadata)
+        let shape_config = self
+            .shape_inference
+            .infer_shapes_with_schema_extractor(&components, &self.schema_extractor)?;
 
         // Generate naming patterns (generic approach)
         let naming_config = self.generate_naming_config(packages);
@@ -279,10 +273,11 @@ impl ConfigGenerator {
         let ffn_execution = self.manifest_parser.infer_execution_mode(&component_list);
         info!("🔧 Detected execution mode: {}", ffn_execution);
 
-        let final_components: HashMap<String, ComponentConfig> = component_list.into_iter().collect();
+        let final_components: HashMap<String, ComponentConfig> =
+            component_list.into_iter().collect();
 
         let model = ModelConfig {
-            model_info: crate::model_config::ModelInfo {
+            model_info: crate::config::model::ModelInfo {
                 model_id: Some(model_id.to_string()),
                 path: Some(model_dir.to_string_lossy().to_string()),
                 model_type: model_type.to_string(),
@@ -296,8 +291,11 @@ impl ConfigGenerator {
 
         // For pipeline runs, require the minimal set of components
         if is_pipeline {
-            let required = ["embeddings", "lm_head"]; 
-            let missing: Vec<_> = required.iter().filter(|c| !model.components.contains_key(**c)).collect();
+            let required = ["embeddings", "lm_head"];
+            let missing: Vec<_> = required
+                .iter()
+                .filter(|c| !model.components.contains_key(**c))
+                .collect();
             if !missing.is_empty() {
                 return Err(anyhow::anyhow!(
                     "ModelConfig missing required components in pipeline: {:?}. Found: {:?}",
@@ -329,10 +327,11 @@ impl ConfigGenerator {
         let ffn_execution = self.manifest_parser.infer_execution_mode(&component_list);
         info!("🔧 Detected execution mode: {}", ffn_execution);
 
-        let final_components: HashMap<String, ComponentConfig> = component_list.into_iter().collect();
+        let final_components: HashMap<String, ComponentConfig> =
+            component_list.into_iter().collect();
 
         Ok(ModelConfig {
-            model_info: crate::model_config::ModelInfo {
+            model_info: crate::config::model::ModelInfo {
                 model_id: Some(model_id.to_string()),
                 path: Some(model_dir.to_string_lossy().to_string()),
                 model_type: model_type.to_string(),
@@ -393,15 +392,13 @@ impl ConfigGenerator {
         let manifest = self.file_discovery.read_manifest(package_path)?;
         let base_component_name = self.file_discovery.infer_component_name(package_path);
 
-        let parsed_components = self.manifest_parser.parse_package(
-            package_path,
-            &manifest,
-            &base_component_name,
-        )?;
+        let parsed_components =
+            self.manifest_parser
+                .parse_package(package_path, &manifest, &base_component_name)?;
 
         if parsed_components.len() > 1 {
             // Has multiple function-based components
-            let function_components: HashMap<String, ComponentConfig> = 
+            let function_components: HashMap<String, ComponentConfig> =
                 parsed_components.into_iter().collect();
             Ok(Some(function_components))
         } else {
@@ -411,13 +408,19 @@ impl ConfigGenerator {
     }
 
     /// Parse tensor configurations from schema (legacy interface)
-    pub fn parse_tensor_configs_from_schema(&self, schema: &[serde_json::Value]) -> Result<HashMap<String, crate::model_config::TensorConfig>> {
+    pub fn parse_tensor_configs_from_schema(
+        &self,
+        schema: &[serde_json::Value],
+    ) -> Result<HashMap<String, crate::model_config::TensorConfig>> {
         self.schema_extractor.parse_tensor_configs(schema)
     }
 
-    /// Compute shape info (legacy interface) 
+    /// Compute shape info (legacy interface)
     /// Returns an error if components have insufficient tensor metadata
-    pub fn compute_shape_info_generic(&self, components: &HashMap<String, ComponentConfig>) -> Result<crate::model_config::ShapeConfig> {
+    pub fn compute_shape_info_generic(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> Result<crate::model_config::ShapeConfig> {
         self.shape_inference.infer_shapes(components)
     }
 
@@ -427,8 +430,12 @@ impl ConfigGenerator {
     }
 
     /// Determine execution mode (legacy interface)
-    pub fn determine_execution_mode_generic(&self, components: &HashMap<String, ComponentConfig>) -> String {
-        let component_list: Vec<(String, ComponentConfig)> = components.iter()
+    pub fn determine_execution_mode_generic(
+        &self,
+        components: &HashMap<String, ComponentConfig>,
+    ) -> String {
+        let component_list: Vec<(String, ComponentConfig)> = components
+            .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         self.manifest_parser.infer_execution_mode(&component_list)
@@ -447,7 +454,7 @@ mod tests {
 
     /// Create a mock .mlpackage directory structure for testing
     fn create_mock_mlpackage(temp_dir: &Path, name: &str) -> Result<PathBuf> {
-        let package_path = temp_dir.join(format!("{}.mlpackage", name));
+        let package_path = temp_dir.join(format!("{name}.mlpackage"));
         std::fs::create_dir_all(&package_path)?;
 
         // Create a minimal manifest.json
@@ -474,10 +481,10 @@ mod tests {
     #[test]
     fn test_modular_config_generator_creation() -> Result<()> {
         let generator = ConfigGenerator::new()?;
-        
+
         // Should have all modules initialized
         assert!(!generator.caching.has_cached_config("nonexistent")); // Should return false but not crash
-        
+
         Ok(())
     }
 
@@ -491,12 +498,24 @@ mod tests {
         create_mock_mlpackage(temp_dir.path(), "transformer")?;
         create_mock_mlpackage(temp_dir.path(), "head")?;
 
-        let packages = generator.file_discovery.find_coreml_packages(temp_dir.path())?;
-        
+        let packages = generator
+            .file_discovery
+            .find_coreml_packages(temp_dir.path())?;
+
         assert_eq!(packages.len(), 3);
-        assert!(packages.iter().any(|p| p.file_name().unwrap().to_string_lossy().contains("embeddings")));
-        assert!(packages.iter().any(|p| p.file_name().unwrap().to_string_lossy().contains("transformer")));
-        assert!(packages.iter().any(|p| p.file_name().unwrap().to_string_lossy().contains("head")));
+        assert!(packages.iter().any(|p| p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("embeddings")));
+        assert!(packages.iter().any(|p| p
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .contains("transformer")));
+        assert!(packages
+            .iter()
+            .any(|p| p.file_name().unwrap().to_string_lossy().contains("head")));
 
         Ok(())
     }
@@ -519,7 +538,11 @@ mod tests {
             .expect("enhanced parsing should not fail");
 
         // Expect that we classified the component as "embeddings" via filename fallback
-        assert!(components.contains_key("embeddings"), "expected 'embeddings' component, got: {:?}", components.keys().collect::<Vec<_>>());
+        assert!(
+            components.contains_key("embeddings"),
+            "expected 'embeddings' component, got: {:?}",
+            components.keys().collect::<Vec<_>>()
+        );
         Ok(())
     }
 }
