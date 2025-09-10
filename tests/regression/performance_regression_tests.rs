@@ -13,7 +13,8 @@ use candle_coreml::{QwenModel, UnifiedModelLoader};
 use std::time::{Duration, Instant};
 
 #[cfg(test)]
-use candle_coreml::test_utils::TestCleanupGuard;
+mod common;
+use common::test_utils::TestCleanupGuard;
 
 // Performance benchmarks based on chat.py reference
 const CHAT_PY_BASELINE_TOKENS_PER_SECOND: f32 = 87.0;

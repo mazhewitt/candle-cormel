@@ -35,10 +35,11 @@ mod tensor_adaptation_tests {
         }
 
         ModelConfig {
-            model_info: ModelInfo { model_id: "test".into(), cache_dir: "/tmp".into() },
-            naming_config: NamingConfig::default(),
-            shape_config: ShapeConfig { batch_size: 1, context_length: prefill_seq, hidden_size: hidden },
+            model_info: ModelInfo { model_id: Some("test".into()), path: None, model_type: "qwen".into(), discovered_at: None },
+            naming: NamingConfig::default(),
+            shapes: ShapeConfig { batch_size: 1, context_length: prefill_seq, hidden_size: hidden, vocab_size: 151_936 },
             components,
+            ffn_execution: None,
         }
     }
 
@@ -81,7 +82,7 @@ mod tensor_adaptation_tests {
 #[cfg(test)]
 mod embeddings_creation_tests {
     use candle_core::Device;
-    use candle_coreml::model_config::{ComponentConfig, ModelConfig, ModelInfo, ShapeConfig, TensorConfig};
+    use candle_coreml::model_config::{ComponentConfig, ModelConfig, ModelInfo, NamingConfig, ShapeConfig, TensorConfig};
     use candle_coreml::QwenConfig;
     use std::collections::HashMap;
 
@@ -108,10 +109,11 @@ mod embeddings_creation_tests {
         });
 
         ModelConfig {
-            model_info: ModelInfo { model_id: "test-model".into(), cache_dir: "/tmp".into() },
-            naming_config: Default::default(),
-            shape_config: ShapeConfig { batch_size: 1, context_length: 12, hidden_size: 1024 },
+            model_info: ModelInfo { model_id: Some("test-model".into()), path: None, model_type: "qwen".into(), discovered_at: None },
+            naming: NamingConfig::default(),
+            shapes: ShapeConfig { batch_size: 1, context_length: 12, hidden_size: 1024, vocab_size: 151_936 },
             components,
+            ffn_execution: None,
         }
     }
 

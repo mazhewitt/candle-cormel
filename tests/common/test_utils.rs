@@ -142,18 +142,20 @@ macro_rules! test_with_cleanup {
     ($test_name:ident, $body:block) => {
         #[test]
         fn $test_name() {
-            let _guard = $crate::test_utils::TestCleanupGuard::new(stringify!($test_name));
+            // Use $crate to reference the macro's defining crate path reliably across test crates
+            let _guard = $crate::common::test_utils::TestCleanupGuard::new(stringify!($test_name));
             $body
         }
     };
 }
 
 /// Helper function to run CoreML tests with models
+#[allow(dead_code)]
 pub fn with_test_model<F, R>(model_id: &str, test_fn: F) -> R
 where
     F: FnOnce(&std::path::Path) -> R,
 {
-    use crate::model_downloader::ensure_model_downloaded;
+    use candle_coreml::ensure_model_downloaded;
 
     let model_path = ensure_model_downloaded(model_id, false)
         .unwrap_or_else(|_| panic!("Failed to download test model: {model_id}"));
@@ -162,6 +164,7 @@ where
 }
 
 /// Check if we're running in CI environment
+#[allow(dead_code)]
 pub fn is_ci() -> bool {
     std::env::var("CI").is_ok()
         || std::env::var("GITHUB_ACTIONS").is_ok()
@@ -169,6 +172,7 @@ pub fn is_ci() -> bool {
 }
 
 /// Skip test if models are not available (useful for quick unit tests)
+#[allow(dead_code)]
 pub fn require_models() {
     if std::env::var("CANDLE_COREML_SKIP_MODEL_TESTS") == Ok("1".to_string()) {
         panic!("Model tests skipped by environment variable");

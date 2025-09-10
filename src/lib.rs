@@ -1,7 +1,6 @@
 pub mod builder;
 pub mod cache;
 pub mod config;
-pub mod config_generator;
 pub mod conversion;
 pub mod download;
 pub mod model;

@@ -358,6 +358,7 @@ mod extended_coverage_tests {
 
     #[tokio::test]
     #[ignore] // Run with: cargo test test_generation_with_extreme_parameters -- --ignored
+    #[allow(deprecated)]
     async fn test_generation_with_extreme_parameters() -> Result<()> {
         let mut model = match create_test_model().await {
             Some(model) => model,
@@ -413,8 +414,8 @@ mod extended_coverage_tests {
         // Test that custom config model works
         let result = model.forward_text("Configuration test");
         match result {
-            Ok(token) => println!("✅ Generated token: {}", token),
-            Err(e) => panic!("Custom config model failed to generate: {}", e),
+            Ok(token) => println!("✅ Generated token: {token}"),
+            Err(e) => panic!("Custom config model failed to generate: {e}"),
         }
 
         println!("✅ Custom configuration tested successfully");
@@ -491,7 +492,7 @@ async fn test_model_config_system() {
     // Test QwenConfig creation from ModelConfig
     let qwen_config = QwenConfig::from_model_config(default_config);
     assert_eq!(qwen_config.model_config.shapes.batch_size, 1);
-    
+
     // Note: for dynamic model loading, use UnifiedModelLoader instead of builtin configs
 
     println!("✅ Model config system validated");

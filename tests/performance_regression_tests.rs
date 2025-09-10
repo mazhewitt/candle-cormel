@@ -10,11 +10,10 @@
 //! - Architecture feature parity testing
 
 use candle_coreml::{QwenConfig, QwenModel};
+mod common;
+use common::test_utils::TestCleanupGuard;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
-
-#[cfg(test)]
-use candle_coreml::test_utils::TestCleanupGuard;
 
 // Performance benchmarks based on chat.py reference
 const CHAT_PY_BASELINE_TOKENS_PER_SECOND: f32 = 87.0;
@@ -92,6 +91,7 @@ fn get_qwen_model_path() -> Option<PathBuf> {
 }
 
 // Helper to create QwenModel for testing
+#[allow(deprecated)]
 fn create_test_qwen_model() -> Option<QwenModel> {
     let model_path = get_qwen_model_path()?;
     // Use the correct model configuration for the standard ANEMLL model
@@ -104,6 +104,7 @@ fn create_test_qwen_model() -> Option<QwenModel> {
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore] // Run manually with: cargo test test_single_token_performance -- --ignored
+#[allow(deprecated)]
 fn test_single_token_performance() {
     let mut model = match create_test_qwen_model() {
         Some(model) => model,
@@ -159,6 +160,7 @@ fn test_single_token_performance() {
 #[cfg(target_os = "macos")]
 #[test]
 #[ignore] // Run manually with: cargo test test_batch_generation_performance -- --ignored
+#[allow(deprecated)]
 fn test_batch_generation_performance() {
     let mut model = match create_test_qwen_model() {
         Some(model) => model,
@@ -300,6 +302,7 @@ fn test_memory_efficiency() {
         println!("Memory test iteration {i}/{num_iterations}");
 
         let start = Instant::now();
+        #[allow(deprecated)]
         let result = model.generate_tokens(prompt, tokens_per_iter, 0.7, None);
         let elapsed = start.elapsed();
 

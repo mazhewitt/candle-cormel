@@ -64,7 +64,7 @@ pub struct TensorConfig {
 }
 
 /// Model file naming patterns for component discovery
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct NamingConfig {
     // Deprecated: patterns removed; explicit file paths are required per component
     #[serde(skip_serializing_if = "Option::is_none")]
