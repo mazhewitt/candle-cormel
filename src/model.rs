@@ -173,32 +173,39 @@ impl CoreMLModel {
                         // Only try to compile for non-compiled artifacts
                         if looks_like_package || ext == "mlmodel" || !is_dir {
                             debug!("Direct load failed, attempting compilation: {load_err}");
-                            
+
                             // Try to use cached compiled model first
-                            if let Ok(cached_model) = Self::try_load_cached_compiled_model(path, &load_start, config, function_name) {
+                            if let Ok(cached_model) = Self::try_load_cached_compiled_model(
+                                path,
+                                &load_start,
+                                config,
+                                function_name,
+                            ) {
                                 return Ok(cached_model);
                             }
-                            
+
                             #[allow(deprecated)]
                             // Choose compile target: for 'typo-fixer style' packages, compile the inner model.mlmodel
                             let compile_result = unsafe {
-                                if looks_like_package && !manifest_json_exists && has_inner_mlmodel {
-                                    let inner_url = NSURL::fileURLWithPath(&NSString::from_str(&inner_mlmodel_path.to_string_lossy()));
+                                if looks_like_package && !manifest_json_exists && has_inner_mlmodel
+                                {
+                                    let inner_url = NSURL::fileURLWithPath(&NSString::from_str(
+                                        &inner_mlmodel_path.to_string_lossy(),
+                                    ));
                                     MLModel::compileModelAtURL_error(&inner_url)
                                 } else {
                                     MLModel::compileModelAtURL_error(&url)
                                 }
                             };
-                            
+
                             match compile_result {
                                 Ok(compiled_url) => {
                                     debug!("Compilation completed, caching and loading compiled model");
-                                    
+
                                     // Cache the compiled model for future use
                                     if let Err(e) = Self::cache_compiled_model(path, &compiled_url) {
                                         debug!("Failed to cache compiled model: {e}");
                                     }
-                                    
                                     match unsafe { load_with_config(&compiled_url, function_name) } {
                                         Ok(model) => {
                                             info!(
@@ -607,24 +614,24 @@ impl CoreMLModel {
         function_name: Option<&str>,
     ) -> Result<CoreMLModel, CandleError> {
         let cache_path = Self::get_compiled_cache_path(source_path)?;
-        
+
         if cache_path.exists() {
             debug!("Found cached compiled model at: {}", cache_path.display());
-            
+
             // Check if cached version is newer than source
-            if let (Ok(cache_meta), Ok(source_meta)) = (
-                cache_path.metadata(),
-                source_path.metadata(),
-            ) {
-                if let (Ok(cache_modified), Ok(source_modified)) = (
-                    cache_meta.modified(),
-                    source_meta.modified(),
-                ) {
+            if let (Ok(cache_meta), Ok(source_meta)) =
+                (cache_path.metadata(), source_path.metadata())
+            {
+                if let (Ok(cache_modified), Ok(source_modified)) =
+                    (cache_meta.modified(), source_meta.modified())
+                {
                     if cache_modified >= source_modified {
-                        let url = unsafe { 
-                            NSURL::fileURLWithPath(&NSString::from_str(&cache_path.to_string_lossy())) 
+                        let url = unsafe {
+                            NSURL::fileURLWithPath(&NSString::from_str(
+                                &cache_path.to_string_lossy(),
+                            ))
                         };
-                        
+
                         match unsafe {
                             if let Some(func) = function_name {
                                 let ml_cfg = MLModelConfiguration::new();
@@ -636,7 +643,10 @@ impl CoreMLModel {
                             }
                         } {
                             Ok(model) => {
-                                info!("Cached compiled model loaded in {:.1}s", load_start.elapsed().as_secs_f32());
+                                info!(
+                                    "Cached compiled model loaded in {:.1}s",
+                                    load_start.elapsed().as_secs_f32()
+                                );
                                 return Ok(CoreMLModel {
                                     inner: model,
                                     config: config.clone(),
@@ -654,20 +664,21 @@ impl CoreMLModel {
                 }
             }
         }
-        
-        Err(CandleError::Msg("No valid cached compiled model found".to_string()))
+
+        Err(CandleError::Msg(
+            "No valid cached compiled model found".to_string(),
+        ))
     }
 
     /// Cache a compiled model for future use
     #[cfg(target_os = "macos")]
     fn cache_compiled_model(source_path: &Path, compiled_url: &NSURL) -> Result<(), CandleError> {
         let cache_path = Self::get_compiled_cache_path(source_path)?;
-        
+
         // Create cache directory if it doesn't exist
         if let Some(parent) = cache_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| {
-                CandleError::Msg(format!("Failed to create cache directory: {e}"))
-            })?;
+            std::fs::create_dir_all(parent)
+                .map_err(|e| CandleError::Msg(format!("Failed to create cache directory: {e}")))?;
         }
 
         // Get the path from the compiled URL
@@ -675,10 +686,8 @@ impl CoreMLModel {
         if compiled_path_str.is_none() {
             return Err(CandleError::Msg("Invalid compiled model URL".to_string()));
         }
-        
-        let compiled_path = std::path::PathBuf::from(
-            compiled_path_str.unwrap().to_string()
-        );
+
+        let compiled_path = std::path::PathBuf::from(compiled_path_str.unwrap().to_string());
 
         // Copy the compiled model to the cache location
         if compiled_path.exists() {
@@ -687,14 +696,15 @@ impl CoreMLModel {
                     CandleError::Msg(format!("Failed to remove old cached model: {e}"))
                 })?;
             }
-            
-            Self::copy_recursive(&compiled_path, &cache_path).map_err(|e| {
-                CandleError::Msg(format!("Failed to cache compiled model: {e}"))
-            })?;
-            
+
+            Self::copy_recursive(&compiled_path, &cache_path)
+                .map_err(|e| CandleError::Msg(format!("Failed to cache compiled model: {e}")))?;
+
             debug!("Cached compiled model at: {}", cache_path.display());
         } else {
-            return Err(CandleError::Msg("Compiled model path does not exist".to_string()));
+            return Err(CandleError::Msg(
+                "Compiled model path does not exist".to_string(),
+            ));
         }
 
         Ok(())
@@ -704,12 +714,11 @@ impl CoreMLModel {
     fn get_compiled_cache_path(source_path: &Path) -> Result<std::path::PathBuf, CandleError> {
         // Use the CacheManager to get a consistent cache directory
         use crate::CacheManager;
-        let cache_manager = CacheManager::new().map_err(|e| {
-            CandleError::Msg(format!("Failed to initialize cache manager: {e}"))
-        })?;
-        
+        let cache_manager = CacheManager::new()
+            .map_err(|e| CandleError::Msg(format!("Failed to initialize cache manager: {e}")))?;
+
         let cache_dir = cache_manager.models_dir().parent().unwrap().to_path_buf();
-        
+
         // Create a unique cache key based on the source path
         let source_hash = {
             use std::collections::hash_map::DefaultHasher;
@@ -718,8 +727,8 @@ impl CoreMLModel {
             source_path.hash(&mut hasher);
             hasher.finish()
         };
-        
-        let cache_name = format!("compiled_{:x}.mlmodelc", source_hash);
+
+        let cache_name = format!("compiled_{source_hash:x}.mlmodelc");
         Ok(cache_dir.join("compiled_models").join(cache_name))
     }
 

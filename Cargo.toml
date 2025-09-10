@@ -51,11 +51,7 @@ objc2-foundation = "0.3"
 objc2-core-ml = "0.3"
 block2 = "0.6"
 
-[workspace]
-# Workspace for the root crate plus local tools/crates
-members = [
-	"typo-fixer-cli",
-]
+# No workspace members - this is now a standalone library
 
 [features]
 default = []
