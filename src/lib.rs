@@ -4,17 +4,12 @@ pub mod clean_git_lfs_downloader;
 pub mod config;
 pub mod config_generator;
 pub mod conversion;
-#[cfg(test)]
-pub mod infer_shape_test;
 pub mod model;
 pub mod model_config;
 pub mod model_downloader;
 pub mod pipeline;
 pub mod qwen;
-#[cfg(test)]
-pub mod qwen_shapes_test;
 pub mod state;
-pub mod test_utils;
 pub mod unified_model_loader;
 pub mod utils;
 

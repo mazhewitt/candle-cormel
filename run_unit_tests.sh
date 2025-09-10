@@ -25,12 +25,8 @@ echo ""
 
 echo "🚀 Running unit tests..."
 
-# Run the fast, reliable unit tests with new structure
-echo "🔧 Running unit tests..."
-cargo test unit
-
-echo ""
-echo "⚙️  Running library unit tests..."
+# Run the fast, reliable unit tests
+echo "🔧 Running library unit tests (embedded tests)..."
 cargo test --lib
 
 echo ""

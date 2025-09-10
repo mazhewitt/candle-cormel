@@ -5,8 +5,8 @@
 
 #[cfg(test)]
 mod tests {
-    use crate::model_config::{ComponentConfig, ModelConfig, ShapeConfig, TensorConfig};
-    use crate::qwen::QwenConfig;
+    use candle_coreml::model_config::{ComponentConfig, ModelConfig, ShapeConfig, TensorConfig};
+    use candle_coreml::qwen::QwenConfig;
 
     use std::collections::HashMap;
 

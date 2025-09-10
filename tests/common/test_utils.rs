@@ -3,7 +3,7 @@
 //! This module provides common testing utilities including automatic cache cleanup,
 //! test setup/teardown, and testing helpers.
 
-use crate::cache_manager::CacheManager;
+use candle_coreml::cache_manager::CacheManager;
 use std::sync::Once;
 use tracing::{info, warn};
 

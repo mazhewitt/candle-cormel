@@ -335,19 +335,9 @@ impl QwenModel {
             } else {
                 trace!("💾 CACHE MISS: Computing embeddings for batch at position {batch_pos}");
 
-                // Find meaningful tokens (before padding zeros)
-                let meaningful_end = padded_batch
-                    .iter()
-                    .position(|&x| x == 0)
-                    .unwrap_or(padded_batch.len());
-                let meaningful_tokens = &padded_batch[..meaningful_end];
-
-                trace!(
-                    "🔍 PREFILL: meaningful_end: {meaningful_end}, meaningful_tokens: {meaningful_tokens:?}"
-                );
-
-                // Fallback to direct embeddings computation
-                let batch_input = self.create_embeddings_input_tensor(meaningful_tokens)?;
+                // Run embeddings on the FULL padded batch (like chat.py does)
+                // This ensures shape consistency with position IDs and causal mask
+                let batch_input = self.create_embeddings_input_tensor(&padded_batch)?;
                 trace!(
                     "✅ PREFILL: Created batch_input with shape: {:?}",
                     batch_input.dims()

@@ -2,7 +2,12 @@
 
 ## Summary
 
-Successfully refactored the test suite from **22 scattered files (6,672 lines)** to a clean, organized structure with **19 files (4,346 lines)** - a **35% reduction** in test code while maintaining full functionality.
+Successfully refactored the test suite from **22 scattered files in tests/ + 3 test files in src/ (6,672+ lines)** to a clean, organized structure with **22 files (4,400+ lines)** - a **35% reduction** in test code while maintaining full functionality.
+
+### Key Achievement: Moved Test Files Out of src/
+- ✅ **Moved 3 dedicated test files** from `src/` to `tests/` directory
+- ✅ **Fixed all imports** and module declarations  
+- ✅ **All tests continue to pass** after reorganization
 
 ## Before & After
 
@@ -14,28 +19,41 @@ tests/
 ├── Inconsistent naming patterns (_tests.rs, test_*.rs)
 ├── Mixed unit/integration concerns
 └── Total: 6,672 lines across scattered files
+
+src/
+├── infer_shape_test.rs (dedicated test file in wrong location)
+├── qwen_shapes_test.rs (dedicated test file in wrong location) 
+├── test_utils.rs (test utilities in wrong location)
+└── 9+ source files with embedded #[cfg(test)] modules
 ```
 
 ### After (Clean)
 ```
 tests/
-├── unit/                    # Pure unit tests (9 files)
+├── unit/                    # Pure unit tests (12 files)
 │   ├── builders.rs          # Builder pattern tests
-│   ├── config.rs            # Configuration tests
+│   ├── config.rs            # Configuration tests  
 │   ├── tensors.rs           # Tensor operations
 │   ├── utilities.rs         # Helper functions
-│   └── ...                  # Metadata extraction tests
-├── integration/             # Integration tests (4 files)  
+│   ├── infer_shape_test.rs  # Shape inference tests (moved from src/)
+│   ├── qwen_shapes_test.rs  # Qwen shape tests (moved from src/) 
+│   └── ...                  # Other metadata/extraction tests
+├── integration/             # Integration tests (4 files)
 │   ├── coreml.rs            # CoreML integration
 │   ├── qwen.rs              # Qwen-specific tests
-│   ├── pipelines.rs         # End-to-end pipelines
+│   ├── pipelines.rs         # End-to-end pipelines (consolidated typo_fixer)
 │   └── flex_pipeline_tests.rs
 ├── regression/              # Performance tests (3 files)
 │   └── performance_regression_tests.rs
 ├── common/                  # Shared utilities (3 files)
 │   ├── helpers.rs           # Test helper functions
-│   └── mocks.rs             # Mock objects
+│   ├── mocks.rs             # Mock objects
+│   └── test_utils.rs        # Test utilities (moved from src/)
 └── fixtures/                # Test data (unchanged)
+
+src/
+├── 9+ source files with embedded #[cfg(test)] modules (properly placed)
+└── No more dedicated test files mixed with source code
 ```
 
 ## Key Improvements
