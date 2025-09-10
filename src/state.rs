@@ -70,6 +70,8 @@ impl CoreMLState {
     /// still be used with stateful prediction methods.
     pub(crate) fn new(model: &Retained<MLModel>) -> Result<Self, CandleError> {
         autoreleasepool(|_| {
+            // SAFETY: CoreML's MLModel::newState returns a valid retained MLState associated with the model.
+            // It does not borrow stack data and follows objc2 ownership rules.
             let state = unsafe { model.newState() };
             Ok(CoreMLState { inner: state })
         })

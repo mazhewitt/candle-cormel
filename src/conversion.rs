@@ -30,82 +30,79 @@ pub fn convert_mlmultiarray_to_tensor(
     marray: &MLMultiArray,
     input_device: &Device,
 ) -> Result<Tensor, CandleError> {
-    unsafe {
-        // Get shape
-        let shape_nsarray = marray.shape();
-        let mut shape = Vec::with_capacity(shape_nsarray.count());
-        for i in 0..shape_nsarray.count() {
-            let dim_number = shape_nsarray.objectAtIndex(i);
-            let dim_value = dim_number.integerValue() as usize;
-            shape.push(dim_value);
-        }
-
-        // Extract data with proper type handling
-        let data_type = marray.dataType();
-        let data_type_raw = data_type.0;
-        let count = marray.count() as usize;
-        let mut buf = Vec::with_capacity(count);
-
-        match data_type {
-            MLMultiArrayDataType::Float32 => {
-                // Extract as float values
-                for i in 0..count {
-                    let val = marray.objectAtIndexedSubscript(i as isize).floatValue();
-                    buf.push(val);
-                }
-            }
-            MLMultiArrayDataType::Int32 => {
-                // Extract as integer values and convert to float
-                for i in 0..count {
-                    let val = marray.objectAtIndexedSubscript(i as isize).intValue() as f32;
-                    buf.push(val);
-                }
-            }
-            MLMultiArrayDataType::Double => {
-                // Extract as double values and convert to float
-                for i in 0..count {
-                    let val = marray.objectAtIndexedSubscript(i as isize).doubleValue() as f32;
-                    buf.push(val);
-                }
-            }
-            _ => {
-                // Handle Float16 and other unknown types
-                if data_type_raw == 65552 {
-                    // Float16 type - extract raw bytes and convert properly
-                    trace!("Detected Float16 data type (65552), using proper half-precision conversion");
-
-                    // Get raw bytes from MLMultiArray
-                    #[allow(deprecated)]
-                    let data_ptr = marray.dataPointer();
-                    let byte_slice =
-                        std::slice::from_raw_parts(data_ptr.as_ptr().cast::<u8>(), count * 2); // 2 bytes per f16
-
-                    // Convert f16 bytes to f32
-                    for i in 0..count {
-                        let byte_offset = i * 2;
-                        let f16_bytes = [byte_slice[byte_offset], byte_slice[byte_offset + 1]];
-                        let f16_bits = u16::from_le_bytes(f16_bytes);
-                        let f16_val = f16::from_bits(f16_bits);
-                        buf.push(f16_val.to_f32());
-                    }
-                } else {
-                    // For other unknown types, try floatValue as fallback
-                    trace!(
-                        "Unknown MLMultiArray data type: {:?} (raw: {}), using floatValue fallback",
-                        data_type,
-                        data_type_raw
-                    );
-
-                    for i in 0..count {
-                        let val = marray.objectAtIndexedSubscript(i as isize).floatValue();
-                        buf.push(val);
-                    }
-                }
-            }
-        }
-
-        Tensor::from_vec(buf, shape, input_device)
+    // Get shape
+    let shape_nsarray = unsafe { marray.shape() };
+    let mut shape = Vec::with_capacity(shape_nsarray.count());
+    for i in 0..shape_nsarray.count() {
+        let dim_number = shape_nsarray.objectAtIndex(i);
+        let dim_value = dim_number.integerValue() as usize;
+        shape.push(dim_value);
     }
+
+    // Extract data with proper type handling
+    let data_type = unsafe { marray.dataType() };
+    let count = unsafe { marray.count() as usize };
+    let mut buf = Vec::with_capacity(count);
+
+    match data_type {
+        MLMultiArrayDataType::Float32 => {
+            // Extract as float values
+            for i in 0..count {
+                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.floatValue();
+                buf.push(val);
+            }
+        }
+        MLMultiArrayDataType::Int32 => {
+            // Extract as integer values and convert to float
+            for i in 0..count {
+                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.intValue()
+                    as f32;
+                buf.push(val);
+            }
+        }
+        MLMultiArrayDataType::Double => {
+            // Extract as double values and convert to float
+            for i in 0..count {
+                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.doubleValue()
+                    as f32;
+                buf.push(val);
+            }
+        }
+        // Prefer explicit Float16 when available
+        MLMultiArrayDataType::Float16 => {
+            trace!("Detected Float16 data type, using half-precision conversion");
+            // SAFETY: We trust CoreML to provide a valid buffer of size count * 2 bytes
+            // for Float16 MLMultiArray. We only read within these bounds and never write.
+            unsafe {
+                #[allow(deprecated)]
+                let data_ptr = marray.dataPointer();
+                let byte_slice = std::slice::from_raw_parts(
+                    data_ptr.as_ptr().cast::<u8>(),
+                    count * 2,
+                );
+                for i in 0..count {
+                    let byte_offset = i * 2;
+                    let f16_bytes = [byte_slice[byte_offset], byte_slice[byte_offset + 1]];
+                    let f16_bits = u16::from_le_bytes(f16_bytes);
+                    let f16_val = f16::from_bits(f16_bits);
+                    buf.push(f16_val.to_f32());
+                }
+            }
+        }
+        _ => {
+            // For other unknown types, try floatValue as fallback
+            trace!(
+                "Unknown MLMultiArray data type: {:?}, using floatValue fallback",
+                data_type
+            );
+            for i in 0..count {
+                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.floatValue();
+                buf.push(val);
+            }
+        }
+    }
+
+    Tensor::from_vec(buf, shape, input_device)
 }
 #[cfg(target_os = "macos")]
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -164,10 +161,14 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
                             |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
                                 let dst = ptr.as_ptr() as *mut f32;
                                 let src = data_vec.as_ptr();
-                                let copy_elements = element_count.min(len as usize / element_size);
+                                let copy_elements =
+                                    element_count.min(len as usize / element_size);
 
-                                if copy_elements > 0 && len as usize >= copy_elements * element_size
+                                if copy_elements > 0
+                                    && len as usize >= copy_elements * element_size
                                 {
+                                    // SAFETY: The CoreML callback provides a valid writable buffer of length `len` bytes.
+                                    // We compute `copy_elements` to ensure we never copy beyond either the source or dest.
                                     std::ptr::copy_nonoverlapping(src, dst, copy_elements);
                                     copied.store(true, Ordering::Relaxed);
                                 }
@@ -185,10 +186,13 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
                             |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
                                 let dst = ptr.as_ptr() as *mut i32;
                                 let src = i32_data.as_ptr();
-                                let copy_elements = element_count.min(len as usize / element_size);
+                                let copy_elements =
+                                    element_count.min(len as usize / element_size);
 
-                                if copy_elements > 0 && len as usize >= copy_elements * element_size
+                                if copy_elements > 0
+                                    && len as usize >= copy_elements * element_size
                                 {
+                                    // SAFETY: As above in F32 path, bounds are enforced and buffers are valid for `copy_elements`.
                                     std::ptr::copy_nonoverlapping(src, dst, copy_elements);
                                     copied.store(true, Ordering::Relaxed);
                                 }
@@ -225,6 +229,7 @@ pub fn create_multi_feature_provider(
 
         for (name, array) in input_names.iter().zip(input_arrays.iter()) {
             let key = NSString::from_str(name);
+            // SAFETY: `array` is a valid MLMultiArray retained object created by us; CoreML will retain it as needed.
             let value = unsafe { MLFeatureValue::featureValueWithMultiArray(array) };
             keys.push(key);
             values.push(value);
@@ -255,27 +260,24 @@ pub fn extract_all_outputs(
     prediction: &ProtocolObject<dyn MLFeatureProvider>,
     input_device: &Device,
 ) -> Result<std::collections::HashMap<String, Tensor>, CandleError> {
-    autoreleasepool(|pool| unsafe {
+    autoreleasepool(|pool| {
         let mut outputs = std::collections::HashMap::new();
 
-        let feature_names = prediction.featureNames();
+        let feature_names = unsafe { prediction.featureNames() };
         let feature_names_iter = feature_names.iter();
 
         for feature_name in feature_names_iter {
-            let feature_name_str = feature_name.to_str(pool);
+            let feature_name_str = unsafe { feature_name.to_str(pool) };
 
-            let value = prediction
-                .featureValueForName(&feature_name)
-                .ok_or_else(|| {
-                    CandleError::Msg(format!("Output '{feature_name_str}' not found"))
-                })?;
+            let value = unsafe { prediction.featureValueForName(&feature_name) }
+                .ok_or_else(|| CandleError::Msg(format!("Output '{feature_name_str}' not found")))?;
 
-            let marray = value.multiArrayValue().ok_or_else(|| {
+            let marray = unsafe { value.multiArrayValue() }.ok_or_else(|| {
                 CandleError::Msg(format!("Output '{feature_name_str}' is not MLMultiArray"))
             })?;
 
             // Get shape
-            let shape_nsarray = marray.shape();
+            let shape_nsarray = unsafe { marray.shape() };
             let mut shape = Vec::with_capacity(shape_nsarray.count());
             for i in 0..shape_nsarray.count() {
                 let dim_number = shape_nsarray.objectAtIndex(i);
@@ -305,13 +307,12 @@ pub fn extract_output(
 ) -> Result<Tensor, CandleError> {
     use objc2_foundation::NSString;
 
-    autoreleasepool(|_| unsafe {
+    autoreleasepool(|_| {
         let name = NSString::from_str(output_name);
-        let value = prediction
-            .featureValueForName(&name)
+        let value = unsafe { prediction.featureValueForName(&name) }
             .ok_or_else(|| CandleError::Msg(format!("Output '{output_name}' not found")))?;
 
-        let marray = value.multiArrayValue().ok_or_else(|| {
+        let marray = unsafe { value.multiArrayValue() }.ok_or_else(|| {
             CandleError::Msg(format!("Output '{output_name}' is not MLMultiArray"))
         })?;
 
