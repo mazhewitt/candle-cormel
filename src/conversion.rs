@@ -55,16 +55,15 @@ pub fn convert_mlmultiarray_to_tensor(
         MLMultiArrayDataType::Int32 => {
             // Extract as integer values and convert to float
             for i in 0..count {
-                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.intValue()
-                    as f32;
+                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.intValue() as f32;
                 buf.push(val);
             }
         }
         MLMultiArrayDataType::Double => {
             // Extract as double values and convert to float
             for i in 0..count {
-                let val = unsafe { marray.objectAtIndexedSubscript(i as isize) }.doubleValue()
-                    as f32;
+                let val =
+                    unsafe { marray.objectAtIndexedSubscript(i as isize) }.doubleValue() as f32;
                 buf.push(val);
             }
         }
@@ -76,10 +75,8 @@ pub fn convert_mlmultiarray_to_tensor(
             unsafe {
                 #[allow(deprecated)]
                 let data_ptr = marray.dataPointer();
-                let byte_slice = std::slice::from_raw_parts(
-                    data_ptr.as_ptr().cast::<u8>(),
-                    count * 2,
-                );
+                let byte_slice =
+                    std::slice::from_raw_parts(data_ptr.as_ptr().cast::<u8>(), count * 2);
                 for i in 0..count {
                     let byte_offset = i * 2;
                     let f16_bytes = [byte_slice[byte_offset], byte_slice[byte_offset + 1]];
@@ -161,11 +158,9 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
                             |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
                                 let dst = ptr.as_ptr() as *mut f32;
                                 let src = data_vec.as_ptr();
-                                let copy_elements =
-                                    element_count.min(len as usize / element_size);
+                                let copy_elements = element_count.min(len as usize / element_size);
 
-                                if copy_elements > 0
-                                    && len as usize >= copy_elements * element_size
+                                if copy_elements > 0 && len as usize >= copy_elements * element_size
                                 {
                                     // SAFETY: The CoreML callback provides a valid writable buffer of length `len` bytes.
                                     // We compute `copy_elements` to ensure we never copy beyond either the source or dest.
@@ -186,11 +181,9 @@ pub fn tensor_to_mlmultiarray(tensor: &Tensor) -> Result<Retained<MLMultiArray>,
                             |ptr: std::ptr::NonNull<std::ffi::c_void>, len, _| {
                                 let dst = ptr.as_ptr() as *mut i32;
                                 let src = i32_data.as_ptr();
-                                let copy_elements =
-                                    element_count.min(len as usize / element_size);
+                                let copy_elements = element_count.min(len as usize / element_size);
 
-                                if copy_elements > 0
-                                    && len as usize >= copy_elements * element_size
+                                if copy_elements > 0 && len as usize >= copy_elements * element_size
                                 {
                                     // SAFETY: As above in F32 path, bounds are enforced and buffers are valid for `copy_elements`.
                                     std::ptr::copy_nonoverlapping(src, dst, copy_elements);
@@ -269,8 +262,10 @@ pub fn extract_all_outputs(
         for feature_name in feature_names_iter {
             let feature_name_str = unsafe { feature_name.to_str(pool) };
 
-            let value = unsafe { prediction.featureValueForName(&feature_name) }
-                .ok_or_else(|| CandleError::Msg(format!("Output '{feature_name_str}' not found")))?;
+            let value =
+                unsafe { prediction.featureValueForName(&feature_name) }.ok_or_else(|| {
+                    CandleError::Msg(format!("Output '{feature_name_str}' not found"))
+                })?;
 
             let marray = unsafe { value.multiArrayValue() }.ok_or_else(|| {
                 CandleError::Msg(format!("Output '{feature_name_str}' is not MLMultiArray"))
