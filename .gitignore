@@ -1,5 +1,12 @@
 # Ignore Python virtual environment
 .shape-env/
+
+# Common python virtualenv names (some were accidentally committed)
+test_venv/
+venv/
+.venv/
+env/
+.env/
 # Rust
 /target/
 **/*.rs.bk
@@ -20,6 +27,18 @@ Thumbs.db
 *.mlmodelc/
 *.mlpackage/
 test_models/
+
+# Model artifact files - don't commit large model binaries
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.bin
+*.onnx
+*.tch
+
+# Model directories
+models/
 
 # Logs
 *.log
